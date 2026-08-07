@@ -1,0 +1,48 @@
+# --- Secrets ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# Azure-CLI-Kontext, enthaelt Zugriffstoken.
+.azure/
+
+# --- Indizes ---------------------------------------------------------------
+data/index/
+*.faiss
+*.faiss.*
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Mandanteninhalte ------------------------------------------------------
+# Reihenfolge ist bedeutungstragend: erst alles unter tenants/ ausschliessen,
+# dann die Demo-Mandanten gezielt wieder aufnehmen. Eine Datei laesst sich nicht
+# wieder einschliessen, wenn ihr Verzeichnis ausgeschlossen ist.
+tenants/*
+!tenants/demo-acme/
+!tenants/demo-acme/**
+!tenants/demo-nordwind/
+!tenants/demo-nordwind/**
+tenants/*/index/
+
+# --- Werkzeuge und Betriebssystem ------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.log
