@@ -1,0 +1,123 @@
+[project]
+name = "rag-support-demo"
+version = "0.1.0"
+description = "Mandantenfaehige RAG-Demo fuer Support-Assistenten auf oeffentlichen Inhalten"
+requires-python = ">=3.12,<3.13"
+
+# readme = "README.md" fehlt absichtlich: die Datei existiert noch nicht. Sie ist
+# das oeffentliche Gesicht des Repos (Deploy-Button, arc42) und entsteht in einer
+# spaeteren Phase. Wird sie angelegt, gehoert diese Zeile wieder hinein.
+
+# Obergrenze auf 3.13 ist strenger als ADR-013 formuliert ist. Der ADR sagt "vor
+# einem Wechsel torch pruefen"; die Obergrenze macht daraus "Wechsel nur nach
+# Aenderung an dieser Datei". Fuer eine Anwendung ist das vertretbar und gut fuer
+# die Reproduzierbarkeit. Vermerkt in ADR-013 als Umsetzungsentscheidung.
+
+dependencies = [
+    # --- HTTP ---------------------------------------------------------------
+    # In Phase 1 noch unbenutzt. Stehen hier, damit die Umgebung einmal
+    # vollstaendig aufgebaut und geprueft wird statt zweimal.
+    "fastapi==0.141.1",
+    "uvicorn==0.52.1",
+
+    # --- LangChain ----------------------------------------------------------
+    # langchain-community fehlt hier absichtlich: eingestellt am 2026-05-22,
+    # Repo archiviert am 2026-06-19. FAISS wird direkt angebunden, siehe ADR-015.
+    # Die Textsplitter zieht langchain 1.3.14 NICHT mit, deshalb explizit.
+    "langchain==1.3.14",
+    "langchain-core==1.5.3",
+    "langchain-text-splitters==1.1.2",
+
+    # --- LLM-Provider -------------------------------------------------------
+    # Drei Provider hinter einer Factory (ADR-006). Als eigene Pakete statt als
+    # langchain-Extras, damit sie einzeln versioniert werden koennen.
+    "langchain-openai==1.4.2",
+    "langchain-anthropic==1.5.4",
+    "openai==2.53.0",
+
+    # --- Embeddings ---------------------------------------------------------
+    # [full] zieht sentence-transformers und transformers nach. Die Spanne dort
+    # ist weit, deshalb steht sentence-transformers zusaetzlich exakt gepinnt.
+    "langchain-huggingface[full]==1.2.2",
+    "sentence-transformers==5.6.1",
+
+    # torch kommt als CPU-Build von der PyTorch-Indexseite, nicht von PyPI.
+    #
+    # Grund: Das PyPI-Wheel fuer Linux ist der CUDA-Build und zieht rund zwanzig
+    # nvidia-Pakete nach. Gemessen am 2026-08-08: venv 5,3 GB statt 1,5 GB, davon
+    # 3,4 GB CUDA - auf Azure Container Apps ohne GPU nicht einmal benutzbar,
+    # torch.cuda.is_available() liefert dort False. Nach ADR-010 landet das im
+    # Image und verschlechtert genau den Kaltstart, den ADR-010 als Kosten nennt.
+    # Siehe open-points.md, OP-014.
+    #
+    # Warum als direkte URL und nicht ueber --index-url: [project.dependencies]
+    # kann laut Spezifikation keinen Index angeben; jeder Eintrag muss ein
+    # Dependency-Specifier sein. Eine PEP-508-URL ist der einzige Weg, die
+    # Bezugsquelle IN dieser Datei festzuhalten - und damit der einzige, bei dem
+    # lokale Entwicklung und Container denselben torch-Build bekommen. Stuende
+    # der CPU-Index nur im Dockerfile, liefen Entwicklung und Betrieb auf
+    # verschiedenen Builds, und ein Installationsfehler zeigte sich erst beim
+    # Bauen des Images.
+    #
+    # Preis: Die URL nennt Version, Python-Minor und Plattform. Bei einem Wechsel
+    # von torch oder Python ist sie mitzuziehen. Der Marker begrenzt sie auf
+    # Linux - auf macOS und Windows liefert PyPI ohnehin CPU-Builds.
+    #
+    # Folge: Dieses Projekt ist damit nicht auf PyPI veroeffentlichbar (direkte
+    # URLs sind dort unzulaessig). Das ist kein Verlust, es ist eine Anwendung.
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
+
+    # --- Vektorindex --------------------------------------------------------
+    # Direkt, ohne LangChain-Vectorstore (ADR-015).
+    "faiss-cpu==1.15.0",
+
+    # --- Daten und Konfiguration --------------------------------------------
+    # python-dotenv fehlt absichtlich: es ist Pflichtabhaengigkeit von
+    # pydantic-settings. Direkt gelistet wuerde es dazu einladen, es direkt zu
+    # benutzen - was CLAUDE.md ausschliesst (Konfiguration nur ueber Settings).
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "PyYAML==6.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.1",
+    # Der FastAPI-TestClient setzt httpx voraus.
+    "httpx==0.28.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.hatch.metadata]
+# Notwendig fuer die direkte torch-URL oben. Hatchling verlangt diese Freigabe
+# ausdruecklich, weil ein Paket mit direkten Referenzen nicht auf PyPI
+# veroeffentlicht werden kann. Das ist hier gewollt und kein Verlust: Das hier ist
+# eine Anwendung, kein Paket.
+allow-direct-references = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E,F  Pyflakes und pycodestyle-Fehler
+# I    Importsortierung - ersetzt isort, siehe CLAUDE.md
+# UP   pyupgrade, haelt die Syntax auf 3.12
+# B    bugbear
+# ANN  Typannotationen, weil CLAUDE.md sie ueberall verlangt
+select = ["E", "F", "I", "UP", "B", "ANN"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests brauchen keine Rueckgabeannotation auf jeder Testfunktion.
+"tests/*" = ["ANN201"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

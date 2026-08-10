@@ -1,0 +1,30 @@
+# Demo-Mandant. ERFUNDENE Inhalte, keine echten Interessentendaten.
+#
+# Bewusst anders angelegt als demo-acme: nur deutsch, anderes Gewerbe, andere
+# Retrieval-Einstellung. Zwei Mandanten, die sich zu aehnlich sind, zeigen bei
+# einem Isolationstest nichts (open-points.md, OP-007).
+
+display_name: "Nordwind Möbelversand"
+
+languages:
+  - de
+
+system_prompt_extra: >
+  Nordwind versendet Wohnmoebel an Privatkunden. Antworte freundlich und in
+  ganzen Saetzen. Bei Rueckgaben und Fristen immer die genaue Frist aus der
+  Wissensbasis nennen, nie eine geschaetzte.
+
+escalation_message: >
+  Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an
+  hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.
+
+model_override: null
+
+# Kein Override: dieser Mandant nutzt RETRIEVAL_TOP_K aus der Konfiguration.
+retrieval_top_k: null
+
+# Oeffentliche Adresse des Mandanten (ADR-007). Fester Wert fuer reproduzierbare
+# Tests, siehe demo-acme.
+url_token: "demo-nordwind-oeffentlich-b82d05fa61"
+
+public_image_allowed: true

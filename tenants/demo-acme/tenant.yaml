@@ -1,0 +1,36 @@
+# Demo-Mandant. ERFUNDENE Inhalte, keine echten Interessentendaten.
+#
+# Dieser Mandant liegt im oeffentlichen Repo und darf in ein oeffentliches
+# Container-Image (public_image_allowed: true, ADR-014). Das ist nur zulaessig,
+# WEIL die Inhalte erfunden sind.
+#
+# Der slug steht bewusst nicht in dieser Datei - er kommt aus dem
+# Verzeichnisnamen. Sonst koennten Verzeichnis und Inhalt auseinanderlaufen.
+
+display_name: "ACME Elektronikhandel"
+
+languages:
+  - de
+  - en
+
+system_prompt_extra: >
+  ACME beliefert Gewerbekunden mit Elektronikbauteilen. Antworte sachlich und
+  knapp. Nenne bei Lieferzeiten und Mindestbestellmengen immer die Quelle aus der
+  Wissensbasis. Preise nur nennen, wenn sie dort ausdruecklich stehen.
+
+escalation_message: >
+  Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie
+  sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.
+
+# Kein Override: dieser Mandant nutzt das Modell aus der Konfiguration.
+model_override: null
+
+# Etwas mehr Kontext als der Default, weil die Produktdaten kleinteilig sind.
+retrieval_top_k: 6
+
+# Oeffentliche Adresse des Mandanten (ADR-007). Fester Wert, damit die Tests
+# reproduzierbar sind; fuer einen echten Mandanten erzeugt
+# app.tenants.generate_url_token() einen zufaelligen.
+url_token: "demo-acme-oeffentlich-7f3a91c4e2"
+
+public_image_allowed: true
