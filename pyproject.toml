@@ -120,4 +120,12 @@ select = ["E", "F", "I", "UP", "B", "ANN"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+
+# Integrationstests laden das echte Embedding-Modell (470 MB) und sind deshalb
+# standardmaessig ausgeschlossen - conventions.md verbietet Netzwerkzugriff in
+# Unit-Tests. Explizit fahren mit:
+#   .venv/bin/pytest -m integration
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: laedt das echte Embedding-Modell, braucht Netz beim ersten Lauf",
+]

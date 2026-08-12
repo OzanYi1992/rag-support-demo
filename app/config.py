@@ -19,6 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LlmProvider = Literal["openai", "azure", "anthropic"]
 
+# Namen der Eskalationsstrategien aus app/escalation.py (ADR-018). Als Literal,
+# damit ein Tippfehler beim Start auffaellt und nicht erst beim ersten Aufruf.
+EscalationStrategyName = Literal["degenerate_only", "absolute_threshold", "relative_margin"]
+
 # Welcher Schluessel fuer welchen Provider Pflicht ist. Siehe ADR-006.
 _REQUIRED_KEY_PER_PROVIDER: dict[str, str] = {
     "openai": "openai_api_key",
@@ -72,7 +76,13 @@ class Settings(BaseSettings):
     anthropic_model: str | None = None
 
     # --- Embeddings --------------------------------------------------------
-    embedding_model: str = "intfloat/multilingual-e5-large"
+    # ADR-016: e5-small, Indexdimension 384. Entschieden ueber das Verhaeltnis von
+    # Nutzen zu Imagegroesse unter ADR-010, nicht weil large schlechter waere.
+    # Ein Wechsel macht jeden Mandantenindex unbrauchbar (andere Dimension) und
+    # den Schwellwert ungueltig (P-005).
+    embedding_model: str = "intfloat/multilingual-e5-small"
+    embedding_dimension: int = 384
+
     embedding_device: str = "cpu"
     embedding_batch_size: int = 32
 
@@ -87,10 +97,35 @@ class Settings(BaseSettings):
     # laesst die Eskalation nie feuern und niemand merkt es - dieselbe stille
     # Umkehr wie bei rohen Distanzen (ADR-008). Siehe open-points.md, OP-013.
     retrieval_score_threshold: float | None = None
-    retrieval_top_k: int = 4
 
-    chunk_size: int = 1000
-    chunk_overlap: int = 150
+    # ADR-017: Startwerte, keine hergeleiteten Groessen. Phase 5 misst gegen den
+    # Goldsatz und bestaetigt oder korrigiert sie.
+    #
+    # Einzige harte Randbedingung ist die Tokengrenze des Modells - oberhalb
+    # kuerzt sentence-transformers still, und das Chunk-Ende verschwindet aus
+    # dem Vektor. Geprueft wird das im Ingest ueber chunks_at_token_limit, nicht
+    # hier gerechnet.
+    #
+    # Eine Aenderung an chunk_size oder chunk_overlap erzwingt den Neubau ALLER
+    # Indizes UND die Neukalibrierung des Schwellwerts (P-005). retrieval_top_k
+    # beruehrt nur die Kalibrierung.
+    retrieval_top_k: int = 4
+    chunk_size: int = 800
+    chunk_overlap: int = 100
+
+    # --- Eskalation --------------------------------------------------------
+    # ADR-018: austauschbare Strategie statt festem Vergleich.
+    #
+    # Voreinstellung degenerate_only - eskaliert nur bei leerer Trefferliste und
+    # braucht deshalb keinen kalibrierten Wert. Das ist KEIN Schwellwert und soll
+    # keiner sein: Vor Phase 5 gibt es fuer keine der kalibrierten Strategien
+    # einen belastbaren Wert (P-005), und bis dahin traegt das Groundedness-Tor
+    # die Last allein.
+    escalation_strategy: EscalationStrategyName = "degenerate_only"
+
+    # Nur fuer relative_margin. Bewusst ohne Default, aus demselben Grund wie
+    # retrieval_score_threshold.
+    escalation_min_margin: float | None = None
 
     # --- Pfade -------------------------------------------------------------
     tenants_dir: Path = Path("tenants")
