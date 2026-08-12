@@ -131,6 +131,19 @@ class Settings(BaseSettings):
     tenants_dir: Path = Path("tenants")
     index_dir: Path = Path("data/index")
 
+    # --- HTTP ---------------------------------------------------------------
+    # Fremde Urspruenge, die den Chat aufrufen duerfen. Kommagetrennt.
+    #
+    # Leer ist der Default und die restriktivste Einstellung: Die Oberflaeche
+    # wird vom selben Host ausgeliefert, laeuft also gleichursprünglich und
+    # braucht kein CORS. Jeder Eintrag hier erlaubt einer fremden Seite, den
+    # Chat aufzurufen - auf meine Rechnung.
+    #
+    # Bewusst eine Zeichenkette und keine Liste: pydantic-settings liest
+    # komplexe Typen aus der Umgebung als JSON. "CORS_ALLOWED_ORIGINS=https://x"
+    # waere damit ein Startfehler statt einer Einstellung.
+    cors_allowed_origins: str = ""
+
     # --- Telemetrie --------------------------------------------------------
     # Instrumentierung ist OpenTelemetry, Ziel ist Application Insights
     # (ADR-012). Die beiden OTLP-Felder stehen NEBEN dem Azure-Pfad, nicht an

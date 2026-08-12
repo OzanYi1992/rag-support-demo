@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Support-Assistent — {{display_name}}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!--
+  Der Mandantenname wird serverseitig eingesetzt (app/main.py, Endpunkt
+  "oberflaeche"). Es gibt bewusst keinen Endpunkt, ueber den diese Seite ihn
+  nachladen koennte - das waere ein Endpunkt, der Mandantendaten ausgibt.
+
+  Das Token steht in data-token und wird nur fuer den Aufruf des eigenen
+  Chat-Endpunkts gebraucht.
+-->
+
+<header>
+  <h1>Support-Assistent</h1>
+  <p class="mandant">{{display_name}}</p>
+</header>
+
+<main id="verlauf" aria-live="polite">
+  <div class="nachricht assistent">
+    <div class="text">
+      Guten Tag. Ich beantworte Fragen auf Grundlage der hinterlegten Unterlagen
+      von {{display_name}}. Wenn die Unterlagen eine Frage nicht abdecken, sage
+      ich das, statt zu raten.
+    </div>
+  </div>
+</main>
+
+<form id="formular" data-token="{{url_token}}" autocomplete="off">
+  <label class="versteckt" for="frage">Ihre Frage</label>
+  <textarea id="frage" name="frage" rows="2" maxlength="2000"
+            placeholder="Ihre Frage — Enter zum Senden, Umschalt+Enter für eine neue Zeile"
+            required></textarea>
+  <button type="submit" id="senden">Senden</button>
+</form>
+
+<footer>
+  <p>Demo. Antworten stammen ausschließlich aus den hinterlegten Unterlagen.</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
