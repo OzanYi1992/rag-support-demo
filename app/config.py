@@ -14,8 +14,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Wurzel des Projekts, abgeleitet aus dem ORT DIESER DATEI - nicht aus
+# os.getcwd(). Das ist der ganze Punkt: Ein Validator, der das
+# Arbeitsverzeichnis heranzieht, loeste das Problem mit genau dem Mechanismus
+# auf, der es verursacht.
+#
+# app/config.py -> app/ -> Projektwurzel
+PROJEKTWURZEL = Path(__file__).resolve().parent.parent
 
 LlmProvider = Literal["openai", "azure", "anthropic"]
 
@@ -174,6 +182,32 @@ class Settings(BaseSettings):
         if not isinstance(data, dict):
             return data
         return {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip() == "")}
+
+    @field_validator("tenants_dir", "index_dir")
+    @classmethod
+    def _relative_pfade_an_der_paketwurzel_verankern(cls, wert: Path) -> Path:
+        """Loest relative Pfade gegen die Paketwurzel auf, nicht gegen das
+        Arbeitsverzeichnis.
+
+        Der Fehler, gegen den das schuetzt, ist still und vollstaendig: Laeuft
+        die Anwendung mit einem anderen Arbeitsverzeichnis, zeigt `tenants` ins
+        Leere. `list_tenants()` gibt dann eine leere Liste zurueck, jedes
+        url_token ergibt 404, und es gibt keinen Hinweis worauf. Bei `ingest.py`
+        waere die Folge dieselbe Klasse, nur frueher: ein Index, der an der
+        falschen Stelle landet, ohne Fehler.
+
+        Warum das nicht theoretisch ist: Lokal faellt es auf, weil auch `.env`
+        relativ gesucht wird und der Start dann laut scheitert. Im Container
+        kommt die Konfiguration aus der Umgebung, es gibt kein `.env` - dort
+        startet die Anwendung sauber und findet trotzdem keinen Mandanten.
+        Genau der Fall, der in Phase 7 und 9 auftreten wuerde.
+
+        Absolute Pfade bleiben unangetastet. Wer einen Pfad ausdruecklich setzt,
+        meint ihn auch; das nutzen die Tests mit `tmp_path`.
+        """
+        if wert.is_absolute():
+            return wert
+        return (PROJEKTWURZEL / wert).resolve()
 
     @model_validator(mode="after")
     def _schluessel_des_gewaehlten_providers_pflicht(self) -> Settings:

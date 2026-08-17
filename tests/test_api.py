@@ -159,6 +159,44 @@ def test_kein_endpunkt_listet_mandanten_auf(
         assert "demo-nordwind" not in antwort.text
 
 
+def test_wurzel_ist_404_und_hinterlaesst_eine_spur(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Es gibt keine Route auf `/`. Das ist richtig - aber es muss im Log
+    stehen, sonst sucht der Betreiber im Dunkeln (P-018, dritte Auspraegung)."""
+    client, _ = _client(umgebung)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.get("/")
+
+    assert antwort.status_code == 404
+    assert antwort.json() == {"detail": "Diese Adresse gibt es nicht."}
+    assert any("route_unbekannt" in eintrag.message for eintrag in caplog.records)
+
+
+def test_log_enthaelt_niemals_das_token(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Das Token ist die Zugangskontrolle. Ein Log, das Token mitschreibt, ist
+    eine Schluesselliste - und Logs wandern spaeter aus meinem Zugriff heraus."""
+    client, _ = _client(umgebung)
+    with caplog.at_level("INFO", logger="rag.api"):
+        client.get(f"/t/{ACME_TOKEN}/unbekannter-unterpfad")
+        client.get(f"/t/{ACME_TOKEN}/")
+        client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "RMA?"})
+
+    gesamtes_log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert gesamtes_log, "Kein Logeintrag - der Test waere sonst blind."
+    assert ACME_TOKEN not in gesamtes_log
+    # Gegenprobe: Das Muster steht sehr wohl drin, sonst waere die Diagnose
+    # ueber das Log unmoeglich.
+    assert "{token}" in gesamtes_log
+    # Und die tenant_id ist als Dimension da, wo ein Mandant aufgeloest wurde
+    # (ADR-002).
+    assert "demo-acme" in gesamtes_log
+
+
 # --- Chat -------------------------------------------------------------------
 
 

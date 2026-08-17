@@ -76,6 +76,29 @@ def _ereignis(name: str, tenant_id: str | None, **felder: object) -> None:
     _log.info(json.dumps({"ereignis": name, "tenant_id": tenant_id, **felder}))
 
 
+def _pfadmuster(pfad: str) -> str:
+    """Ersetzt ein url_token im Pfad durch einen Platzhalter.
+
+    Das Token ist die Zugangskontrolle (ADR-007). Ein Log, das Token
+    mitschreibt, ist eine Schluesselliste - und Logs wandern in Phase 6 nach
+    Application Insights, also aus meinem Zugriff heraus.
+
+    Fuer die Diagnose reicht das Muster vollkommen: Wer `/t/{token}/` im Log
+    sieht, weiss, dass die Route stimmte und die Aufloesung scheiterte. Wer `/`
+    sieht, weiss, dass jemand die Wurzel aufgerufen hat, wo es nichts gibt.
+
+    Alles ausserhalb von `/t/` wird unveraendert uebernommen - Pfade wie `/`,
+    `/favicon.ico` oder `/admin` tragen kein Geheimnis und sind als Wortlaut
+    nuetzlicher als ein Platzhalter.
+    """
+    teile = pfad.split("/")
+    # ["", "t", "<token>", ...] - erst ab drei Teilen gibt es ein Token.
+    if len(teile) >= 3 and teile[1] == "t" and teile[2]:
+        teile[2] = "{token}"
+        return "/".join(teile)
+    return pfad
+
+
 class ChatAnfrage(BaseModel):
     """Rumpf von POST /t/{url_token}/chat."""
 
@@ -226,8 +249,19 @@ def create_app(
         return ergebnis
 
     @app.exception_handler(404)
-    def nicht_gefunden(_: Request, __: Exception) -> JSONResponse:
-        """Auch unbekannte Pfade antworten mit demselben Wortlaut."""
+    def nicht_gefunden(request: Request, __: Exception) -> JSONResponse:
+        """Auch unbekannte Pfade antworten mit demselben Wortlaut.
+
+        Der Wortlaut ist ueberall gleich, damit aus der Antwort nicht ableitbar
+        ist, ob ein Token existiert. Der Preis dafuer ist, dass die Diagnose
+        ueber das Log laufen muss - und genau dort fehlte bis 2026-08-17 der
+        Eintrag fuer den haeufigsten Fall: einen Aufruf, der gar keine Route
+        trifft. Ein 404 auf `/` hinterliess keine Spur.
+
+        Das ist die dritte Auspraegung von P-018: nicht falsch meldend und
+        nicht unsichtbar, sondern stumm an der Stelle, an der man hinsieht.
+        """
+        _ereignis("route_unbekannt", None, pfad=_pfadmuster(request.url.path))
         return JSONResponse(status_code=404, content={"detail": NICHT_GEFUNDEN})
 
     return app
