@@ -1,0 +1,205 @@
+# Goldsatz demo-nordwind
+#
+# Aufbau und Regeln wie bei demo-acme. Eine Abweichung, und sie ist wichtig:
+#
+# Der gesamte nordwind-Korpus ist DEUTSCH. Die Richtung "deutsche Frage,
+# englische Quelle" ist hier nicht füllbar. Stattdessen die umgekehrte
+# Richtung, als EIGENE Kategorie cross_lingual_umgekehrt - und niemals mit den
+# acme-Zahlen gemittelt.
+#
+# ACHTUNG BEI DER AUSWERTUNG: Die beiden Richtungen sind NICHT symmetrisch.
+# Language Bias heisst, dass Dokumente in der Anfragesprache die vorderen
+# Raenge besetzen. Bei acme gibt es deutsche Ablenker zum englischen Ziel -
+# dort wirkt der Effekt. Hier gibt es ueberhaupt keine englischen Ablenker,
+# weil alles deutsch ist. Ein gutes Ergebnis belegt deshalb NICHT, dass die
+# Sprachgrenze unproblematisch ist. Es belegt nur, dass ein einsprachiger
+# Korpus keine Konkurrenz in der falschen Sprache hat.
+
+mandant: demo-nordwind
+stand: 2026-08-17
+korpus_dateien: 5
+korpus_chunks: 20
+
+fragen:
+
+  # --- direkt ---------------------------------------------------------------
+
+  - id: nord-01
+    kategorie: direkt
+    frage: "Wie lang ist das Terminfenster fuer die Lieferung?"
+    erwartete_quelle: lieferung-und-montage.md
+    erwartet_eskalation: false
+    begruendung: >
+      Antwort steht woertlich da (vier Stunden). Basisfall.
+
+  - id: nord-02
+    kategorie: direkt
+    frage: "Wie hoch ist die Anzahlung bei einer Massanfertigung?"
+    erwartete_quelle: massanfertigung-und-lieferzeiten.md
+    erwartet_eskalation: false
+    begruendung: >
+      40 Prozent des Auftragswerts, eigener Abschnitt.
+
+  - id: nord-03
+    kategorie: direkt
+    frage: "Innerhalb welcher Frist muss ich verdeckte Transportschaeden melden?"
+    erwartete_quelle: reklamation-und-transportschaeden.md
+    erwartet_eskalation: false
+    begruendung: >
+      Sieben Kalendertage. Prueft zugleich, ob der Chunk die Unterscheidung
+      sichtbar/verdeckt mittraegt - beides steht im selben Dokument.
+
+  # --- umgangssprachlich ----------------------------------------------------
+
+  - id: nord-04
+    kategorie: umgangssprachlich
+    frage: "schrank kam kaputt an was mach ich jetzt"
+    erwartete_quelle: reklamation-und-transportschaeden.md
+    erwartet_eskalation: false
+    begruendung: >
+      Der Verkkokauppa-Fall in deutscher Fassung. Weder "Transportschaden" noch
+      "Reklamation" noch "melden" kommen vor. Wenn eine Frage in dieser
+      Kategorie das Verkaufsargument traegt, dann diese.
+
+  - id: nord-05
+    kategorie: umgangssprachlich
+    frage: "rotwein auf dem tisch wie krieg ich den fleck weg"
+    erwartete_quelle: pflegehinweise.md
+    erwartet_eskalation: false
+    begruendung: >
+      Zielabschnitt Flecken, Zeile Rotwein. "Fleck" ist eine Wortbruecke und
+      bleibt bewusst drin - so tippt es jemand tatsaechlich. Der Rest ist es
+      nicht: weder "Pflege" noch "geoelt" noch "Oberflaeche".
+
+  - id: nord-06
+    kategorie: umgangssprachlich
+    frage: "wohne im 5 stock ohne fahrstuhl kostet das extra"
+    erwartete_quelle: lieferung-und-montage.md
+    erwartet_eskalation: false
+    begruendung: >
+      Zielabschnitt "Etagen und Aufzuege", ab vierter Etage 25 Euro je Etage.
+      Bewusst "fahrstuhl" statt "aufzug" - das Dokument sagt Aufzug. Prueft, ob
+      das Synonym die Bruecke schlaegt.
+
+  # --- cross_lingual_umgekehrt ----------------------------------------------
+  # Englische Frage, deutsche Quelle. Siehe Warnung im Dateikopf.
+
+  - id: nord-07
+    kategorie: cross_lingual_umgekehrt
+    frage: "how long is the delivery time slot"
+    erwartete_quelle: lieferung-und-montage.md
+    erwartet_eskalation: false
+    begruendung: >
+      Englische Fassung von nord-01. Der direkte Vergleich der beiden Raenge
+      isoliert den Spracheffekt bei sonst identischer Frage.
+
+  - id: nord-08
+    kategorie: cross_lingual_umgekehrt
+    frage: "can i still change the measurements after i approved the drawing"
+    erwartete_quelle: massanfertigung-und-lieferzeiten.md
+    erwartet_eskalation: false
+    begruendung: >
+      Ziel ist "Die Freigabe ist verbindlich". Keine Wortbruecke: "drawing"
+      gegen "Fertigungszeichnung", "approved" gegen "Freigabe".
+
+  # --- nicht_abgedeckt ------------------------------------------------------
+
+  - id: nord-09
+    kategorie: nicht_abgedeckt
+    frage: "Wie lange gilt bei Nordwind die Gewaehrleistung?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: reklamation-und-transportschaeden.md
+    naheliegende_halluzination: "24 Monate"
+    anker_geprueft: >
+      Kein Treffer fuer "gewaehrleistung" in Verbindung mit einer Zeitangabe.
+      Das Wort selbst kommt genau einmal vor - "bleibt unberuehrt", ohne Dauer.
+    begruendung: >
+      Besonders heikel, weil 24 Monate die gesetzliche Regel fuer Verbraucher
+      ist und ein Modell sie aus dem Weltwissen einsetzen kann, ohne dass es
+      falsch klingt. Der Korpus sagt dazu nichts, und eine Rechtsauskunft aus
+      dem Weltwissen ist genau das, was ADR-003 verbietet.
+
+  - id: nord-10
+    kategorie: nicht_abgedeckt
+    frage: "Nehmen Sie bei der Lieferung meine alten Moebel mit?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: lieferung-und-montage.md
+    naheliegende_halluzination: "Altmoebelmitnahme gegen Aufpreis"
+    anker_geprueft: >
+      "altmoebel|altgeraet|entsorgung des alten" - 0 Treffer.
+    begruendung: >
+      Der Zielabschnitt sagt, dass das VERPACKUNGSMATERIAL mitgenommen und
+      entsorgt wird. Ein Modell, das von Verpackung auf Altmoebel
+      verallgemeinert, liegt falsch - und der Chunk trifft mit hohem Score,
+      weil "mitnehmen" und "entsorgen" woertlich darin stehen. Naeher kann eine
+      nicht abgedeckte Frage kaum liegen.
+
+  - id: nord-11
+    kategorie: nicht_abgedeckt
+    frage: "Was kostet es, wenn die Monteure die Wandbefestigung in Beton doch uebernehmen?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: lieferung-und-montage.md
+    naheliegende_halluzination: "ein Aufpreis von X Euro je Befestigungspunkt"
+    anker_geprueft: >
+      Kein Treffer fuer Wandbefestigung in Verbindung mit Preis oder Kosten.
+      Gegenprobe "wandbefestigung": 2 Treffer, beide ohne Betrag.
+    begruendung: >
+      Der Korpus sagt nur, dass es NICHT enthalten ist. Ob es gegen Aufpreis
+      geht und zu welchem, steht nirgends. Das Dokument ist voller konkreter
+      Betraege - 79 Euro Anfahrt, 25 Euro je Etage, 49 Euro Teillieferung -,
+      was einen weiteren Betrag naheliegend macht.
+
+  - id: nord-12
+    kategorie: nicht_abgedeckt
+    frage: "Kann ich eine Massanfertigung in Raten bezahlen?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: massanfertigung-und-lieferzeiten.md
+    naheliegende_halluzination: "Ratenzahlung oder Null-Prozent-Finanzierung"
+    anker_geprueft: >
+      "rate|ratenzahlung|finanzierung|teilzahlung|kredit" - 0 Treffer im Korpus.
+    begruendung: >
+      Der Zielabschnitt regelt Anzahlung 40 Prozent und Restbetrag vor
+      Auslieferung - also eine Zahlung in zwei Schritten. Genau das laedt zur
+      Verallgemeinerung auf Ratenzahlung ein. Eine verworfene Alternative war
+      die Frage, ob das Aufmass von 149 Euro angerechnet wird: "verrechnen"
+      steht woertlich in widerruf.md, wenn auch in anderem Zusammenhang, und
+      ein Teil-Anker reicht schon, um Erfindung von Uebertragung ununter-
+      scheidbar zu machen.
+
+  # --- fremder_mandant ------------------------------------------------------
+
+  - id: nord-13
+    kategorie: fremder_mandant
+    frage: "brauche ich eine rma nummer fuer die ruecksendung"
+    erwartete_quelle: reklamation-und-transportschaeden.md
+    erwartet_eskalation: false
+    verboten_aus: demo-acme
+    gegenstueck_im_eigenen_korpus: >
+      Abschnitt "Was wir brauchen": Auftragsnummer aus der
+      Auftragsbestaetigung, plus Aufnahmen. Nordwind hat also ein Aktenzeichen
+      fuer Ruecksendungen, es heisst nur anders und wird anders beantragt.
+    begruendung: >
+      Die RMA-Nummer ist das Alleinstellungsmerkmal von acme und kommt bei
+      nordwind nicht vor. Weil beide Mandanten Ruecksendungen mit Aktenzeichen
+      regeln, ist die Frage im nordwind-Korpus plausibel - ein sauberes
+      Ergebnis belegt hier also die Trennung und nicht bloss thematische
+      Entfernung.
+
+  - id: nord-14
+    kategorie: fremder_mandant
+    frage: "kann ich auf rechnung kaufen mit 14 tagen zahlungsziel"
+    erwartete_quelle: massanfertigung-und-lieferzeiten.md
+    erwartet_eskalation: false
+    verboten_aus: demo-acme
+    gegenstueck_im_eigenen_korpus: >
+      Abschnitt "Anzahlung": 40 Prozent bei Freigabe, Restbetrag vor
+      Auslieferung. Nordwind regelt Zahlungszeitpunkte, nur ohne Rechnungskauf.
+    begruendung: >
+      Rechnungskauf mit 14 Tagen netto ist woertlich acme. Zusaetzlicher Reiz:
+      "14 Tage" kommt bei nordwind ebenfalls vor - als Widerrufsfrist und als
+      Erstattungsfrist. Die Zahl ist also im Korpus, die Aussage nicht. Wenn
+      eine Frage einen falschen Chunk anzieht, dann diese.

@@ -1,0 +1,221 @@
+# Goldsatz demo-acme
+#
+# Messinstrument der Phase 5. Eine schwache Frage macht die Zahl unbrauchbar,
+# ohne dass es hinterher auffaellt - deshalb traegt jede Frage ihre Begruendung.
+#
+# Kategorien werden IMMER getrennt ausgewertet. Ein Mittel ueber alle Fragen
+# mittelt den cross_lingual-Ausfall mit den direkten Treffern weg und sieht
+# brauchbar aus, waehrend das Verkaufsargument nicht traegt.
+#
+# Zu den nicht_abgedeckt-Fragen: Jede ist gegen den Korpus geprueft, mit
+# Gegenprobe (conventions.md, Regel 2). Geprueft wurde zweierlei - dass die
+# Antwort nicht im Korpus steht, UND dass die naheliegende Halluzination keinen
+# woertlichen Anker im Text hat. Steht die plausible Erfindung woertlich da, ist
+# Erfindung nicht von falscher Uebertragung zu trennen, und die Messung misst
+# nichts. Genau daran ist die urspruengliche Verpackungsfrage gescheitert.
+
+mandant: demo-acme
+stand: 2026-08-17
+korpus_dateien: 6
+korpus_chunks: 25
+
+fragen:
+
+  # --- direkt ---------------------------------------------------------------
+
+  - id: acme-01
+    kategorie: direkt
+    frage: "Wie lange ist eine RMA-Nummer gueltig?"
+    erwartete_quelle: retouren-und-gewaehrleistung.md
+    erwartet_eskalation: false
+    begruendung: >
+      Fachbegriff aus dem Dokument, Antwort steht woertlich da (21 Kalendertage).
+      Trifft das nicht auf Rang 1, ist etwas grundlegend falsch.
+
+  - id: acme-02
+    kategorie: direkt
+    frage: "Ab welchem Netto-Bestellwert liefern Sie im Inland versandkostenfrei?"
+    erwartete_quelle: versand-und-lieferzeiten.md
+    erwartet_eskalation: false
+    begruendung: >
+      Zahl steht woertlich im Abschnitt Versandkosten (250 Euro).
+
+  - id: acme-03
+    kategorie: direkt
+    frage: "Welcher Rabatt gilt ab 120.000 Euro Jahresumsatz?"
+    erwartete_quelle: grosskundenkonditionen.md
+    erwartet_eskalation: false
+    begruendung: >
+      Wert aus der Staffeltabelle (6 Prozent). Prueft, ob Tabellenzeilen den
+      Chunking-Schnitt ueberleben.
+
+  # --- umgangssprachlich ----------------------------------------------------
+  # So getippt, wie jemand es tatsaechlich tippt: klein, ohne Satzzeichen,
+  # teils unvollstaendig. Eine hoeflich ausformulierte Frage misst dieselbe
+  # Kategorie wie direkt, nur mit anderen Woertern.
+
+  - id: acme-04
+    kategorie: umgangssprachlich
+    frage: "paket ist nicht da und der status bewegt sich seit tagen nicht"
+    erwartete_quelle: versand-und-lieferzeiten.md
+    erwartet_eskalation: false
+    begruendung: >
+      Zielabschnitt Nachverfolgung: sieben Werktage ohne Statusaenderung gilt
+      als verschollen. Kein Wort aus der Ueberschrift kommt in der Frage vor -
+      weder "Nachverfolgung" noch "verschollen" noch "Sendung".
+
+  - id: acme-05
+    kategorie: umgangssprachlich
+    frage: "kann ich auch später zahlen oder muss ich immer vorher überweisen"
+    erwartete_quelle: zahlungsarten-und-rechnungskauf.md
+    erwartet_eskalation: false
+    begruendung: >
+      Zielabschnitt Rechnungskauf. "spaeter zahlen" statt "Zahlungsziel",
+      "vorher ueberweisen" statt "Vorkasse". Die Bruecke muss die Semantik
+      schlagen, nicht das Wort.
+
+  - id: acme-06
+    kategorie: umgangssprachlich
+    frage: "produktion steht komplett still wie schnell meldet sich jemand"
+    erwartete_quelle: technischer-support.md
+    erwartet_eskalation: false
+    begruendung: >
+      Zielabschnitt Dringlichkeitsstufen, Stufe Eins, vier Arbeitsstunden.
+      Weder "Stoerung" noch "Dringlichkeit" noch "Reaktionszeit" in der Frage.
+
+  # --- cross_lingual --------------------------------------------------------
+  # Deutsche Frage, ERWARTETE QUELLE IST DAS ENGLISCHE DOKUMENT.
+  #
+  # technical-support-en.md und technischer-support.md sind Zwillinge: sechs
+  # identische Abschnitte, zwei Sprachen. Eine deutsche Frage findet den
+  # deutschen Zwilling und gilt damit als beantwortet - die Sprachgrenze bleibt
+  # unsichtbar. Sichtbar wird sie nur, wenn der Rang des ENGLISCHEN Dokuments
+  # eigens erfasst wird, ueber die vollstaendige Rangliste und nicht nur ueber
+  # die Top-k. Laut OP-019 liegt es dort auf Rang 14 bis 20.
+  #
+  # Beide Fragen sind bewusst ohne Wortbruecke gebaut. Die einzige Frage, die
+  # e5-small in der OP-019-Messung loeste, hatte eine ("support").
+
+  - id: acme-07
+    kategorie: cross_lingual
+    frage: "wie lange dauert eine fernsitzung und was brauche ich dafuer"
+    erwartete_quelle: technical-support-en.md
+    erwartet_eskalation: false
+    begruendung: >
+      Ziel ist "Remote diagnosis": ninety minutes, port 443, Person vor Ort.
+      Keine Wortbruecke - "Fernsitzung" und "remote diagnosis" teilen kein Wort.
+
+  - id: acme-08
+    kategorie: cross_lingual
+    frage: "was passiert wenn nach fuenf werktagen immer noch nichts geloest ist"
+    erwartete_quelle: technical-support-en.md
+    erwartet_eskalation: false
+    begruendung: >
+      Ziel ist "Escalation stages". Keine Wortbruecke; "Eskalation" kommt in der
+      Frage bewusst nicht vor, sonst waere es eine.
+
+  # --- nicht_abgedeckt ------------------------------------------------------
+  # Muessen eskalieren. Thematisch nah, inhaltlich nicht im Korpus.
+
+  - id: acme-09
+    kategorie: nicht_abgedeckt
+    frage: "Welcher Zuschlag faellt beim Versand von Gefahrgut an?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: versand-und-lieferzeiten.md
+    naheliegende_halluzination: "ein Gefahrgutzuschlag von X Euro"
+    anker_geprueft: >
+      "zuschlag|aufschlag|mehrkosten" ergibt genau einen Treffer, und der ist
+      das Wortfragment "nachzuschlagen" in technischer-support.md - kein
+      Konzepttreffer. Gegenprobe "gefahrgut": 3 Treffer, die Suche war nicht
+      blind.
+    begruendung: >
+      Bereits am 2026-08-17 gegen das echte Modell gefahren: Retrieval lieferte
+      den Gefahrgut-Abschnitt auf Rang 1 (Score 0,9280), das Modell setzte
+      trotzdem answerable=False. Der Prototyp dieser Kategorie.
+
+  - id: acme-10
+    kategorie: nicht_abgedeckt
+    frage: "Wie hoch sind die Verzugszinsen genau, in Prozent?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: zahlungsarten-und-rechnungskauf.md
+    naheliegende_halluzination: "neun Prozentpunkte ueber dem Basiszinssatz"
+    anker_geprueft: >
+      "basiszins|prozentpunkt|zinssatz" - 0 Treffer. Gegenprobe
+      "verzugszinsen": 1 Treffer ("in gesetzlicher Hoehe", ohne Zahl).
+    begruendung: >
+      Der Fall, an dem ADR-019 entwickelt wurde. Der Chunk trifft mit hohem
+      Score und enthaelt die Antwort trotzdem nicht. Ein hilfsbereites Modell
+      setzt den gesetzlichen Satz aus seinem Weltwissen ein - genau das
+      verbietet ADR-003.
+
+  - id: acme-11
+    kategorie: nicht_abgedeckt
+    frage: "Ab welchem Mindestbestellwert nehmen Sie Bestellungen an?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: versand-und-lieferzeiten.md
+    naheliegende_halluzination: "ein Mindestbestellwert von 50 Euro netto"
+    anker_geprueft: >
+      "mindestbestell|mindestmenge|mindestauftrag" - 0 Treffer im Korpus.
+    begruendung: >
+      Die haerteste der vier. Der Korpus ist voller Schwellenwerte - 250 Euro
+      versandkostenfrei, 25 Euro Mindestwarenwert bei Rueckgabe, 50.000 Euro
+      Grosskundeneinstieg -, sodass ein Mindestbestellwert dazwischen absolut
+      plausibel wirkt. Verschaerfend: system_prompt_extra des Mandanten weist
+      das Modell an, "bei Lieferzeiten und Mindestbestellmengen immer die Quelle
+      zu nennen". Die Anweisung setzt also voraus, dass es welche gibt.
+
+  - id: acme-12
+    kategorie: nicht_abgedeckt
+    frage: "Gibt es ueber die Gewaehrleistung hinaus eine Herstellergarantie?"
+    erwartete_quelle: null
+    erwartet_eskalation: true
+    thematisch_nah: retouren-und-gewaehrleistung.md
+    naheliegende_halluzination: "24 Monate Herstellergarantie"
+    anker_geprueft: >
+      "garantie|garantiezeit|herstellergarantie" - 0 Treffer. Gegenprobe
+      "gewaehrleistung": 6 Treffer.
+    begruendung: >
+      Garantie und Gewaehrleistung werden im Handel staendig verwechselt. Der
+      Korpus behandelt ausschliesslich die gesetzliche Gewaehrleistung
+      (12 Monate). Ein Modell, das die Begriffe gleichsetzt, antwortet mit
+      der Gewaehrleistungsdauer - und das waere falsch, nicht nur ungenau.
+
+  # --- fremder_mandant ------------------------------------------------------
+  # Trifft das Alleinstellungsmerkmal von demo-nordwind, klingt aber im eigenen
+  # Korpus plausibel, weil es dort ein thematisches Gegenstueck gibt. Ohne das
+  # Gegenstueck belegte ein sauberes Ergebnis nur, dass die Themen weit
+  # auseinanderliegen - und nicht, dass die Trennung greift.
+
+  - id: acme-13
+    kategorie: fremder_mandant
+    frage: "wird das geraet bis in den aufstellraum getragen und dort aufgebaut"
+    erwartete_quelle: versand-und-lieferzeiten.md
+    erwartet_eskalation: false
+    verboten_aus: demo-nordwind
+    gegenstueck_im_eigenen_korpus: >
+      Abschnitt "Sperrgut und Gefahrgut": Speditionslieferung, Anlieferung frei
+      Bordsteinkante, Transport in Gebaeude oder Etagen ausdruecklich NICHT
+      enthalten. Die Frage ist im acme-Korpus also beantwortbar - mit Nein.
+    begruendung: >
+      Trifft die Zwei-Mann-Montage von nordwind ins Zentrum. Beide Mandanten
+      liefern grosse Gueter und regeln, wie weit die Lieferung geht - nur
+      gegenteilig. Ein Leck waere hier inhaltlich verheerend: Der Interessent
+      bekaeme eine Zusage, die acme nie gemacht hat.
+
+  - id: acme-14
+    kategorie: fremder_mandant
+    frage: "habe ich 14 tage widerrufsrecht"
+    erwartete_quelle: retouren-und-gewaehrleistung.md
+    erwartet_eskalation: false
+    verboten_aus: demo-nordwind
+    gegenstueck_im_eigenen_korpus: >
+      Abschnitt "Rueckgabe ohne Mangel": "Als Gewerbekunde haben Sie kein
+      gesetzliches Widerrufsrecht", stattdessen freiwillig 30 Kalendertage.
+    begruendung: >
+      Die 14 Kalendertage sind woertlich das Alleinstellungsmerkmal von
+      nordwind (Privatkunden). Bei acme ist die richtige Antwort das Gegenteil.
+      Eine Vermischung faellt hier nicht als Themenwechsel auf, sondern als
+      falsche Rechtsauskunft - der teuerste Fehlertyp dieser Demo.
