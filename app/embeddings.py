@@ -208,3 +208,66 @@ def build_embeddings(settings: Settings) -> E5Embeddings:
         expected_dimension=settings.embedding_dimension,
         max_seq_length=_read_max_seq_length(backend),
     )
+
+
+# --- Geteilter Embedder je Prozess (ADR-020) --------------------------------
+#
+# Der ADR-001-Hook schlaegt bei @lru_cache ohne tenant_id im Parameter an. Das
+# ist richtig so und hier beantwortet, nicht umgangen: ADR-020 stellt fest, dass
+# ein Embedder nie unter ADR-001 fiel, weil er mandantenunabhaengig UND
+# zustandslos ist. Dieselbe Zeichenkette ergibt fuer jeden Mandanten denselben
+# Vektor; es gibt keinen Mandantenbezug, den das Objekt verlieren koennte.
+#
+# Die Erlaubnis ruht auf beiden Eigenschaften. Faellt eine weg - etwa durch einen
+# Cache ueber encodierte Texte -, faellt die Erlaubnis. Nicht "muss neu bewertet
+# werden", sondern faellt. Durchgesetzt wird das in
+# tests/test_embeddings_geteilt.py, nicht durch diesen Kommentar.
+#
+# Der Schluessel besteht aus den embedding-relevanten Werten und nicht aus dem
+# Settings-Objekt: Settings traegt Secrets und ist als Cache-Schluessel
+# ungeeignet, und zwei Konfigurationen, die sich nur im LLM-Modell
+# unterscheiden, sollen denselben Embedder benutzen.
+
+
+_EmbedderSchluessel = tuple[str, str, int, int]
+
+# Bewusst ein Dict und kein Caching-Dekorator: Ein Dekorator haette den Umweg
+# ueber ein kuenstlich gebautes Settings-Objekt erzwungen, weil der Schluessel
+# hashbar sein muss und Settings es nicht zuverlaessig ist. Ein solches
+# Ersatzobjekt braeche still, sobald build_embeddings ein weiteres Feld liest.
+#
+# Der Name ist absichtlich nicht "cache", "store" oder "index": Diese Namen sind
+# im ADR-001-Hook als Warnsignal hinterlegt, und sie waeren hier irrefuehrend.
+# Was hier liegt, sind Modellgewichte, kein Inhalt.
+_geteilte_embedder: dict[_EmbedderSchluessel, E5Embeddings] = {}
+
+
+def get_embeddings(settings: Settings) -> E5Embeddings:
+    """Liefert den geteilten Embedder dieses Prozesses (ADR-020).
+
+    Das ist der Weg, den Anwendungscode nimmt. `build_embeddings()` bleibt
+    daneben als reine Fabrik bestehen - fuer Tests, die eine frische Instanz
+    brauchen, und weil die Trennung von Fabrik und Cache das Teilen ueberhaupt
+    erst pruefbar macht, ohne 0,47 GB zu laden.
+
+    Der Schluessel besteht aus den embedding-relevanten Werten und nicht aus dem
+    Settings-Objekt. Zwei Konfigurationen, die sich nur im LLM-Modell
+    unterscheiden, sollen denselben Embedder benutzen.
+    """
+    schluessel: _EmbedderSchluessel = (
+        settings.embedding_model,
+        settings.embedding_device,
+        settings.embedding_batch_size,
+        settings.embedding_dimension,
+    )
+    embedder = _geteilte_embedder.get(schluessel)
+    if embedder is None:
+        embedder = build_embeddings(settings)
+        _geteilte_embedder[schluessel] = embedder
+    return embedder
+
+
+def _embedder_cache_leeren() -> None:
+    """Nur fuer Tests. Im Betrieb gibt es keinen Grund, den Embedder zu wechseln:
+    Ein Modellwechsel macht ohnehin jeden Index unbrauchbar (ADR-016)."""
+    _geteilte_embedder.clear()

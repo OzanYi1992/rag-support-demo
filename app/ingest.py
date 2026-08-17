@@ -20,7 +20,7 @@ import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import Settings, get_settings
-from app.embeddings import E5Embeddings, build_embeddings
+from app.embeddings import E5Embeddings, get_embeddings
 from app.index_store import ChunkRecord, index_size_bytes, write_index
 from app.tenants import list_tenants, load_tenant
 
@@ -166,7 +166,8 @@ def ingest_tenant(
             f"Ein leerer Index wuerde jede Frage eskalieren lassen."
         )
 
-    aktive_embeddings = embeddings if embeddings is not None else build_embeddings(aktive_settings)
+    # Geteilter Embedder je Prozess (ADR-020).
+    aktive_embeddings = embeddings if embeddings is not None else get_embeddings(aktive_settings)
 
     am_limit, grenze = _count_chunks_at_token_limit(aktive_embeddings, chunks)
     vektoren = np.array(
@@ -213,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Das Modell einmal laden und wiederverwenden. Kein Modul-Level-Objekt: Es
     # entsteht hier, im Aufruf, und lebt nicht laenger als dieser Lauf.
-    embeddings = build_embeddings(settings)
+    embeddings = get_embeddings(settings)
 
     for slug in slugs:
         report = ingest_tenant(slug, settings=settings, embeddings=embeddings)

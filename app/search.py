@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from app.config import Settings, get_settings
-from app.embeddings import E5Embeddings, build_embeddings
+from app.embeddings import E5Embeddings, get_embeddings
 from app.index_store import load_index
 
 
@@ -74,7 +74,9 @@ def search_tenant(
 
     geladen = load_index(tenant_id, Path(aktive_settings.index_dir))
 
-    aktive_embeddings = embeddings if embeddings is not None else build_embeddings(aktive_settings)
+    # get_embeddings statt build_embeddings: der Embedder wird prozessweit
+    # geteilt (ADR-020). Ohne das laed jede Anfrage 0,47 GB neu.
+    aktive_embeddings = embeddings if embeddings is not None else get_embeddings(aktive_settings)
     frage_vektor = np.array([aktive_embeddings.embed_query(query)], dtype=np.float32)
 
     # FAISS liefert weniger Treffer als angefragt, wenn der Index kleiner ist;
