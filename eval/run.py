@@ -76,10 +76,18 @@ class Frageergebnis:
     kategorie: str
     frage: str
     erwartete_quelle: str | None
+    erwartete_textstelle: str | None
     erwartet_eskalation: bool
 
-    rang: int | None = None  # ueber die VOLLSTAENDIGE Rangliste
+    # ZWEI RAENGE, und die Unterscheidung ist der Kern. rang sagt "richtige
+    # Datei unter den Top-k", rang_chunk sagt "Antwort im Kontext". acme-06 hat
+    # gezeigt, dass das auseinanderfaellt: Datei auf Rang 3, Antwort in einem
+    # Chunk, der nie geliefert wurde. Eine Hit-Rate auf Dateiebene sagt dann
+    # etwas anderes, als sie zu sagen scheint.
+    rang: int | None = None  # Datei, ueber die VOLLSTAENDIGE Rangliste
     in_top_k: bool = False
+    rang_chunk: int | None = None  # Chunk mit der erwarteten Textstelle
+    antwort_im_kontext: bool | None = None
     top_k_scores: list[float] = field(default_factory=list)
     top_k_quellen: list[str] = field(default_factory=list)
     fremde_chunks: list[str] = field(default_factory=list)
@@ -157,6 +165,7 @@ def eine_frage(
         kategorie=eintrag["kategorie"],
         frage=eintrag["frage"],
         erwartete_quelle=eintrag.get("erwartete_quelle"),
+        erwartete_textstelle=eintrag.get("erwartete_textstelle"),
         erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
     )
     embedder = get_embeddings(settings)
@@ -173,6 +182,13 @@ def eine_frage(
                 erg.rang = platz
                 break
         erg.in_top_k = erg.rang is not None and erg.rang <= top_k
+
+    if erg.erwartete_textstelle:
+        for platz, treffer in enumerate(alle, start=1):
+            if erg.erwartete_textstelle in treffer.text:
+                erg.rang_chunk = platz
+                break
+        erg.antwort_im_kontext = erg.rang_chunk is not None and erg.rang_chunk <= top_k
 
     top = alle[:top_k]
     erg.top_k_scores = [round(t.score, 4) for t in top]
@@ -207,6 +223,8 @@ def aggregiere(
     for kategorie, gruppe in sorted(je_kategorie.items()):
         mit_ziel = [e for e in gruppe if e.erwartete_quelle]
         treffer = [e for e in mit_ziel if e.in_top_k]
+        mit_stelle = [e for e in gruppe if e.erwartete_textstelle]
+        im_kontext = [e for e in mit_stelle if e.antwort_im_kontext]
         mrr = (
             round(statistics.fmean(1 / e.rang if e.rang else 0.0 for e in mit_ziel), 4)
             if mit_ziel
@@ -229,7 +247,12 @@ def aggregiere(
             "hit_rate_at_k": (round(len(treffer) / len(mit_ziel), 4) if mit_ziel else None),
             "treffer_in_top_k": f"{len(treffer)}/{len(mit_ziel)}" if mit_ziel else None,
             "mrr": mrr,
-            "raenge": [e.rang for e in mit_ziel],
+            "raenge_datei": [e.rang for e in mit_ziel],
+            "antwort_im_kontext": (f"{len(im_kontext)}/{len(mit_stelle)}" if mit_stelle else None),
+            "antwort_im_kontext_rate": (
+                round(len(im_kontext) / len(mit_stelle), 4) if mit_stelle else None
+            ),
+            "raenge_chunk": [e.rang_chunk for e in mit_stelle],
             "eskaliert": len(eskaliert),
             "eskaliert_retrieval": sum(1 for e in eskaliert if e.tor == "retrieval"),
             "eskaliert_groundedness": sum(1 for e in eskaliert if e.tor == "groundedness"),
@@ -325,16 +348,8 @@ def tabelle(bericht: dict[str, Any]) -> str:
             f"S{a['eskaliert_sonstiges']}"
         )
         p50 = a["latenz_p50_ms"] if a["latenz_p50_ms"] is not None else "–"
-        z.append(f"{kategorie:<26}{hit:>8}{mrr:>8}{a['eskaliert']:>8}  {tore:<16}{p50:>8}")
-    z += ["", "Raenge je Frage (vollstaendige Rangliste, nicht nur Top-k):", ""]
-    for f in bericht["fragen"]:
-        rang = f["rang"] if f["rang"] is not None else "—"
-        marke = "" if f["erwartete_quelle"] is None else (" " if f["in_top_k"] else " !")
-        esk = ""
-        if f["eskaliert"] is not None:
-            ok = "ok " if f["eskalation_wie_erwartet"] else "ABW"
-            esk = f"  esk={str(f['eskaliert']):<5} {f['tor'] or '-':<12} {ok}"
-        z.append(f"  {f['id']:<10}{f['kategorie']:<26}Rang {str(rang):>3}{marke}{esk}")
+        antw = a["antwort_im_kontext"] or "–"
+        z.append(f"{kategorie:<26}{hit:>9}{antw:>9}{mrr:>7}{a['eskaliert']:>8}  {tore:<10}{p50:>6}")
     fremd = sorted({t for f in bericht["fragen"] for t in f["fremde_chunks"]})
     z += ["", f"Fremde Mandanten in irgendeiner Trefferliste: {fremd or 'keine'}"]
     if not kopf["preise_hinterlegt"]:

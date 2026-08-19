@@ -28,6 +28,7 @@ fragen:
     kategorie: direkt
     frage: "Wie lang ist das Terminfenster fuer die Lieferung?"
     erwartete_quelle: lieferung-und-montage.md
+    erwartete_textstelle: "Terminfenster von vier Stunden"
     erwartet_eskalation: false
     begruendung: >
       Antwort steht woertlich da (vier Stunden). Basisfall.
@@ -36,6 +37,7 @@ fragen:
     kategorie: direkt
     frage: "Wie hoch ist die Anzahlung bei einer Massanfertigung?"
     erwartete_quelle: massanfertigung-und-lieferzeiten.md
+    erwartete_textstelle: "Anzahlung von 40 Prozent"
     erwartet_eskalation: false
     begruendung: >
       40 Prozent des Auftragswerts, eigener Abschnitt.
@@ -44,6 +46,7 @@ fragen:
     kategorie: direkt
     frage: "Innerhalb welcher Frist muss ich verdeckte Transportschaeden melden?"
     erwartete_quelle: reklamation-und-transportschaeden.md
+    erwartete_textstelle: "sieben Kalendertagen"
     erwartet_eskalation: false
     begruendung: >
       Sieben Kalendertage. Prueft zugleich, ob der Chunk die Unterscheidung
@@ -55,6 +58,7 @@ fragen:
     kategorie: umgangssprachlich
     frage: "schrank kam kaputt an was mach ich jetzt"
     erwartete_quelle: reklamation-und-transportschaeden.md
+    erwartete_textstelle: "am Liefertag** in den Lieferschein"
     erwartet_eskalation: false
     begruendung: >
       Der Verkkokauppa-Fall in deutscher Fassung. Weder "Transportschaden" noch
@@ -65,6 +69,7 @@ fragen:
     kategorie: umgangssprachlich
     frage: "rotwein auf dem tisch wie krieg ich den fleck weg"
     erwartete_quelle: pflegehinweise.md
+    erwartete_textstelle: "Rotwein, Kaffee"
     erwartet_eskalation: false
     begruendung: >
       Zielabschnitt Flecken, Zeile Rotwein. "Fleck" ist eine Wortbruecke und
@@ -75,6 +80,7 @@ fragen:
     kategorie: umgangssprachlich
     frage: "wohne im 5 stock ohne fahrstuhl kostet das extra"
     erwartete_quelle: lieferung-und-montage.md
+    erwartete_textstelle: "25 Euro je weiterer Etage"
     erwartet_eskalation: false
     begruendung: >
       Zielabschnitt "Etagen und Aufzuege", ab vierter Etage 25 Euro je Etage.
@@ -88,6 +94,7 @@ fragen:
     kategorie: cross_lingual_umgekehrt
     frage: "how long is the delivery time slot"
     erwartete_quelle: lieferung-und-montage.md
+    erwartete_textstelle: "Terminfenster von vier Stunden"
     erwartet_eskalation: false
     begruendung: >
       Englische Fassung von nord-01. Der direkte Vergleich der beiden Raenge
@@ -97,6 +104,7 @@ fragen:
     kategorie: cross_lingual_umgekehrt
     frage: "can i still change the measurements after i approved the drawing"
     erwartete_quelle: massanfertigung-und-lieferzeiten.md
+    erwartete_textstelle: "nicht mehr moeglich"
     erwartet_eskalation: false
     begruendung: >
       Ziel ist "Die Freigabe ist verbindlich". Keine Wortbruecke: "drawing"
@@ -191,6 +199,7 @@ fragen:
     kategorie: fremder_mandant
     frage: "brauche ich eine rma nummer fuer die ruecksendung"
     erwartete_quelle: reklamation-und-transportschaeden.md
+    erwartete_textstelle: "Auftragsnummer aus der Auftragsbestaetigung"
     erwartet_eskalation: false
     verboten_aus: demo-acme
     gegenstueck_im_eigenen_korpus: >
@@ -208,6 +217,7 @@ fragen:
     kategorie: fremder_mandant
     frage: "kann ich auf rechnung kaufen mit 14 tagen zahlungsziel"
     erwartete_quelle: massanfertigung-und-lieferzeiten.md
+    erwartete_textstelle: "Anzahlung von 40 Prozent"
     erwartet_eskalation: false
     verboten_aus: demo-acme
     gegenstueck_im_eigenen_korpus: >
