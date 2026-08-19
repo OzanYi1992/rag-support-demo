@@ -1,0 +1,20 @@
+# Preise fuer die Kostenrechnung in eval/run.py.
+#
+# WERTE BEWUSST LEER. Ein geratener Preis macht aus einer Messung eine
+# Schaetzung. run.py bricht ohne Werte NICHT ab - die Kostenspalte bleibt
+# schlicht leer.
+#
+# WICHTIG: Preise aendern sich. Ein Ergebnis ist nur zusammen mit dem Datum
+# unten rueckrechenbar. Wer hier Werte eintraegt, traegt Datum und Quelle mit
+# ein - sonst laesst sich in vier Wochen nicht mehr sagen, gegen welchen
+# Preisstand eine Zahl gerechnet wurde.
+#
+# Einheit: US-Dollar je 1.000.000 Token.
+
+stand: null          # JJJJ-MM-TT, Tag des Ablesens
+quelle: null         # URL der offiziellen Preisseite
+
+modelle:
+  gpt-5.4-mini-2026-03-17:
+    eingabe_je_1m: null
+    ausgabe_je_1m: null

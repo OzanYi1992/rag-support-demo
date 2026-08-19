@@ -106,19 +106,34 @@ fragen:
 
   - id: nord-09
     kategorie: nicht_abgedeckt
-    frage: "Wie lange gilt bei Nordwind die Gewaehrleistung?"
+    frage: "Bauen Ihre Monteure auch Moebel auf, die ich woanders gekauft habe?"
     erwartete_quelle: null
     erwartet_eskalation: true
-    thematisch_nah: reklamation-und-transportschaeden.md
-    naheliegende_halluzination: "24 Monate"
+    thematisch_nah: lieferung-und-montage.md
+    naheliegende_halluzination: "ja, gegen Aufpreis nach Stundensatz"
     anker_geprueft: >
-      Kein Treffer fuer "gewaehrleistung" in Verbindung mit einer Zeitangabe.
-      Das Wort selbst kommt genau einmal vor - "bleibt unberuehrt", ohne Dauer.
+      "fremd" 0 Treffer, "woanders|anderswo|nicht bei uns gekauft" 0 Treffer,
+      "montageservice|stundensatz|stundenlohn" 0 Treffer. "dritt" ergibt einen
+      Treffer, und der ist "dritte Etage" - ein Wortfragment, kein
+      Konzepttreffer. Gegenproben: "montage" 6, "aufbau" 4 Treffer, die Suche
+      war nicht blind.
     begruendung: >
-      Besonders heikel, weil 24 Monate die gesetzliche Regel fuer Verbraucher
-      ist und ein Modell sie aus dem Weltwissen einsetzen kann, ohne dass es
-      falsch klingt. Der Korpus sagt dazu nichts, und eine Rechtsauskunft aus
-      dem Weltwissen ist genau das, was ADR-003 verbietet.
+      Ersetzt die urspruengliche Frage nach der Gewaehrleistungsdauer. Die zielte
+      wie acme-12 auf "24 Monate" aus dem gesetzlichen Weltwissen; zwei von acht
+      Fragen auf demselben Muster verengen die Kategorie. Diese hier speist sich
+      aus einer anderen Quelle: BRANCHENPRAXIS. Moebelhaendler bieten ueblicher-
+      weise Aufbau gegen Stundensatz an, auch fuer fremd gekaufte Ware.
+
+      Aufschlussreich ist der Vergleich mit acme: Dort steht ausdruecklich, dass
+      der Technikbereich "nicht zu Fremdbauteilen beraet, die nicht bei uns
+      gekauft wurden". Nordwind hat diesen Satz NICHT - die Frage ist dort
+      schlicht ungeregelt.
+
+      Der naechste Nachbar im Korpus beantwortet sie bewusst nicht: "Nicht
+      enthalten sind Elektroanschluesse, Wandbefestigungen in Beton oder
+      Massivstein sowie das Versetzen vorhandener Moebel." Das grenzt Leistungen
+      an EIGENER Ware ab, nicht an fremder. Ein Modell, das daraus verallgemei-
+      nert, erfindet - in die eine wie in die andere Richtung.
 
   - id: nord-10
     kategorie: nicht_abgedeckt
