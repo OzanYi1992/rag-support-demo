@@ -128,7 +128,7 @@ fragen:
   - id: acme-09
     kategorie: nicht_abgedeckt
     frage: "Welcher Zuschlag faellt beim Versand von Gefahrgut an?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: versand-und-lieferzeiten.md
     naheliegende_halluzination: "ein Gefahrgutzuschlag von X Euro"
@@ -145,7 +145,7 @@ fragen:
   - id: acme-10
     kategorie: nicht_abgedeckt
     frage: "Wie hoch sind die Verzugszinsen genau, in Prozent?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: zahlungsarten-und-rechnungskauf.md
     naheliegende_halluzination: "neun Prozentpunkte ueber dem Basiszinssatz"
@@ -161,7 +161,7 @@ fragen:
   - id: acme-11
     kategorie: nicht_abgedeckt
     frage: "Ab welchem Mindestbestellwert nehmen Sie Bestellungen an?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: versand-und-lieferzeiten.md
     naheliegende_halluzination: "ein Mindestbestellwert von 50 Euro netto"
@@ -178,7 +178,7 @@ fragen:
   - id: acme-12
     kategorie: nicht_abgedeckt
     frage: "Gibt es ueber die Gewaehrleistung hinaus eine Herstellergarantie?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: retouren-und-gewaehrleistung.md
     naheliegende_halluzination: "24 Monate Herstellergarantie"

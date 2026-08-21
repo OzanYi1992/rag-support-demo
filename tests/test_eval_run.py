@@ -20,8 +20,10 @@ from eval.run import (
     ABW_NICHT_IM_KONTEXT,
     ABW_UNBESTIMMT,
     METRIK_DATEI_UND_CHUNK,
+    QUELLE_NICHT_ANWENDBAR,
     Frageergebnis,
     _abweichungsklasse,
+    pruefe_goldsatz,
     pruefe_kopf,
 )
 
@@ -111,3 +113,46 @@ def test_ohne_textstelle_ist_die_klasse_unbestimmt() -> None:
         antwort_im_kontext=None,
     )
     assert _abweichungsklasse(f) == ABW_UNBESTIMMT
+
+
+# --- erwartete_quelle darf nicht blank null sein ----------------------------
+
+
+def test_goldsatz_mit_platzhalter_geht_durch() -> None:
+    gold = {"fragen": [{"id": "a-1", "erwartete_quelle": QUELLE_NICHT_ANWENDBAR}]}
+    pruefe_goldsatz(gold, "test.yaml")
+
+
+def test_goldsatz_mit_dateiname_geht_durch() -> None:
+    pruefe_goldsatz({"fragen": [{"id": "a-1", "erwartete_quelle": "doku.md"}]}, "t.yaml")
+
+
+def test_goldsatz_mit_null_wird_abgelehnt() -> None:
+    """Der Kern von P-019: Dasselbe Zeichen trug zwei Bedeutungen.
+
+    null hiess mal "es gibt hier keine richtige Quelle" und mal "eine gaebe es,
+    sie wurde nur nie bestimmt". Nichts am Zeichen unterschied die beiden, und
+    ein Leser sah keinen Anlass zur Rueckfrage.
+    """
+    with pytest.raises(ValueError, match="nicht_anwendbar"):
+        pruefe_goldsatz({"fragen": [{"id": "a-1", "erwartete_quelle": None}]}, "t.yaml")
+
+
+def test_goldsatz_ohne_das_feld_wird_abgelehnt() -> None:
+    with pytest.raises(ValueError, match="a-1"):
+        pruefe_goldsatz({"fragen": [{"id": "a-1"}]}, "t.yaml")
+
+
+def test_die_echten_goldsaetze_sind_gueltig() -> None:
+    """Positivtest: Ohne ihn waere die Pruefung eine Behauptung (P-010)."""
+    import pathlib
+
+    import yaml
+
+    from eval.run import EVAL_DIR
+
+    geprueft = 0
+    for pfad in sorted(pathlib.Path(EVAL_DIR).glob("*/gold.yaml")):
+        pruefe_goldsatz(yaml.safe_load(pfad.read_text(encoding="utf-8")), str(pfad))
+        geprueft += 1
+    assert geprueft == 2, "Es sollten zwei Goldsaetze geprueft worden sein."

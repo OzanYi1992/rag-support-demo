@@ -115,7 +115,7 @@ fragen:
   - id: nord-09
     kategorie: nicht_abgedeckt
     frage: "Bauen Ihre Monteure auch Moebel auf, die ich woanders gekauft habe?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: lieferung-und-montage.md
     naheliegende_halluzination: "ja, gegen Aufpreis nach Stundensatz"
@@ -146,7 +146,7 @@ fragen:
   - id: nord-10
     kategorie: nicht_abgedeckt
     frage: "Nehmen Sie bei der Lieferung meine alten Moebel mit?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: lieferung-und-montage.md
     naheliegende_halluzination: "Altmoebelmitnahme gegen Aufpreis"
@@ -162,7 +162,7 @@ fragen:
   - id: nord-11
     kategorie: nicht_abgedeckt
     frage: "Was kostet es, wenn die Monteure die Wandbefestigung in Beton doch uebernehmen?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: lieferung-und-montage.md
     naheliegende_halluzination: "ein Aufpreis von X Euro je Befestigungspunkt"
@@ -178,7 +178,7 @@ fragen:
   - id: nord-12
     kategorie: nicht_abgedeckt
     frage: "Kann ich eine Massanfertigung in Raten bezahlen?"
-    erwartete_quelle: null
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
     erwartet_eskalation: true
     thematisch_nah: massanfertigung-und-lieferzeiten.md
     naheliegende_halluzination: "Ratenzahlung oder Null-Prozent-Finanzierung"

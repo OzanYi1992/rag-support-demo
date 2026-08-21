@@ -64,6 +64,16 @@ TOR_SONSTIGES = {REASON_UNPARSEABLE}
 # aus und sind es nicht: "Datei unter den Top-k" ist etwas anderes als
 # "Antwort im Kontext". Ohne dieses Feld vergleicht jemand Zahlen, die nicht
 # vergleichbar sind.
+# erwartete_quelle traegt entweder einen Dateinamen oder einen dieser beiden
+# Platzhalter. Ein blankes null ist NICHT zulaessig, weil es zwei verschiedene
+# Dinge bedeutet haette und nichts am Zeichen die beiden unterscheidet: "es gibt
+# hier keine richtige Quelle" und "eine gaebe es, sie wurde nur nie bestimmt".
+# Ein Leser sieht bei null keinen Anlass zur Rueckfrage - die Mehrdeutigkeit ist
+# stillschweigend. Siehe pitfalls.md, P-019.
+QUELLE_NICHT_ANWENDBAR = "nicht_anwendbar"  # nicht_abgedeckt: es GIBT keine
+QUELLE_NICHT_BESTIMMT = "nicht_bestimmt"  # eine gaebe es, sie fehlt im Goldsatz
+QUELLE_PLATZHALTER = {QUELLE_NICHT_ANWENDBAR, QUELLE_NICHT_BESTIMMT}
+
 METRIK_NUR_DATEI = "nur_datei"
 METRIK_DATEI_UND_CHUNK = "datei_und_chunk"
 METRIK_UNBESTIMMT = "unbestimmt"
@@ -147,6 +157,28 @@ def _abweichungsklasse(erg: Frageergebnis) -> str:
     return ABW_IM_KONTEXT if erg.antwort_im_kontext else ABW_NICHT_IM_KONTEXT
 
 
+def pruefe_goldsatz(gold: dict[str, Any], quelle: str) -> None:
+    """Lehnt ein blankes null bei erwartete_quelle ab.
+
+    Der Wert muss sagen, WELCHE Art von Abwesenheit gemeint ist. Sonst steht
+    dasselbe Zeichen fuer "es gibt keine richtige Quelle" und "sie wurde nie
+    bestimmt", und die Auswertung behandelt beides gleich, obwohl das eine ein
+    Entwurfsmerkmal und das andere eine Luecke ist.
+    """
+    fehler = [
+        f["id"]
+        for f in gold.get("fragen", [])
+        if "erwartete_quelle" not in f or f["erwartete_quelle"] is None
+    ]
+    if fehler:
+        raise ValueError(
+            f"{quelle}: erwartete_quelle fehlt oder ist null bei {fehler}. "
+            f"Erlaubt sind ein Dateiname, {QUELLE_NICHT_ANWENDBAR!r} "
+            f"(es gibt keine richtige Quelle) oder {QUELLE_NICHT_BESTIMMT!r} "
+            f"(eine gaebe es, sie ist nicht hinterlegt)."
+        )
+
+
 def _tor_von(grund: str | None) -> str | None:
     if grund is None:
         return None
@@ -219,7 +251,7 @@ def eine_frage(
     alle = search_tenant(slug, erg.frage, k=gesamtzahl, settings=settings, embeddings=embedder)
     erg.latenz_retrieval_ms = int((time.monotonic() - begonnen) * 1000)
 
-    if erg.erwartete_quelle:
+    if erg.erwartete_quelle and erg.erwartete_quelle not in QUELLE_PLATZHALTER:
         for platz, treffer in enumerate(alle, start=1):
             if treffer.source_file == erg.erwartete_quelle:
                 erg.rang = platz
@@ -266,7 +298,9 @@ def aggregiere(
 
     aus: dict[str, Any] = {}
     for kategorie, gruppe in sorted(je_kategorie.items()):
-        mit_ziel = [e for e in gruppe if e.erwartete_quelle]
+        mit_ziel = [
+            e for e in gruppe if e.erwartete_quelle and e.erwartete_quelle not in QUELLE_PLATZHALTER
+        ]
         treffer = [e for e in mit_ziel if e.in_top_k]
         mit_stelle = [e for e in gruppe if e.erwartete_textstelle]
         im_kontext = [e for e in mit_stelle if e.antwort_im_kontext]
