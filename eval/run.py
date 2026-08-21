@@ -56,6 +56,32 @@ TOR_RETRIEVAL = {REASON_NO_HITS, REASON_BELOW_THRESHOLD, REASON_FLAT}
 TOR_GROUNDEDNESS = {REASON_NOT_GROUNDED}
 TOR_SONSTIGES = {REASON_UNPARSEABLE}
 
+# Welche Metrik eine Ergebnisdatei enthaelt. Steht im Kopf JEDER Datei, weil
+# ein Hinweis, der nicht dort steht wo gelesen wird, keiner ist (P-018).
+#
+# Aeltere Laeufe massen nur den Rang der QUELLDATEI. Neuere messen zusaetzlich
+# den Rang des CHUNKS mit der erwarteten Textstelle. Die Zahlen sehen gleich
+# aus und sind es nicht: "Datei unter den Top-k" ist etwas anderes als
+# "Antwort im Kontext". Ohne dieses Feld vergleicht jemand Zahlen, die nicht
+# vergleichbar sind.
+METRIK_NUR_DATEI = "nur_datei"
+METRIK_DATEI_UND_CHUNK = "datei_und_chunk"
+METRIK_UNBESTIMMT = "unbestimmt"
+METRIKEN = {METRIK_NUR_DATEI, METRIK_DATEI_UND_CHUNK, METRIK_UNBESTIMMT}
+
+# Abweichungsklasse je Frage. Wird AUS DEN DATEN abgeleitet, nie von Hand
+# gesetzt: Sie ergibt sich daraus, ob der Chunk mit der erwarteten Textstelle
+# im Kontext lag.
+#
+# In den Rohdaten sehen alle Abweichungen gleich aus - fuenfmal not_grounded.
+# Dass sie zwei verschiedene Ursachen haben, war bisher nur in Prosa
+# festgehalten. Wer die Datei oeffnet, hatte keinen Anlass zu trennen.
+ABW_KEINE = "keine_abweichung"
+ABW_NICHT_IM_KONTEXT = "antwort_lag_nicht_im_kontext"
+ABW_IM_KONTEXT = "antwort_lag_im_kontext_trotzdem_eskaliert"
+ABW_UNBESTIMMT = "unbestimmt_keine_textstelle_im_goldsatz"
+ABW_NICHT_BEWERTBAR = "nicht_bewertbar_ohne_llm"
+
 HINWEIS_CROSS_LINGUAL = (
     "Deutsche Frage, englische Quelle. Die deutschen Zwillingsdokumente sind "
     "Ablenker in der Anfragesprache - genau darin wirkt Language Bias. Der Rang "
@@ -96,12 +122,29 @@ class Frageergebnis:
     tor: str | None = None
     grund: str | None = None
     eskalation_wie_erwartet: bool | None = None
+    abweichungsklasse: str | None = None
 
     latenz_retrieval_ms: int | None = None
     latenz_generierung_ms: int | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     antworttext: str | None = None
+
+
+def _abweichungsklasse(erg: Frageergebnis) -> str:
+    """Leitet die Klasse aus den vorhandenen Daten ab.
+
+    Nie von Hand gesetzt. Ohne LLM-Lauf gibt es keine Abweichung zu
+    klassifizieren; ohne erwartete Textstelle im Goldsatz fehlt die Grundlage,
+    und dann wird das ausgewiesen statt geraten.
+    """
+    if erg.eskaliert is None:
+        return ABW_NICHT_BEWERTBAR
+    if erg.eskalation_wie_erwartet:
+        return ABW_KEINE
+    if erg.antwort_im_kontext is None:
+        return ABW_UNBESTIMMT
+    return ABW_IM_KONTEXT if erg.antwort_im_kontext else ABW_NICHT_IM_KONTEXT
 
 
 def _tor_von(grund: str | None) -> str | None:
@@ -196,6 +239,7 @@ def eine_frage(
     erg.fremde_chunks = sorted({t.tenant_slug for t in alle if t.tenant_slug != slug})
 
     if nur_retrieval:
+        erg.abweichungsklasse = _abweichungsklasse(erg)
         return erg
 
     antwort = answer(slug, erg.frage, settings=settings, embeddings=embedder)
@@ -208,6 +252,7 @@ def eine_frage(
     erg.prompt_tokens = antwort.prompt_tokens
     erg.completion_tokens = antwort.completion_tokens
     erg.antworttext = antwort.text
+    erg.abweichungsklasse = _abweichungsklasse(erg)
     return erg
 
 
@@ -260,6 +305,17 @@ def aggregiere(
             "eskalation_wie_erwartet": sum(1 for e in gruppe if e.eskalation_wie_erwartet)
             if any(e.eskalation_wie_erwartet is not None for e in gruppe)
             else None,
+            "abweichungsklassen": {
+                k: sum(1 for e in gruppe if e.abweichungsklasse == k)
+                for k in (
+                    ABW_KEINE,
+                    ABW_NICHT_IM_KONTEXT,
+                    ABW_IM_KONTEXT,
+                    ABW_UNBESTIMMT,
+                    ABW_NICHT_BEWERTBAR,
+                )
+                if any(e.abweichungsklasse == k for e in gruppe)
+            },
             "latenz_p50_ms": round(statistics.median(latenzen)) if latenzen else None,
             "latenz_p95_ms": (
                 round(sorted(latenzen)[max(0, int(len(latenzen) * 0.95) - 1)]) if latenzen else None
@@ -302,6 +358,14 @@ def fahre(
             "baseline": baseline,
             "mandant": slug,
             "modus": "nur_retrieval" if nur_retrieval else "retrieval_und_llm",
+            "metrik": METRIK_DATEI_UND_CHUNK,
+            "metrik_bedeutung": (
+                "rang = Rang der Quelldatei, rang_chunk = Rang des Chunks mit "
+                "der erwarteten Textstelle. hit_rate_at_k zaehlt Dateitreffer, "
+                "antwort_im_kontext_rate zaehlt Chunktreffer. Ergebnisse mit "
+                "metrik=nur_datei sind mit antwort_im_kontext_rate NICHT "
+                "vergleichbar."
+            ),
             "git_commit": _git_commit(),
             "embedding_modell": settings.embedding_model,
             "embedding_dimension": settings.embedding_dimension,
@@ -325,6 +389,28 @@ def fahre(
     }
 
 
+def pruefe_kopf(bericht: dict[str, Any]) -> None:
+    """Verweigert das Schreiben einer Datei ohne gueltige Metrikangabe.
+
+    Der Sinn ist nicht Formalismus. Eine Ergebnisdatei ohne Metrikangabe ist
+    spaeter nicht mehr einzuordnen, und genau daraus entsteht der Vergleich von
+    Zahlen, die nicht vergleichbar sind. Lieber kein Ergebnis als ein
+    uneinordenbares.
+    """
+    kopf = bericht.get("kopf", {})
+    metrik = kopf.get("metrik")
+    if metrik not in METRIKEN:
+        raise ValueError(
+            f"Ergebniskopf ohne gueltige Metrikangabe (metrik={metrik!r}). "
+            f"Erlaubt: {sorted(METRIKEN)}. Datei wird nicht geschrieben."
+        )
+    if not kopf.get("metrik_bedeutung"):
+        raise ValueError(
+            "Ergebniskopf ohne metrik_bedeutung. Ein Kuerzel ohne Erklaerung "
+            "ist in vier Wochen so wenig wert wie gar keine Angabe."
+        )
+
+
 def tabelle(bericht: dict[str, Any]) -> str:
     kopf = bericht["kopf"]
     z = [
@@ -334,6 +420,7 @@ def tabelle(bericht: dict[str, Any]) -> str:
         f"chunks={kopf['chunks_im_index']}   strategie={kopf['eskalationsstrategie']}",
         f"embedding={kopf['embedding_modell']}   llm={kopf['llm_modell']}   "
         f"commit={kopf['git_commit']}",
+        f"METRIK: {kopf['metrik']}",
         f"{'=' * 78}",
         "",
         f"{'Kategorie':<26}{'Hit@k':>8}{'MRR':>8}{'Eskal.':>8}{'  davon Tor':<18}{'p50 ms':>8}",
@@ -385,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
     ERGEBNIS_DIR.mkdir(parents=True, exist_ok=True)
     for slug in slugs:
         bericht = fahre(slug, args.top_k, args.retrieval_only, args.lauf, args.baseline)
+        pruefe_kopf(bericht)
         stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
         ziel = ERGEBNIS_DIR / f"{stempel}-{slug}-lauf{args.lauf}.json"
         ziel.write_text(json.dumps(bericht, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1,11 +1,13 @@
 {
   "kopf": {
-    "zeitstempel": "2026-08-19T04:09:23+00:00",
-    "lauf": "A",
+    "zeitstempel": "2026-08-21T13:46:59+00:00",
+    "lauf": "A2",
     "baseline": true,
     "mandant": "demo-nordwind",
     "modus": "retrieval_und_llm",
-    "git_commit": "e56c54e",
+    "metrik": "datei_und_chunk",
+    "metrik_bedeutung": "rang = Rang der Quelldatei, rang_chunk = Rang des Chunks mit der erwarteten Textstelle. hit_rate_at_k zaehlt Dateitreffer, antwort_im_kontext_rate zaehlt Chunktreffer. Ergebnisse mit metrik=nur_datei sind mit antwort_im_kontext_rate NICHT vergleichbar.",
+    "git_commit": "328b7bf",
     "embedding_modell": "intfloat/multilingual-e5-small",
     "embedding_dimension": 384,
     "llm_modell": "gpt-5.4-mini-2026-03-17",
@@ -16,10 +18,7 @@
     "eskalationsstrategie": "degenerate_only",
     "retrieval_score_threshold": null,
     "chunks_im_index": 20,
-    "preise_hinterlegt": false,
-    "metrik": "nur_datei",
-    "metrik_bedeutung": "rang = Rang der QUELLDATEI. Der Rang des Chunks mit der Antwort wurde in diesem Lauf NICHT gemessen. hit_rate_at_k zaehlt Dateitreffer und ist mit antwort_im_kontext_rate aus spaeteren Laeufen NICHT vergleichbar.",
-    "metrik_nachgetragen": "2026-08-19, aus dem Vorhandensein des Feldes rang_chunk abgeleitet. Die Messwerte selbst sind unveraendert."
+    "preise_hinterlegt": false
   },
   "aggregiert_je_kategorie": {
     "cross_lingual_umgekehrt": {
@@ -27,7 +26,13 @@
       "hit_rate_at_k": 1.0,
       "treffer_in_top_k": "2/2",
       "mrr": 0.4167,
-      "raenge": [
+      "raenge_datei": [
+        2,
+        3
+      ],
+      "antwort_im_kontext": "2/2",
+      "antwort_im_kontext_rate": 1.0,
+      "raenge_chunk": [
         2,
         3
       ],
@@ -36,8 +41,11 @@
       "eskaliert_groundedness": 0,
       "eskaliert_sonstiges": 0,
       "eskalation_wie_erwartet": 2,
-      "latenz_p50_ms": 883,
-      "latenz_p95_ms": 824,
+      "abweichungsklassen": {
+        "keine_abweichung": 2
+      },
+      "latenz_p50_ms": 1026,
+      "latenz_p95_ms": 942,
       "kosten_je_frage_usd": null,
       "hinweis": "Englische Frage, deutscher Korpus. NICHT symmetrisch zu cross_lingual: Hier gibt es ueberhaupt keine englischen Ablenker, weil der ganze Korpus deutsch ist. Ein gutes Ergebnis ist deshalb KEINE Entwarnung zur Sprachgrenze - es belegt nur, dass ein einsprachiger Korpus keine Konkurrenz in der falschen Sprache hat."
     },
@@ -46,9 +54,16 @@
       "hit_rate_at_k": 1.0,
       "treffer_in_top_k": "3/3",
       "mrr": 0.8333,
-      "raenge": [
+      "raenge_datei": [
         1,
         2,
+        1
+      ],
+      "antwort_im_kontext": "3/3",
+      "antwort_im_kontext_rate": 1.0,
+      "raenge_chunk": [
+        1,
+        3,
         1
       ],
       "eskaliert": 0,
@@ -56,8 +71,11 @@
       "eskaliert_groundedness": 0,
       "eskaliert_sonstiges": 0,
       "eskalation_wie_erwartet": 3,
-      "latenz_p50_ms": 911,
-      "latenz_p95_ms": 911,
+      "abweichungsklassen": {
+        "keine_abweichung": 3
+      },
+      "latenz_p50_ms": 1124,
+      "latenz_p95_ms": 1124,
       "kosten_je_frage_usd": null
     },
     "fremder_mandant": {
@@ -65,17 +83,27 @@
       "hit_rate_at_k": 1.0,
       "treffer_in_top_k": "2/2",
       "mrr": 0.5,
-      "raenge": [
+      "raenge_datei": [
         2,
         2
+      ],
+      "antwort_im_kontext": "1/2",
+      "antwort_im_kontext_rate": 0.5,
+      "raenge_chunk": [
+        2,
+        11
       ],
       "eskaliert": 2,
       "eskaliert_retrieval": 0,
       "eskaliert_groundedness": 2,
       "eskaliert_sonstiges": 0,
       "eskalation_wie_erwartet": 0,
-      "latenz_p50_ms": 1025,
-      "latenz_p95_ms": 794,
+      "abweichungsklassen": {
+        "antwort_lag_nicht_im_kontext": 1,
+        "antwort_lag_im_kontext_trotzdem_eskaliert": 1
+      },
+      "latenz_p50_ms": 785,
+      "latenz_p95_ms": 762,
       "kosten_je_frage_usd": null
     },
     "nicht_abgedeckt": {
@@ -83,14 +111,20 @@
       "hit_rate_at_k": null,
       "treffer_in_top_k": null,
       "mrr": null,
-      "raenge": [],
+      "raenge_datei": [],
+      "antwort_im_kontext": null,
+      "antwort_im_kontext_rate": null,
+      "raenge_chunk": [],
       "eskaliert": 4,
       "eskaliert_retrieval": 0,
       "eskaliert_groundedness": 4,
       "eskaliert_sonstiges": 0,
       "eskalation_wie_erwartet": 4,
-      "latenz_p50_ms": 761,
-      "latenz_p95_ms": 801,
+      "abweichungsklassen": {
+        "keine_abweichung": 4
+      },
+      "latenz_p50_ms": 889,
+      "latenz_p95_ms": 957,
       "kosten_je_frage_usd": null
     },
     "umgangssprachlich": {
@@ -98,8 +132,15 @@
       "hit_rate_at_k": 1.0,
       "treffer_in_top_k": "3/3",
       "mrr": 0.6667,
-      "raenge": [
+      "raenge_datei": [
         2,
+        1,
+        2
+      ],
+      "antwort_im_kontext": "2/3",
+      "antwort_im_kontext_rate": 0.6667,
+      "raenge_chunk": [
+        10,
         1,
         2
       ],
@@ -108,8 +149,11 @@
       "eskaliert_groundedness": 0,
       "eskaliert_sonstiges": 0,
       "eskalation_wie_erwartet": 3,
-      "latenz_p50_ms": 1143,
-      "latenz_p95_ms": 1143,
+      "abweichungsklassen": {
+        "keine_abweichung": 3
+      },
+      "latenz_p50_ms": 1271,
+      "latenz_p95_ms": 1271,
       "kosten_je_frage_usd": null
     }
   },
@@ -119,9 +163,12 @@
       "kategorie": "direkt",
       "frage": "Wie lang ist das Terminfenster fuer die Lieferung?",
       "erwartete_quelle": "lieferung-und-montage.md",
+      "erwartete_textstelle": "Terminfenster von vier Stunden",
       "erwartet_eskalation": false,
       "rang": 1,
       "in_top_k": true,
+      "rang_chunk": 1,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.9539,
         0.9213,
@@ -139,21 +186,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 12,
-      "latenz_generierung_ms": 898,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 1185,
       "prompt_tokens": 1431,
       "completion_tokens": 44,
-      "antworttext": "Das Terminfenster fuer die Lieferung betraegt vier Stunden.",
-      "abweichungsklasse": "keine_abweichung"
+      "antworttext": "Das Terminfenster fuer die Lieferung betraegt vier Stunden."
     },
     {
       "id": "nord-02",
       "kategorie": "direkt",
       "frage": "Wie hoch ist die Anzahlung bei einer Massanfertigung?",
       "erwartete_quelle": "massanfertigung-und-lieferzeiten.md",
+      "erwartete_textstelle": "Anzahlung von 40 Prozent",
       "erwartet_eskalation": false,
       "rang": 2,
       "in_top_k": true,
+      "rang_chunk": 3,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.9413,
         0.9407,
@@ -171,21 +221,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 13,
-      "latenz_generierung_ms": 910,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 890,
       "prompt_tokens": 1410,
-      "completion_tokens": 73,
-      "antworttext": "Bei Massanfertigungen wird mit der Freigabe eine Anzahlung von 40 Prozent des Auftragswerts faellig. [Quelle: massanfertigung-und-lieferzeiten.md]",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 71,
+      "antworttext": "Bei Massanfertigungen wird mit der Freigabe eine Anzahlung von 40 Prozent des Auftragswerts faellig. Quelle: massanfertigung-und-lieferzeiten.md"
     },
     {
       "id": "nord-03",
       "kategorie": "direkt",
       "frage": "Innerhalb welcher Frist muss ich verdeckte Transportschaeden melden?",
       "erwartete_quelle": "reklamation-und-transportschaeden.md",
+      "erwartete_textstelle": "sieben Kalendertagen",
       "erwartet_eskalation": false,
       "rang": 1,
       "in_top_k": true,
+      "rang_chunk": 1,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.9481,
         0.943,
@@ -203,21 +256,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 13,
-      "latenz_generierung_ms": 898,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 14,
+      "latenz_generierung_ms": 1110,
       "prompt_tokens": 1233,
-      "completion_tokens": 71,
-      "antworttext": "Verdeckte Transportschaeden muessen Sie innerhalb von sieben Kalendertagen nach Lieferung melden. Massgeblich ist der Eingang Ihrer Meldung, nicht das Datum der Entdeckung.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 72,
+      "antworttext": "Verdeckte Transportschaeden muessen innerhalb von sieben Kalendertagen nach Lieferung gemeldet werden. Massgeblich ist der Eingang der Meldung, nicht das Datum der Entdeckung."
     },
     {
       "id": "nord-04",
       "kategorie": "umgangssprachlich",
       "frage": "schrank kam kaputt an was mach ich jetzt",
       "erwartete_quelle": "reklamation-und-transportschaeden.md",
+      "erwartete_textstelle": "am Liefertag** in den Lieferschein",
       "erwartet_eskalation": false,
       "rang": 2,
       "in_top_k": true,
+      "rang_chunk": 10,
+      "antwort_im_kontext": false,
       "top_k_scores": [
         0.9222,
         0.9192,
@@ -235,21 +291,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 13,
-      "latenz_generierung_ms": 1577,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 11,
+      "latenz_generierung_ms": 1680,
       "prompt_tokens": 1346,
-      "completion_tokens": 161,
-      "antworttext": "Melden Sie den Schaden schriftlich oder telefonisch und nennen Sie die Auftragsnummer aus der Auftragsbestaetigung, mindestens drei Aufnahmen sowie eine kurze Beschreibung, wann der Schaden aufgefallen ist. Telefonische Meldungen werden schriftlich festgehalten und Ihnen zur Bestaetigung zugeschickt. Wir melden uns innerhalb von drei Werktagen mit einer Einschaetzung. Laesst sich der Schaden auf keinem der drei Wege beheben, nehmen wir den Artikel zurueck und erstatten den vollen Kaufpreis einschliesslich der Lieferkosten; die Abholung erfolgt kostenfrei im vereinbarten Terminfenster.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 194,
+      "antworttext": "Wenn sich der Schaden auf keinem der drei Wege beheben laesst, nimmt Nordwind den Artikel zurueck und erstattet den vollen Kaufpreis einschliesslich der Lieferkosten. Die Abholung erfolgt kostenfrei im vereinbarten Terminfenster. Der Artikel muss dafuer nicht in der Originalverpackung sein; die Monteure bringen geeignetes Material mit. Nordwind meldet sich innerhalb von drei Werktagen mit einer Einschaetzung. Fuer die Meldung werden die Auftragsnummer, mindestens drei Aufnahmen, bei Bruch zusaetzlich eine Aufnahme der Bruchkante, und eine kurze Beschreibung benoetigt. Melden koennen Sie den Schaden schriftlich oder telefonisch; telefonische Meldungen werden schriftlich festgehalten und zur Bestaetigung zugeschickt."
     },
     {
       "id": "nord-05",
       "kategorie": "umgangssprachlich",
       "frage": "rotwein auf dem tisch wie krieg ich den fleck weg",
       "erwartete_quelle": "pflegehinweise.md",
+      "erwartete_textstelle": "Rotwein, Kaffee",
       "erwartet_eskalation": false,
       "rang": 1,
       "in_top_k": true,
+      "rang_chunk": 1,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.935,
         0.9113,
@@ -267,21 +326,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 12,
-      "latenz_generierung_ms": 922,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 1040,
       "prompt_tokens": 1356,
-      "completion_tokens": 60,
-      "antworttext": "Rotwein sollen Sie sofort aufnehmen und den Rest mit klarem Wasser behandeln. Flecken sollten Sie sofort behandeln. [Quelle: pflegehinweise.md]",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 59,
+      "antworttext": "Rotwein sollten Sie sofort aufnehmen und den Rest mit klarem Wasser behandeln. Behandeln Sie den Fleck sofort. [pflegehinweise.md]"
     },
     {
       "id": "nord-06",
       "kategorie": "umgangssprachlich",
       "frage": "wohne im 5 stock ohne fahrstuhl kostet das extra",
       "erwartete_quelle": "lieferung-und-montage.md",
+      "erwartete_textstelle": "25 Euro je weiterer Etage",
       "erwartet_eskalation": false,
       "rang": 2,
       "in_top_k": true,
+      "rang_chunk": 2,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.9186,
         0.9171,
@@ -299,21 +361,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 11,
-      "latenz_generierung_ms": 1132,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 1256,
       "prompt_tokens": 1383,
-      "completion_tokens": 117,
-      "antworttext": "Ja. Lieferungen bis in die dritte Etage sind im Preis enthalten. Ab der vierten Etage ohne nutzbaren Aufzug berechnen wir 25 Euro je weiterer Etage. Da ein Aufzug als nutzbar gilt, wenn das groesste Einzelteil hineinpasst, wird im 5. Stock ohne Fahrstuhl ein Etagenzuschlag berechnet. [lieferung-und-montage.md]",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 108,
+      "antworttext": "Ja. Lieferungen bis in die dritte Etage sind im Preis enthalten. Ab der vierten Etage ohne nutzbaren Aufzug berechnen wir 25 Euro je weiterer Etage. Wenn kein nutzbarer Aufzug vorhanden ist, gilt ein Aufzug als nutzbar, wenn das groesste Einzelteil hineinpasst. [lieferung-und-montage.md]"
     },
     {
       "id": "nord-07",
       "kategorie": "cross_lingual_umgekehrt",
       "frage": "how long is the delivery time slot",
       "erwartete_quelle": "lieferung-und-montage.md",
+      "erwartete_textstelle": "Terminfenster von vier Stunden",
       "erwartet_eskalation": false,
       "rang": 2,
       "in_top_k": true,
+      "rang_chunk": 2,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.9283,
         0.913,
@@ -331,21 +396,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 12,
-      "latenz_generierung_ms": 812,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 14,
+      "latenz_generierung_ms": 928,
       "prompt_tokens": 1289,
-      "completion_tokens": 41,
-      "antworttext": "Sie erhalten ein Terminfenster von vier Stunden.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 54,
+      "antworttext": "Sie erhalten ein Terminfenster von vier Stunden. [Quelle: lieferung-und-montage.md]"
     },
     {
       "id": "nord-08",
       "kategorie": "cross_lingual_umgekehrt",
       "frage": "can i still change the measurements after i approved the drawing",
       "erwartete_quelle": "massanfertigung-und-lieferzeiten.md",
+      "erwartete_textstelle": "nicht mehr moeglich",
       "erwartet_eskalation": false,
       "rang": 3,
       "in_top_k": true,
+      "rang_chunk": 3,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.8936,
         0.8932,
@@ -363,21 +431,24 @@
       "tor": null,
       "grund": null,
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 14,
-      "latenz_generierung_ms": 928,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 20,
+      "latenz_generierung_ms": 1090,
       "prompt_tokens": 1240,
-      "completion_tokens": 70,
-      "antworttext": "Nein. Nach der schriftlichen Freigabe sind Aenderungen an Massen, Material oder Oberflaeche nicht mehr moeglich. Der Zuschnitt erfolgt unmittelbar danach.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 75,
+      "antworttext": "Nein. Nach der schriftlichen Freigabe sind Aenderungen an Massen, Material oder Oberflaeche nicht mehr moeglich. [massanfertigung-und-lieferzeiten.md]"
     },
     {
       "id": "nord-09",
       "kategorie": "nicht_abgedeckt",
       "frage": "Bauen Ihre Monteure auch Moebel auf, die ich woanders gekauft habe?",
       "erwartete_quelle": null,
+      "erwartete_textstelle": null,
       "erwartet_eskalation": true,
       "rang": null,
       "in_top_k": false,
+      "rang_chunk": null,
+      "antwort_im_kontext": null,
       "top_k_scores": [
         0.9358,
         0.928,
@@ -395,21 +466,24 @@
       "tor": "groundedness",
       "grund": "not_grounded",
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 14,
-      "latenz_generierung_ms": 696,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 942,
       "prompt_tokens": 1419,
       "completion_tokens": 31,
-      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.",
-      "abweichungsklasse": "keine_abweichung"
+      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen."
     },
     {
       "id": "nord-10",
       "kategorie": "nicht_abgedeckt",
       "frage": "Nehmen Sie bei der Lieferung meine alten Moebel mit?",
       "erwartete_quelle": null,
+      "erwartete_textstelle": null,
       "erwartet_eskalation": true,
       "rang": null,
       "in_top_k": false,
+      "rang_chunk": null,
+      "antwort_im_kontext": null,
       "top_k_scores": [
         0.935,
         0.9285,
@@ -427,21 +501,24 @@
       "tor": "groundedness",
       "grund": "not_grounded",
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 22,
-      "latenz_generierung_ms": 779,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 806,
       "prompt_tokens": 1467,
-      "completion_tokens": 37,
-      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 31,
+      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen."
     },
     {
       "id": "nord-11",
       "kategorie": "nicht_abgedeckt",
       "frage": "Was kostet es, wenn die Monteure die Wandbefestigung in Beton doch uebernehmen?",
       "erwartete_quelle": null,
+      "erwartete_textstelle": null,
       "erwartet_eskalation": true,
       "rang": null,
       "in_top_k": false,
+      "rang_chunk": null,
+      "antwort_im_kontext": null,
       "top_k_scores": [
         0.9237,
         0.9226,
@@ -459,21 +536,24 @@
       "tor": "groundedness",
       "grund": "not_grounded",
       "eskalation_wie_erwartet": true,
+      "abweichungsklasse": "keine_abweichung",
       "latenz_retrieval_ms": 17,
-      "latenz_generierung_ms": 704,
+      "latenz_generierung_ms": 1153,
       "prompt_tokens": 1337,
-      "completion_tokens": 37,
-      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 39,
+      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen."
     },
     {
       "id": "nord-12",
       "kategorie": "nicht_abgedeckt",
       "frage": "Kann ich eine Massanfertigung in Raten bezahlen?",
       "erwartete_quelle": null,
+      "erwartete_textstelle": null,
       "erwartet_eskalation": true,
       "rang": null,
       "in_top_k": false,
+      "rang_chunk": null,
+      "antwort_im_kontext": null,
       "top_k_scores": [
         0.9311,
         0.9289,
@@ -491,21 +571,24 @@
       "tor": "groundedness",
       "grund": "not_grounded",
       "eskalation_wie_erwartet": true,
-      "latenz_retrieval_ms": 12,
-      "latenz_generierung_ms": 931,
+      "abweichungsklasse": "keine_abweichung",
+      "latenz_retrieval_ms": 16,
+      "latenz_generierung_ms": 763,
       "prompt_tokens": 1370,
-      "completion_tokens": 33,
-      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.",
-      "abweichungsklasse": "keine_abweichung"
+      "completion_tokens": 39,
+      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen."
     },
     {
       "id": "nord-13",
       "kategorie": "fremder_mandant",
       "frage": "brauche ich eine rma nummer fuer die ruecksendung",
       "erwartete_quelle": "reklamation-und-transportschaeden.md",
+      "erwartete_textstelle": "Auftragsnummer aus der Auftragsbestaetigung",
       "erwartet_eskalation": false,
       "rang": 2,
       "in_top_k": true,
+      "rang_chunk": 2,
+      "antwort_im_kontext": true,
       "top_k_scores": [
         0.9174,
         0.9162,
@@ -523,21 +606,24 @@
       "tor": "groundedness",
       "grund": "not_grounded",
       "eskalation_wie_erwartet": false,
-      "latenz_retrieval_ms": 12,
-      "latenz_generierung_ms": 1244,
+      "abweichungsklasse": "antwort_lag_im_kontext_trotzdem_eskaliert",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 747,
       "prompt_tokens": 1411,
       "completion_tokens": 28,
-      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.",
-      "abweichungsklasse": "unbestimmt_keine_textstelle_im_goldsatz"
+      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen."
     },
     {
       "id": "nord-14",
       "kategorie": "fremder_mandant",
       "frage": "kann ich auf rechnung kaufen mit 14 tagen zahlungsziel",
       "erwartete_quelle": "massanfertigung-und-lieferzeiten.md",
+      "erwartete_textstelle": "Anzahlung von 40 Prozent",
       "erwartet_eskalation": false,
       "rang": 2,
       "in_top_k": true,
+      "rang_chunk": 11,
+      "antwort_im_kontext": false,
       "top_k_scores": [
         0.9219,
         0.9164,
@@ -555,12 +641,12 @@
       "tor": "groundedness",
       "grund": "not_grounded",
       "eskalation_wie_erwartet": false,
-      "latenz_retrieval_ms": 14,
-      "latenz_generierung_ms": 780,
+      "abweichungsklasse": "antwort_lag_nicht_im_kontext",
+      "latenz_retrieval_ms": 15,
+      "latenz_generierung_ms": 793,
       "prompt_tokens": 1248,
       "completion_tokens": 28,
-      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen.",
-      "abweichungsklasse": "unbestimmt_keine_textstelle_im_goldsatz"
+      "antworttext": "Das steht so nicht in den Unterlagen von Nordwind. Schreiben Sie bitte an hallo@nordwind.example, dann klärt das jemand persönlich mit Ihnen."
     }
   ]
 }

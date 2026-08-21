@@ -16,7 +16,10 @@
     "eskalationsstrategie": "degenerate_only",
     "retrieval_score_threshold": null,
     "chunks_im_index": 20,
-    "preise_hinterlegt": false
+    "preise_hinterlegt": false,
+    "metrik": "datei_und_chunk",
+    "metrik_bedeutung": "rang = Rang der Quelldatei, rang_chunk = Rang des Chunks mit der erwarteten Textstelle. hit_rate_at_k zaehlt Dateitreffer, antwort_im_kontext_rate zaehlt Chunktreffer.",
+    "metrik_nachgetragen": "2026-08-19, aus dem Vorhandensein des Feldes rang_chunk abgeleitet. Die Messwerte selbst sind unveraendert."
   },
   "aggregiert_je_kategorie": {
     "cross_lingual_umgekehrt": {
@@ -172,7 +175,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-02",
@@ -206,7 +210,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-03",
@@ -240,7 +245,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-04",
@@ -274,7 +280,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-05",
@@ -308,7 +315,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-06",
@@ -342,7 +350,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-07",
@@ -376,7 +385,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-08",
@@ -410,7 +420,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-09",
@@ -444,7 +455,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-10",
@@ -478,7 +490,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-11",
@@ -512,7 +525,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-12",
@@ -546,7 +560,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-13",
@@ -580,7 +595,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     },
     {
       "id": "nord-14",
@@ -614,7 +630,8 @@
       "latenz_generierung_ms": null,
       "prompt_tokens": null,
       "completion_tokens": null,
-      "antworttext": null
+      "antworttext": null,
+      "abweichungsklasse": "nicht_bewertbar_ohne_llm"
     }
   ]
 }

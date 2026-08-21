@@ -16,7 +16,10 @@
     "eskalationsstrategie": "degenerate_only",
     "retrieval_score_threshold": null,
     "chunks_im_index": 25,
-    "preise_hinterlegt": false
+    "preise_hinterlegt": false,
+    "metrik": "nur_datei",
+    "metrik_bedeutung": "rang = Rang der QUELLDATEI. Der Rang des Chunks mit der Antwort wurde in diesem Lauf NICHT gemessen. hit_rate_at_k zaehlt Dateitreffer und ist mit antwort_im_kontext_rate aus spaeteren Laeufen NICHT vergleichbar.",
+    "metrik_nachgetragen": "2026-08-19, aus dem Vorhandensein des Feldes rang_chunk abgeleitet. Die Messwerte selbst sind unveraendert."
   },
   "aggregiert_je_kategorie": {
     "cross_lingual": {
@@ -144,7 +147,8 @@
       "latenz_generierung_ms": 2350,
       "prompt_tokens": 1786,
       "completion_tokens": 50,
-      "antworttext": "Eine RMA-Nummer ist 21 Kalendertage gueltig."
+      "antworttext": "Eine RMA-Nummer ist 21 Kalendertage gueltig.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-02",
@@ -179,7 +183,8 @@
       "latenz_generierung_ms": 1240,
       "prompt_tokens": 1775,
       "completion_tokens": 53,
-      "antworttext": "Ab einem Netto-Bestellwert von 250 Euro liefern wir innerhalb des Inlands versandkostenfrei."
+      "antworttext": "Ab einem Netto-Bestellwert von 250 Euro liefern wir innerhalb des Inlands versandkostenfrei.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-03",
@@ -214,7 +219,8 @@
       "latenz_generierung_ms": 2178,
       "prompt_tokens": 1760,
       "completion_tokens": 61,
-      "antworttext": "Ab 120.000 Euro Jahresumsatz gilt ein Rabatt von 6 Prozent auf Listenpreise. [Quelle: grosskundenkonditionen.md]"
+      "antworttext": "Ab 120.000 Euro Jahresumsatz gilt ein Rabatt von 6 Prozent auf Listenpreise. [Quelle: grosskundenkonditionen.md]",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-04",
@@ -249,7 +255,8 @@
       "latenz_generierung_ms": 1013,
       "prompt_tokens": 1811,
       "completion_tokens": 119,
-      "antworttext": "Bleibt eine Sendung laenger als sieben Werktage ohne Statusaenderung, gilt sie als verschollen. Melden Sie sich in diesem Fall bei unserem Support, damit wir eine Nachforschung einleiten koennen. Die Nachforschung dauert in der Regel fuenf bis zehn Werktage. Bestaetigt der Versanddienstleister den Verlust, liefern wir kostenfrei nach oder schreiben den Rechnungsbetrag gut."
+      "antworttext": "Bleibt eine Sendung laenger als sieben Werktage ohne Statusaenderung, gilt sie als verschollen. Melden Sie sich in diesem Fall bei unserem Support, damit wir eine Nachforschung einleiten koennen. Die Nachforschung dauert in der Regel fuenf bis zehn Werktage. Bestaetigt der Versanddienstleister den Verlust, liefern wir kostenfrei nach oder schreiben den Rechnungsbetrag gut.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-05",
@@ -284,7 +291,8 @@
       "latenz_generierung_ms": 2283,
       "prompt_tokens": 1705,
       "completion_tokens": 92,
-      "antworttext": "Bestandskunden können auf Rechnung kaufen; das Zahlungsziel beträgt 14 Kalendertage netto ab Rechnungsdatum. Bestellungen, die das Limit überschreiten, werden nicht abgelehnt, sondern auf Vorkasse umgestellt. [zahlungsarten-und-rechnungskauf.md]"
+      "antworttext": "Bestandskunden können auf Rechnung kaufen; das Zahlungsziel beträgt 14 Kalendertage netto ab Rechnungsdatum. Bestellungen, die das Limit überschreiten, werden nicht abgelehnt, sondern auf Vorkasse umgestellt. [zahlungsarten-und-rechnungskauf.md]",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-06",
@@ -319,7 +327,8 @@
       "latenz_generierung_ms": 1123,
       "prompt_tokens": 1751,
       "completion_tokens": 28,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "unbestimmt_keine_textstelle_im_goldsatz"
     },
     {
       "id": "acme-07",
@@ -354,7 +363,8 @@
       "latenz_generierung_ms": 929,
       "prompt_tokens": 1750,
       "completion_tokens": 79,
-      "antworttext": "Die Fernsitzung dauert bis zu 90 Minuten. Voraussetzung ist eine ausgehende Verbindung ueber Port 443 und eine Person vor Ort, die die Baugruppe stromlos schalten und wieder einschalten kann. [technischer-support.md]"
+      "antworttext": "Die Fernsitzung dauert bis zu 90 Minuten. Voraussetzung ist eine ausgehende Verbindung ueber Port 443 und eine Person vor Ort, die die Baugruppe stromlos schalten und wieder einschalten kann. [technischer-support.md]",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-08",
@@ -389,7 +399,8 @@
       "latenz_generierung_ms": 776,
       "prompt_tokens": 1753,
       "completion_tokens": 38,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "unbestimmt_keine_textstelle_im_goldsatz"
     },
     {
       "id": "acme-09",
@@ -424,7 +435,8 @@
       "latenz_generierung_ms": 696,
       "prompt_tokens": 1801,
       "completion_tokens": 31,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-10",
@@ -459,7 +471,8 @@
       "latenz_generierung_ms": 1042,
       "prompt_tokens": 1784,
       "completion_tokens": 33,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-11",
@@ -494,7 +507,8 @@
       "latenz_generierung_ms": 875,
       "prompt_tokens": 1702,
       "completion_tokens": 31,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-12",
@@ -529,7 +543,8 @@
       "latenz_generierung_ms": 931,
       "prompt_tokens": 1729,
       "completion_tokens": 33,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "keine_abweichung"
     },
     {
       "id": "acme-13",
@@ -564,7 +579,8 @@
       "latenz_generierung_ms": 924,
       "prompt_tokens": 1790,
       "completion_tokens": 31,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "unbestimmt_keine_textstelle_im_goldsatz"
     },
     {
       "id": "acme-14",
@@ -599,7 +615,8 @@
       "latenz_generierung_ms": 931,
       "prompt_tokens": 1811,
       "completion_tokens": 33,
-      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen."
+      "antworttext": "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. Bitte wenden Sie sich an support@acme.example - dort kann Ihnen jemand direkt weiterhelfen.",
+      "abweichungsklasse": "unbestimmt_keine_textstelle_im_goldsatz"
     }
   ]
 }

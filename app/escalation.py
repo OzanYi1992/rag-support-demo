@@ -64,6 +64,17 @@ class DegenerateOnly:
 
     **Dies ist kein Schwellwert und soll keiner sein.**
 
+    STRUKTURELL INERT: Diese Strategie greift auf dem regulaeren Weg praktisch
+    nie, weil eine leere Trefferliste dort unerreichbar ist - ein vorhandener
+    Index liefert immer Treffer, auch schlechte. Das ist der gewuenschte
+    Zustand, nicht ein Fehler: Mit praktisch abgeschaltetem Retrieval-Tor
+    misst man zum ersten Mal, wie oft das Groundedness-Tor ALLEIN eskaliert.
+    Ein von Anfang an kalibriertes Retrieval-Tor haette diese Frage fuer immer
+    verdeckt, weil es zuerst gegriffen haette.
+
+    Wer in einer Auswertung sieht, dass das Retrieval-Tor nie greift, darf
+    daraus NICHT schliessen, dass es funktioniert.
+
     Vor Phase 5 gibt es fuer keine der kalibrierten Strategien einen belastbaren
     Wert. Eine Zahl aus drei Fragen auf einem Miniaturkorpus waere keine Messung,
     sondern eine Anpassung an n=3 - und im ADR saehe sie aus wie ein belegter
@@ -94,6 +105,15 @@ class DegenerateOnly:
 
 class AbsoluteThreshold:
     """Bester Score unter dem Schwellwert -> eskalieren.
+
+    LAEUFT IN DER VOREINSTELLUNG NICHT. Das ist Absicht und keine
+    Unfertigkeit - siehe ADR-018. Voreinstellung ist DegenerateOnly.
+
+    Wer diese Strategie aktiviert, aendert das Messverfahren: Ab dann greift
+    das Retrieval-Tor, und alle Zahlen zur Frage, wie oft das Groundedness-Tor
+    ALLEIN eskaliert, sind hinfaellig. Der Goldsatz ist dann neu zu fahren
+    (eval/run.py), sonst werden Ergebnisse aus zwei verschiedenen Verfahren
+    nebeneinandergestellt.
 
     Die urspruengliche Annahme aus ADR-003. Nicht Voreinstellung, bis Phase 5
     gemessen hat: Auf einer Skala, deren Werte sich um drei Hundertstel draengen,
@@ -129,6 +149,15 @@ class AbsoluteThreshold:
 
 class RelativeMargin:
     """Abstand zwischen bestem Treffer und dem Median der Trefferliste.
+
+    LAEUFT IN DER VOREINSTELLUNG NICHT. Das ist Absicht und keine
+    Unfertigkeit - siehe ADR-018. Voreinstellung ist DegenerateOnly.
+
+    Wer diese Strategie aktiviert, aendert das Messverfahren: Ab dann greift
+    das Retrieval-Tor, und alle Zahlen zur Frage, wie oft das Groundedness-Tor
+    ALLEIN eskaliert, sind hinfaellig. Der Goldsatz ist dann neu zu fahren
+    (eval/run.py), sonst werden Ergebnisse aus zwei verschiedenen Verfahren
+    nebeneinandergestellt.
 
     Ein deutlicher Vorsprung des besten Treffers spricht fuer einen echten Fund,
     ein flaches Feld fuer gleichmaessiges Rauschen. Das ist gegen die enge
