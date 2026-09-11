@@ -1,0 +1,37 @@
+# Was in den Build-Kontext gehoert -- als Positivliste.
+#
+# Erst alles ausschliessen, dann die Pfade wieder aufnehmen, die der Bau
+# braucht. Letzter Treffer gewinnt.
+#
+# Warum keine Ausschlussliste: Eine solche muesste jedes Verzeichnis, das
+# draussen bleiben soll, beim Namen nennen. Diese Datei liegt im
+# oeffentlichen Repo -- die Namen waeren damit selbst veroeffentlicht. Und
+# jedes kuenftige Verzeichnis waere drin, bis es jemand nachtraegt. Eine
+# Positivliste dreht beides um: Unbekanntes bleibt draussen, und was
+# hereindarf, steht als Zusage da statt als Aufzaehlung von Gegnern.
+
+# 1. Alles ausschliessen.
+*
+
+# 2. Die Pfade wieder aufnehmen, die der Bau braucht.
+!pyproject.toml
+!app
+!static
+!scripts
+
+# 3. tenants/ vollstaendig, und das ist Absicht.
+#    Das Build-Gate berechnet aus dem vollen Verzeichnis, welche Mandanten ins
+#    Image duerfen, und vergleicht danach gegen das, was tatsaechlich kopiert
+#    wurde. Waeren die uebrigen hier ausgeschlossen, koennte das Gate sie nicht
+#    sehen und meldete Erfolg -- eine Pruefung, deren Negativergebnis von einem
+#    Werkzeugfehler nicht unterscheidbar ist, ist keine Pruefung.
+#    Ins Image kopiert wird trotzdem nur die berechnete Liste, nie das
+#    Verzeichnis am Stueck.
+!tenants
+
+# 4. Ausnahmen von den Ausnahmen: Was auch unterhalb der aufgenommenen Pfade
+#    nichts im Kontext verloren hat.
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache

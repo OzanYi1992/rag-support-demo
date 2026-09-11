@@ -65,9 +65,9 @@ class TenantConfig(BaseModel):
 
     # ADR-014: Nur Mandanten mit erfundenen Inhalten duerfen in ein oeffentliches
     # Container-Image. Default False, weil ein vergessenes Flag in die sichere
-    # Richtung wirken muss. Ausgewertet wird es im Docker-Build in Phase 7 - ueber
-    # tenants_for_public_image(), damit die Pruefung nicht im Dockerfile
-    # nachgebaut wird.
+    # Richtung wirken muss. Der Docker-Build wertet es ueber
+    # tenants_for_public_image() aus, damit die Pruefung nicht im Dockerfile
+    # nachgebaut wird - siehe dort.
     public_image_allowed: bool = False
 
 
@@ -202,10 +202,22 @@ def resolve_token(url_token: str, tenants_dir: Path | None = None) -> TenantConf
 def tenants_for_public_image(tenants_dir: Path | None = None) -> list[str]:
     """Slugs der Mandanten, die in ein oeffentliches Container-Image duerfen.
 
-    Nach ADR-014 nur Mandanten mit erfundenen Inhalten. Der Docker-Build in
-    Phase 7 wertet diese Liste aus und bricht ab, wenn ein Mandant ohne Flag in
-    ein oeffentliches Ziel geraet. Die Pruefung gehoert hierher und nicht ins
-    Dockerfile, damit sie testbar ist.
+    Nach ADR-014 nur Mandanten mit erfundenen Inhalten.
+
+    Der Docker-Build wertet diese Liste aus: Er berechnet sie aus dem vollen
+    Build-Kontext, legt sie als Datei im Image ab und vergleicht danach, WAS
+    TATSAECHLICH IM IMAGE LIEGT, gegen sie - in beide Richtungen. Ein kopierter
+    Mandant ohne Freigabe bricht den Bau ab; ein freigegebener Mandant, der
+    nicht im Image liegt, ebenfalls. Die zweite Richtung faengt den Fall, dass
+    das Wurzelverzeichnis ins Leere zeigt.
+
+    Geprueft wird bewusst nicht der Build-Kontext selbst. Ein Mandant mit echten
+    Inhalten darf lokal liegen, ohne den Demo-Bau unmoeglich zu machen - er darf
+    nur nicht ins Image geraten.
+
+    Die Pruefung liegt in scripts/pruefe_public_image.py und nicht im Dockerfile,
+    damit sie testbar ist und im Betrieb gegen den laufenden Container laufen
+    kann.
     """
     root = _resolve_tenants_dir(tenants_dir)
     return sorted(

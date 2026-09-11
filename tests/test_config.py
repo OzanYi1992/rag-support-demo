@@ -25,6 +25,25 @@ PFLICHT = {
 }
 
 
+def test_embedding_device_nimmt_nur_cpu() -> None:
+    """torch ist als CPU-Wheel gepinnt und enthaelt keinen CUDA-Code.
+
+    Ohne diese Pruefung scheitert ein falsches Geraet erst beim Laden des
+    Modells - im Container also lange nach dem Start, beim ersten Embedding.
+    """
+    with pytest.raises(ValueError, match="EMBEDDING_DEVICE"):
+        Settings(**PFLICHT, embedding_device="cuda")
+
+
+def test_embedding_device_cpu_bleibt_zulaessig() -> None:
+    """Gegenprobe: Der zulaessige Wert muss durchkommen.
+
+    Ohne sie waere ein Validator, der ALLES ablehnt, von einem, der das
+    Richtige ablehnt, nicht zu unterscheiden.
+    """
+    assert Settings(**PFLICHT, embedding_device="cpu").embedding_device == "cpu"
+
+
 def test_projektwurzel_kommt_aus_dem_dateiort() -> None:
     """Nicht aus os.getcwd(), sonst loeste die Behebung das Problem mit dem
     Mechanismus auf, der es verursacht."""

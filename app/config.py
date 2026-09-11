@@ -91,6 +91,16 @@ class Settings(BaseSettings):
     embedding_model: str = "intfloat/multilingual-e5-small"
     embedding_dimension: int = 384
 
+    # Nur "cpu" ist zulaessig, solange torch als CPU-Wheel gepinnt ist. Das ist
+    # keine Vorsicht, sondern die Umsetzung der Bezugsquelle: Das gepinnte Wheel
+    # enthaelt keinen CUDA-Code. Ein "cuda" hier ergaebe keinen schnelleren Lauf,
+    # sondern einen Absturz beim Laden des Modells - im Container erst beim
+    # ersten Embedding, also lange nach dem Start.
+    #
+    # Durchgesetzt im Validator und nicht als Literal, weil der Fehlertext den
+    # Zusammenhang zum Wheel nennen muss. Ein "Input should be 'cpu'" erklaert
+    # ihn nicht, und wer die Variable setzt, hat einen Grund, den er dann nicht
+    # beantwortet bekommt.
     embedding_device: str = "cpu"
     embedding_batch_size: int = 32
 
@@ -182,6 +192,22 @@ class Settings(BaseSettings):
         if not isinstance(data, dict):
             return data
         return {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip() == "")}
+
+    @field_validator("embedding_device")
+    @classmethod
+    def _nur_cpu_solange_das_cpu_wheel_gepinnt_ist(cls, wert: str) -> str:
+        """Laesst ausser "cpu" nichts zu.
+
+        Faellt der Pin auf das CPU-Wheel weg, faellt auch diese Regel - dann ist
+        sie hier zu loesen und nicht zu umgehen.
+        """
+        if wert != "cpu":
+            raise ValueError(
+                f"EMBEDDING_DEVICE ist {wert!r}, zulaessig ist nur 'cpu'. "
+                f"torch ist als CPU-Wheel gepinnt und enthaelt keinen CUDA-Code; "
+                f"ein anderes Geraet scheitert erst beim Laden des Modells."
+            )
+        return wert
 
     @field_validator("tenants_dir", "index_dir")
     @classmethod
