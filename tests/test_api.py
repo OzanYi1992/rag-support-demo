@@ -363,3 +363,115 @@ def test_eskalationstext_ist_mandantenspezifisch(
 
     assert acme["text"] == ACME_ESKALATION
     assert nordwind["text"] != ACME_ESKALATION
+
+
+# --- Vorwaermen des Embedders beim Start (ADR-023) --------------------------
+#
+# Geprueft wird, WANN der Embedder entsteht, nicht wie oft. Wie oft, ist
+# ADR-020 und steht in tests/test_embeddings_geteilt.py - hier wird es nur
+# nicht verletzt.
+#
+# Der Lebenszyklus laeuft nur, wenn TestClient als Kontextmanager benutzt wird.
+# Die uebrigen Tests dieser Datei tun das bewusst nicht: Sie speisen einen
+# Ersatz ein und brauchen den Start nicht.
+
+
+class _ZaehlendeFabrik:
+    """Ersatz fuer get_embeddings, der mitzaehlt statt ein Modell zu laden."""
+
+    def __init__(self, embeddings: E5Embeddings, fehler: Exception | None = None) -> None:
+        self._embeddings = embeddings
+        self._fehler = fehler
+        self.aufrufe = 0
+
+    def __call__(self, settings: Settings) -> E5Embeddings:
+        self.aufrufe += 1
+        if self._fehler is not None:
+            raise self._fehler
+        return self._embeddings
+
+
+def test_embedder_entsteht_beim_start_ohne_anfrage(
+    umgebung: tuple[Settings, E5Embeddings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Der Kern von ADR-023.
+
+    Ohne Vorwaermen meldet /health rund sechs Sekunden lang Gesundheit, bevor
+    eine Frage beantwortet werden kann. Nach dem Start muss der Embedder da
+    sein, ohne dass je eine Anfrage lief.
+    """
+    settings, embeddings = umgebung
+    fabrik = _ZaehlendeFabrik(embeddings)
+    monkeypatch.setattr("app.main.get_embeddings", fabrik)
+
+    app = create_app(settings, llm=FakeLlm(parsed=gute_antwort()))
+    assert app.state.embeddings is None, "vor dem Start darf nichts da sein"
+    assert fabrik.aufrufe == 0
+
+    with TestClient(app):
+        assert fabrik.aufrufe == 1
+        assert app.state.embeddings is embeddings
+
+
+def test_eingespeister_embedder_wird_nicht_ueberschrieben(
+    umgebung: tuple[Settings, E5Embeddings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gegenprobe, und zugleich der Schutz der uebrigen Testsuite.
+
+    Wuerde der Start einen eingespeisten Ersatz ueberschreiben, zoegen alle
+    Tests, die eine Attrappe einspeisen, beim Start das echte Modell - und
+    conventions.md verbietet Netzzugriff in Unit-Tests.
+    """
+    settings, embeddings = umgebung
+    fabrik = _ZaehlendeFabrik(E5Embeddings(FakeBackend(), expected_dimension=FAKE_DIMENSION))
+    monkeypatch.setattr("app.main.get_embeddings", fabrik)
+
+    app = create_app(settings, llm=FakeLlm(parsed=gute_antwort()), embeddings=embeddings)
+
+    with TestClient(app):
+        assert fabrik.aufrufe == 0, "der Start darf die Fabrik gar nicht erst rufen"
+        assert app.state.embeddings is embeddings
+
+
+def test_kein_zweiter_embedder_durch_anfragen(
+    umgebung: tuple[Settings, E5Embeddings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-020 bleibt unangetastet: Das Vorwaermen aendert das WANN, nicht das
+    WIE OFT. Zwei Anfragen nach dem Start duerfen keinen zweiten erzeugen."""
+    settings, embeddings = umgebung
+    fabrik = _ZaehlendeFabrik(embeddings)
+    monkeypatch.setattr("app.main.get_embeddings", fabrik)
+
+    app = create_app(settings, llm=FakeLlm(parsed=gute_antwort()))
+
+    with TestClient(app) as client:
+        for _ in range(2):
+            antwort = client.post(
+                f"/t/{ACME_TOKEN}/chat", json={"question": "Wie lange gilt die RMA-Nummer?"}
+            )
+            assert antwort.status_code == 200
+        assert fabrik.aufrufe == 1
+
+
+def test_fehlschlag_beim_laden_verhindert_den_start(
+    umgebung: tuple[Settings, E5Embeddings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Der zweite Grund aus ADR-023, geprueft statt behauptet.
+
+    Ohne diesen Test waere "scheitert beim Start statt beim Interessenten" eine
+    Absichtserklaerung. Ein kaputter Modellcache muss den Start verhindern -
+    dieselbe Regel wie beim fehlenden Schluessel: laut und sofort.
+    """
+    settings, _ = umgebung
+    fabrik = _ZaehlendeFabrik(
+        E5Embeddings(FakeBackend(), expected_dimension=FAKE_DIMENSION),
+        fehler=RuntimeError("Modellgewichte nicht ladbar"),
+    )
+    monkeypatch.setattr("app.main.get_embeddings", fabrik)
+
+    app = create_app(settings, llm=FakeLlm(parsed=gute_antwort()))
+
+    with pytest.raises(RuntimeError, match="Modellgewichte nicht ladbar"):
+        with TestClient(app):
+            pass
+    assert fabrik.aufrufe == 1

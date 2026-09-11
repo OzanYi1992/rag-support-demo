@@ -31,6 +31,8 @@ import html
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -40,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.embeddings import E5Embeddings
+from app.embeddings import E5Embeddings, get_embeddings
 from app.llm import LlmClient
 from app.rag import Answer, answer
 from app.ratelimit import RateLimiter
@@ -119,11 +121,41 @@ def create_app(
     loest answer() sie selbst aus den Settings auf - die Produktionsvariante.
     """
     aktive_settings = settings or Settings()
+
+    @asynccontextmanager
+    async def lebenszyklus(laufende_app: FastAPI) -> AsyncIterator[None]:
+        """Waermt den Embedder vor, bevor der Port Verkehr annimmt (ADR-023).
+
+        Zwei Gruende, und der zweite wiegt schwerer als der erste:
+
+        1. `/health` wird ehrlich. Ohne Vorwaermen meldet der Endpunkt rund
+           sechs Sekunden lang Gesundheit, bevor eine Frage beantwortet werden
+           kann - der Embedder entstuende erst beim ersten Bedarf. Ein
+           Orchestrator schickt Verkehr, sobald die Bereitschaftspruefung
+           Erfolg meldet, und traefe einen Prozess, der noch laedt.
+
+        2. Ein kaputter oder fehlender Modellcache scheitert jetzt beim START
+           und nicht bei der ersten Anfrage eines Interessenten. Dieselbe
+           Regel, die fuer Secrets gilt: laut und sofort statt spaet und beim
+           Kunden. Der Modellcache ist fuer diese Anwendung genauso eine
+           Startbedingung wie ein Schluessel.
+
+        Es entsteht KEIN zweiter Embedder: `get_embeddings` liefert den
+        prozessweit geteilten (ADR-020). Dieses Vorwaermen aendert das WANN,
+        nicht das WIE OFT. Ein eingespeister wird nicht ueberschrieben -
+        sonst zoegen Tests, die einen Ersatz einspeisen, beim Start das echte
+        Modell, und Unit-Tests duerfen nicht ins Netz.
+        """
+        if laufende_app.state.embeddings is None:
+            laufende_app.state.embeddings = get_embeddings(laufende_app.state.settings)
+        yield
+
     app = FastAPI(
         title="rag-support-demo",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lebenszyklus,
     )
 
     # Der Zaehler haengt an DIESER Anwendung, nicht am Modul. Damit hat jeder
