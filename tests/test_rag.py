@@ -22,7 +22,7 @@ from app.escalation import (
 from app.prompts import GroundedAnswer, build_system_prompt, build_user_prompt
 from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, answer
 from app.search import SearchHit
-from app.tenants import load_tenant
+from app.tenants import TenantConfig, load_tenant
 from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, lege_mandant_an
 
 ACME_TEXT = """# Retouren
@@ -306,6 +306,83 @@ def test_response_language_uebersteuert(umgebung: tuple[Settings, E5Embeddings])
     assert "Sprache der FRAGE" not in system_prompt
     # lang traegt die TATSAECHLICHE Antwortsprache, nicht den Eingabewert.
     assert a.lang == "de"
+
+
+def test_englischer_mandant_bekommt_ein_englisches_regelwerk(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Sprache des Mandanten bestimmt die Sprache der REGELN.
+
+    Ein Prompt aus zwei Sprachen - deutsche Regeln, englischer
+    system_prompt_extra - ist schlechter lesbar, fuer das Modell wie fuer den,
+    der ihn spaeter prueft.
+    """
+    tenant = TenantConfig(
+        slug="demo-englisch",
+        display_name="Northfield Outfitters",
+        language="en",
+        escalation_message="I cannot find that in the documents.",
+        url_token="englisch-token-1234567890",
+    )
+    prompt = build_system_prompt(tenant, None)
+
+    assert "You are a support assistant for Northfield Outfitters." in prompt
+    assert "Answer EXCLUSIVELY from the context provided" in prompt
+    assert "language of the QUESTION" in prompt
+    # Keine deutsche Zeile darf stehenbleiben.
+    assert "AUSSCHLIESSLICH" not in prompt
+    assert "Sprache der FRAGE" not in prompt
+
+
+def test_deutscher_mandant_bleibt_unveraendert(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Gegenprobe. Ohne sie zeigt der Test oben nur, dass irgendetwas anders ist."""
+    settings, _ = umgebung
+    tenant = load_tenant("demo-acme", settings.tenants_dir)
+    prompt = build_system_prompt(tenant, None)
+
+    assert "AUSSCHLIESSLICH aus dem gelieferten Kontext" in prompt
+    assert "Sprache der FRAGE" in prompt
+    assert "You are a support assistant" not in prompt
+
+
+def test_response_language_sticht_auch_bei_einem_englischen_mandanten() -> None:
+    """Mandantensprache und Antwortsprache sind zwei verschiedene Dinge.
+
+    Der englische Mandant bekommt englische Regeln - und darin die Anweisung,
+    auf Deutsch zu antworten. Genau das braucht der Goldsatz, um eine deutsche
+    Frage gegen einen englischen Korpus deterministisch zu pruefen.
+    """
+    tenant = TenantConfig(
+        slug="demo-englisch",
+        display_name="Northfield Outfitters",
+        language="en",
+        escalation_message="I cannot find that in the documents.",
+        url_token="englisch-token-1234567890",
+    )
+    prompt = build_system_prompt(tenant, "de")
+
+    assert "Answer in the language with the code" in prompt
+    assert '"de"' in prompt
+    assert "language of the QUESTION" not in prompt
+
+
+def test_mandantenzusatz_wird_englisch_eingeleitet() -> None:
+    """Auch die Einleitungszeile folgt der Mandantensprache."""
+    tenant = TenantConfig(
+        slug="demo-englisch",
+        display_name="Northfield Outfitters",
+        language="en",
+        system_prompt_extra="Answer briefly and name the delivery window.",
+        escalation_message="I cannot find that in the documents.",
+        url_token="englisch-token-1234567890",
+    )
+    prompt = build_system_prompt(tenant, None)
+
+    assert "Additionally for this tenant:" in prompt
+    assert "Answer briefly and name the delivery window." in prompt
+    assert "Zusaetzlich fuer diesen Mandanten" not in prompt
 
 
 # --- Prompt-Bau ------------------------------------------------------------

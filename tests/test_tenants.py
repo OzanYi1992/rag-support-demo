@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from app.tenants import (
@@ -26,6 +27,8 @@ from app.tenants import (
     resolve_token,
     tenants_for_public_image,
 )
+from app.texts import VERFUEGBARE_SPRACHEN
+from tests.conftest import lege_mandant_an
 
 # --- Die beiden Demo-Mandanten laden ---------------------------------------
 
@@ -37,8 +40,8 @@ def test_load_both_demo_tenants(demo_tenants_dir: Path) -> None:
     assert acme.slug == "demo-acme"
     assert nordwind.slug == "demo-nordwind"
     assert acme.display_name == "ACME Elektronikhandel"
-    assert acme.languages == ["de", "en"]
-    assert nordwind.languages == ["de"]
+    assert acme.language == "de"
+    assert nordwind.language == "de"
     assert acme.retrieval_top_k == 6
     assert nordwind.retrieval_top_k is None
     assert acme.escalation_message.strip()
@@ -146,7 +149,6 @@ def test_url_token_min_length() -> None:
         TenantConfig(
             slug="test-mandant",
             display_name="Test",
-            languages=["de"],
             escalation_message="nichts gefunden",
             url_token=zu_kurz,
         )
@@ -157,6 +159,73 @@ def test_generate_url_token_ist_lang_genug_und_verschieden() -> None:
     b = generate_url_token()
     assert len(a) >= MIN_TOKEN_LENGTH
     assert a != b
+
+
+# --- language ---------------------------------------------------------------
+
+
+def test_language_default_ist_de(tmp_path: Path) -> None:
+    """Fehlt das Feld, bleibt der Mandant deutsch.
+
+    Der Default entscheidet ueber das Verhalten der beiden bestehenden
+    Mandanten. Waere er "en", schaltete ein vergessenes Feld sie um.
+    """
+    slug = "ohne-sprache"
+    tenant_dir = tmp_path / slug
+    tenant_dir.mkdir()
+    (tenant_dir / "tenant.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "display_name": "Ohne Sprache",
+                "escalation_message": "Dazu finde ich nichts.",
+                "url_token": "ohne-sprache-token-1234",
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    assert load_tenant(slug, tmp_path).language == "de"
+
+
+def test_language_en_wird_geladen(tmp_path: Path) -> None:
+    lege_mandant_an(tmp_path, "demo-englisch", "Doc", "englisch-token-1234567890", language="en")
+    assert load_tenant("demo-englisch", tmp_path).language == "en"
+
+
+def test_dritte_sprache_scheitert_beim_laden(tmp_path: Path) -> None:
+    """Eine Sprache ohne Textkatalog wird beim LADEN abgewiesen, nicht spaeter.
+
+    Wuerde sie durchgelassen, liefe die Oberflaeche in einer Sprache und der
+    Mandant in einer anderen - und aufgefallen waere es erst, wenn jemand die
+    Seite aufruft.
+    """
+    lege_mandant_an(tmp_path, "demo-franzoesisch", "Doc", "franz-token-1234567890", language="fr")
+
+    with pytest.raises(ValidationError) as fehler:
+        load_tenant("demo-franzoesisch", tmp_path)
+
+    meldung = str(fehler.value)
+    # Die Meldung muss sagen, WAS fehlt, nicht nur DASS der Wert falsch ist.
+    assert "fr" in meldung
+    assert "app/texts.py" in meldung
+
+
+def test_language_haelt_sich_an_den_textkatalog() -> None:
+    """Schema und Katalog koennen nicht auseinanderlaufen.
+
+    Die erlaubten Werte werden aus dem Katalog abgeleitet und nicht hier
+    zweitgefuehrt. Dieser Test haelt die Ableitung fest: Kaeme eine Sprache
+    hinzu, ohne dass der Katalog sie kennt, faellt es hier auf.
+    """
+    for sprache in VERFUEGBARE_SPRACHEN:
+        mandant = TenantConfig(
+            slug="test-mandant",
+            display_name="Test",
+            language=sprache,
+            escalation_message="nichts gefunden",
+            url_token="test-token-1234567890",
+        )
+        assert mandant.language == sprache
 
 
 # --- public_image_allowed (ADR-014) ----------------------------------------

@@ -8,6 +8,8 @@ erfunden hat. Ein eigenes Feld dafuer trennt die Aussage von der Antwort.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from pydantic import BaseModel, Field
 
 from app.search import SearchHit
@@ -48,7 +50,7 @@ class GroundedAnswer(BaseModel):
     )
 
 
-_BASIS_REGELN = """\
+_BASIS_REGELN_DE = """\
 Du bist ein Support-Assistent fuer {display_name}.
 
 Regeln, die ausnahmslos gelten:
@@ -66,37 +68,110 @@ Regeln, die ausnahmslos gelten:
    der Hoehe nicht beantwortbar.
 """
 
-_SPRACHE_FOLGT_FRAGE = """\
+_BASIS_REGELN_EN = """\
+You are a support assistant for {display_name}.
+
+Rules that apply without exception:
+
+1. Answer EXCLUSIVELY from the context provided. Your own knowledge is not
+   admissible here, even if you are certain of the answer. If a number, a
+   deadline or a condition is not in the context, then for this answer it does
+   not exist.
+2. For every statement, name the source file it comes from.
+3. If you cannot answer the question completely from the context, set
+   answerable to false and leave answer empty. Do not guess. Do not fill gaps.
+   Do not formulate a partial answer that looks complete.
+4. A question the context merely touches on is NOT answerable. Example: if a
+   fee is mentioned but its amount is not stated, the question about the amount
+   is not answerable.
+"""
+
+_SPRACHE_FOLGT_FRAGE_DE = """\
 5. Antworte in der Sprache der FRAGE, unabhaengig davon, in welcher Sprache die
    Quelldokumente verfasst sind. Eine deutsche Frage bekommt eine deutsche
    Antwort, auch wenn der Beleg englisch ist. Trage die verwendete Sprache in
    language ein.
 """
 
-_SPRACHE_VORGEGEBEN = """\
+_SPRACHE_FOLGT_FRAGE_EN = """\
+5. Answer in the language of the QUESTION, regardless of the language the
+   source documents are written in. A German question gets a German answer,
+   even if the evidence is in English. Record the language you used in
+   language.
+"""
+
+_SPRACHE_VORGEGEBEN_DE = """\
 5. Antworte in der Sprache mit dem Kuerzel "{response_language}", unabhaengig von
    der Sprache der Frage und der Quelldokumente. Trage "{response_language}" in
    language ein.
 """
 
+_SPRACHE_VORGEGEBEN_EN = """\
+5. Answer in the language with the code "{response_language}", regardless of the
+   language of the question and of the source documents. Record
+   "{response_language}" in language.
+"""
+
+_ZUSATZ_DE = "\nZusaetzlich fuer diesen Mandanten:\n"
+_ZUSATZ_EN = "\nAdditionally for this tenant:\n"
+
+
+class _Regelwerk(NamedTuple):
+    """Die vier Bausteine des System-Prompts in einer Sprache."""
+
+    basis: str
+    sprache_folgt_frage: str
+    sprache_vorgegeben: str
+    zusatz: str
+
+
+# Das Regelwerk steht hier und nicht im Textkatalog: Es richtet sich an das
+# Modell, nicht an einen Menschen. Die Schluessel sind dieselben wie dort, und
+# ein Test haelt beide Mengen deckungsgleich - eine Sprache mit Oberflaeche aber
+# ohne Regelwerk wuerde sonst erst beim ersten Aufruf auffallen.
+_REGELWERK: dict[str, _Regelwerk] = {
+    "de": _Regelwerk(
+        basis=_BASIS_REGELN_DE,
+        sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_DE,
+        sprache_vorgegeben=_SPRACHE_VORGEGEBEN_DE,
+        zusatz=_ZUSATZ_DE,
+    ),
+    "en": _Regelwerk(
+        basis=_BASIS_REGELN_EN,
+        sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_EN,
+        sprache_vorgegeben=_SPRACHE_VORGEGEBEN_EN,
+        zusatz=_ZUSATZ_EN,
+    ),
+}
+
 
 def build_system_prompt(tenant: TenantConfig, response_language: str | None = None) -> str:
     """Baut den System-Prompt fuer einen Mandanten.
 
-    `response_language` uebersteuert die Sprachregel. Ist es None, gilt Regel 5
-    in der Fassung "Sprache der Frage". Ist es gesetzt, wird in dieser Sprache
-    geantwortet - der Fall, den der Goldsatz in Phase 5 als deterministischen
-    Test braucht.
+    Zwei Sprachen, die nicht dasselbe meinen:
+
+    `tenant.language` bestimmt, in welcher Sprache das REGELWERK formuliert ist.
+    Ein englischer Mandant bekommt englische Regeln - sein `system_prompt_extra`
+    ist ebenfalls englisch, und ein Prompt aus zwei Sprachen ist schlechter
+    lesbar, fuer das Modell wie fuer den, der ihn spaeter prueft.
+
+    `response_language` uebersteuert die ANTWORTSPRACHE. Ist es None, gilt Regel
+    5 in der Fassung "Sprache der Frage" - unveraendert und unabhaengig davon,
+    welche Sprache der Mandant traegt. Ein englischer Mandant antwortet auf eine
+    deutsche Frage also deutsch, solange nichts anderes verlangt wird. Ist es
+    gesetzt, wird in dieser Sprache geantwortet; der Goldsatz braucht das als
+    deterministischen Test.
     """
-    teile = [_BASIS_REGELN.format(display_name=tenant.display_name)]
+    regeln = _REGELWERK[tenant.language]
+    teile = [regeln.basis.format(display_name=tenant.display_name)]
 
     if response_language:
-        teile.append(_SPRACHE_VORGEGEBEN.format(response_language=response_language))
+        teile.append(regeln.sprache_vorgegeben.format(response_language=response_language))
     else:
-        teile.append(_SPRACHE_FOLGT_FRAGE)
+        teile.append(regeln.sprache_folgt_frage)
 
     if tenant.system_prompt_extra.strip():
-        teile.append("\nZusaetzlich fuer diesen Mandanten:\n")
+        teile.append(regeln.zusatz)
         teile.append(tenant.system_prompt_extra.strip())
 
     return "\n".join(teile)

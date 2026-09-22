@@ -9,9 +9,15 @@
 
 display_name: "ACME Elektronikhandel"
 
-languages:
-  - de
-  - en
+# Sprache dieses Mandanten: Oberflaeche, serverseitige Meldungen und die
+# Sprache, in der das Regelwerk des System-Prompts formuliert ist. NICHT die
+# Antwortsprache - die folgt weiterhin der Frage.
+#
+# Stand vorher: eine Liste languages: [de, en]. Sie wurde von keiner Zeile
+# Code gelesen und behauptete fuer diesen Mandanten eine Englischdeckung, die
+# die Messung nicht traegt: Eine englische Frage gegen diesen deutschen Korpus
+# findet die richtigen Stellen nicht.
+language: de
 
 system_prompt_extra: >
   ACME beliefert Gewerbekunden mit Elektronikbauteilen. Antworte sachlich und

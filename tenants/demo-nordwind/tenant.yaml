@@ -6,8 +6,9 @@
 
 display_name: "Nordwind Möbelversand"
 
-languages:
-  - de
+# Sprache dieses Mandanten: Oberflaeche, serverseitige Meldungen und die
+# Sprache des Regelwerks im System-Prompt. NICHT die Antwortsprache.
+language: de
 
 system_prompt_extra: >
   Nordwind versendet Wohnmoebel an Privatkunden. Antworte freundlich und in

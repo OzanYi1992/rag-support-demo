@@ -102,15 +102,20 @@ def lege_mandant_an(
     text: str,
     token: str,
     escalation_message: str = "Dazu finde ich in den Unterlagen nichts.",
+    language: str = "de",
 ) -> None:
-    """Legt einen Mandanten mit einem Dokument an. Fuer Tests gegen tmp_path."""
+    """Legt einen Mandanten mit einem Dokument an. Fuer Tests gegen tmp_path.
+
+    `language` ist der Schalter fuer Oberflaechensprache und Prompt-Regelwerk.
+    Default "de", damit bestehende Aufrufe unveraendert bleiben.
+    """
     tenant_dir = root / slug
     (tenant_dir / "docs").mkdir(parents=True)
     (tenant_dir / "tenant.yaml").write_text(
         yaml.safe_dump(
             {
                 "display_name": slug,
-                "languages": ["de"],
+                "language": language,
                 "escalation_message": escalation_message,
                 "url_token": token,
                 "public_image_allowed": True,
@@ -143,7 +148,7 @@ def tmp_tenants_dir(tmp_path: Path) -> Path:
         yaml.safe_dump(
             {
                 "display_name": "Ohne Flag",
-                "languages": ["de"],
+                "language": "de",
                 "escalation_message": "Dazu finde ich nichts.",
                 "url_token": "ohne-flag-token-1234567890",
             },
@@ -165,7 +170,7 @@ def tmp_tenants_dir_mit_doppeltem_token(tmp_path: Path) -> Path:
             yaml.safe_dump(
                 {
                     "display_name": slug,
-                    "languages": ["de"],
+                    "language": "de",
                     "escalation_message": "Dazu finde ich nichts.",
                     "url_token": token,
                 },

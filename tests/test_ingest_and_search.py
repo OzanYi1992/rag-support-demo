@@ -44,7 +44,7 @@ def _lege_mandant_an(root: Path, slug: str, text: str, token: str) -> None:
         yaml.safe_dump(
             {
                 "display_name": slug,
-                "languages": ["de"],
+                "language": "de",
                 "escalation_message": "Dazu finde ich nichts.",
                 "url_token": token,
                 "public_image_allowed": True,

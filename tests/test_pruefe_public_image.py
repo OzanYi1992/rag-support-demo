@@ -34,7 +34,7 @@ def _mandant(root: Path, slug: str, *, freigegeben: bool) -> None:
     (verzeichnis / "docs").mkdir(parents=True)
     daten: dict[str, object] = {
         "display_name": slug,
-        "languages": ["de"],
+        "language": "de",
         "escalation_message": "Dazu finde ich nichts.",
         "url_token": f"{slug}-token-1234567890",
     }

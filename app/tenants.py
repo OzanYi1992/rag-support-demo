@@ -14,9 +14,10 @@ import secrets
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
+from app.texts import VERFUEGBARE_SPRACHEN
 
 # Kein Punkt, kein Schraegstrich, keine Grossbuchstaben. Damit ist "../" nicht
 # darstellbar - Traversal scheitert bereits an der Form, nicht erst am Pfad.
@@ -53,7 +54,18 @@ class TenantConfig(BaseModel):
 
     slug: str
     display_name: str
-    languages: list[str]
+
+    # Sprache dieses Mandanten: Oberflaeche, serverseitige Meldungen und die
+    # Sprache, in der das Regelwerk des System-Prompts formuliert ist.
+    #
+    # NICHT die Antwortsprache. Die folgt weiterhin der Frage, sofern die
+    # Anfrage nichts anderes verlangt - ein englischer Mandant, der auf eine
+    # deutsche Frage deutsch antwortet, ist gewollt.
+    #
+    # Default "de", weil die beiden bestehenden Mandanten deutsch sind und ein
+    # fehlendes Feld ihr Verhalten nicht aendern darf.
+    language: str = "de"
+
     system_prompt_extra: str = ""
     escalation_message: str
     model_override: str | None = None
@@ -69,6 +81,29 @@ class TenantConfig(BaseModel):
     # tenants_for_public_image() aus, damit die Pruefung nicht im Dockerfile
     # nachgebaut wird - siehe dort.
     public_image_allowed: bool = False
+
+    @field_validator("language")
+    @classmethod
+    def _nur_sprachen_mit_textkatalog(cls, wert: str) -> str:
+        """Laesst nur Sprachen zu, fuer die es einen Textkatalog gibt.
+
+        Geprueft wird gegen den Katalog selbst und nicht gegen eine hier
+        wiederholte Aufzaehlung. Damit kann das Schema nicht behaupten, was die
+        Texte nicht hergeben.
+
+        Bewusst ein Validator und kein Literal in der Annotation: Die Meldung
+        muss sagen, WAS fehlt. Ein "Input should be 'de' or 'en'" nennt die
+        Ursache nicht, und wer den Wert gesetzt hat, hatte einen Grund.
+        """
+        if wert not in VERFUEGBARE_SPRACHEN:
+            erlaubt = ", ".join(repr(sprache) for sprache in VERFUEGBARE_SPRACHEN)
+            raise ValueError(
+                f"language ist {wert!r}, es gibt aber nur Textkataloge fuer {erlaubt}. "
+                f"Eine weitere Sprache braucht zuerst einen Eintrag in app/texts.py - "
+                f"sonst liefe die Oberflaeche in einer Sprache und der Mandant in einer "
+                f"anderen."
+            )
+        return wert
 
 
 def generate_url_token() -> str:

@@ -1,0 +1,98 @@
+"""Tests der Textkataloge.
+
+Der Fehler, gegen den diese Datei gebaut ist, ist keiner, der abstuerzt: Eine
+vergessene Uebersetzung ist ein deutscher Satz in einer englischen Oberflaeche.
+Er faellt nicht im Test auf, nicht im Log und nicht beim Start - sondern vor
+einem Interessenten.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.prompts import _REGELWERK
+from app.texts import JAVASCRIPT_SCHLUESSEL, TEXTE, VERFUEGBARE_SPRACHEN, Texte, texte_fuer
+
+
+def test_beide_sprachen_vorhanden() -> None:
+    assert set(TEXTE) == {"de", "en"}
+    assert VERFUEGBARE_SPRACHEN == ("de", "en")
+
+
+def test_kein_feld_ist_leer() -> None:
+    """Ein leeres Feld ist eine unsichtbare Luecke in der Oberflaeche."""
+    for sprache, texte in TEXTE.items():
+        for name in Texte.model_fields:
+            wert = getattr(texte, name)
+            assert wert.strip(), f"{sprache}.{name} ist leer"
+
+
+def test_kein_feld_ist_in_beiden_sprachen_gleich() -> None:
+    """Ein in beiden Katalogen identischer Wert ist eine vergessene Uebersetzung.
+
+    Das ist der Test, der die Luecke faengt, die sonst niemand sieht. Sollte
+    einmal ein Feld absichtlich in beiden Sprachen gleich lauten - ein
+    Eigenname etwa -, gehoert es hier namentlich ausgenommen und nicht der Test
+    abgeschwaecht. Die Ausnahme ist dann dokumentiert, die Regel bleibt scharf.
+    """
+    for name in Texte.model_fields:
+        de = getattr(TEXTE["de"], name)
+        en = getattr(TEXTE["en"], name)
+        assert de != en, f"{name} lautet in de und en gleich - vermutlich nicht uebersetzt"
+
+
+def test_javascript_schluessel_existieren_alle() -> None:
+    """Ein Tippfehler in der Liste waere sonst erst im Browser sichtbar."""
+    for name in JAVASCRIPT_SCHLUESSEL:
+        assert name in Texte.model_fields, f"{name} ist kein Feld von Texte"
+
+
+def test_fuer_javascript_liefert_nur_die_browsertexte() -> None:
+    """Was der Server allein braucht, hat in der Seite nichts zu suchen."""
+    for texte in TEXTE.values():
+        js = texte.fuer_javascript()
+        assert set(js) == set(JAVASCRIPT_SCHLUESSEL)
+        assert "ratenlimit_detail" not in js
+        assert "oberflaeche_fehlt" not in js
+
+
+def test_platzhalter_bleiben_in_beiden_sprachen_erhalten() -> None:
+    """Ein in der Uebersetzung verlorener Platzhalter bricht den Satz still."""
+    for sprache, texte in TEXTE.items():
+        assert "{display_name}" in texte.begruessung, sprache
+        assert "{sekunden}" in texte.ratenlimit_mit_zeit, sprache
+        # Der Satz ohne Zeitangabe darf KEINEN Platzhalter tragen - er wird
+        # genau dann benutzt, wenn es keine Zahl einzusetzen gibt.
+        assert "{" not in texte.ratenlimit_ohne_zeit, sprache
+
+
+def test_regelwerk_und_textkatalog_decken_dieselben_sprachen_ab() -> None:
+    """Sonst faellt eine Sprache erst beim ersten Modellaufruf auf.
+
+    Die Oberflaeche wuerde laden, und der System-Prompt liefe in einen
+    KeyError - nicht beim Start, sondern bei der ersten Frage eines
+    Interessenten.
+    """
+    assert set(_REGELWERK) == set(TEXTE)
+
+
+def test_texte_fuer_unbekannte_sprache_scheitert_laut() -> None:
+    """Kein stiller Rueckfall auf Deutsch.
+
+    Ein Rueckfall liesse einen Tippfehler in der tenant.yaml als deutsche
+    Oberflaeche bei einem englischen Mandanten enden - ohne Fehlermeldung.
+    """
+    with pytest.raises(KeyError) as fehler:
+        texte_fuer("fr")
+    assert "fr" in str(fehler.value)
+    # Die Meldung nennt, was es stattdessen gibt.
+    assert "de" in str(fehler.value) and "en" in str(fehler.value)
+
+
+def test_englischer_katalog_traegt_keine_umlaute() -> None:
+    """Grobe, aber wirksame Gegenprobe gegen kopierte deutsche Saetze."""
+    englisch = TEXTE["en"]
+    for name in Texte.model_fields:
+        wert = getattr(englisch, name)
+        for zeichen in "äöüÄÖÜß":
+            assert zeichen not in wert, f"en.{name} enthaelt {zeichen!r}"

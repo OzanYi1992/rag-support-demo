@@ -13,6 +13,13 @@
   var verlauf = document.getElementById("verlauf");
   var token = formular.dataset.token;
 
+  // Die Texte kommen serverseitig aus dem Katalog, ausgewaehlt ueber die
+  // Sprache des Mandanten. Diese Datei wird unter /static/ fuer alle
+  // Mandanten gleich ausgeliefert und darf deshalb keinen eigenen Wortlaut
+  // enthalten - ein deutscher Satz hier waere bei einem englischen Mandanten
+  // genau die Stelle, an der die Uebersetzung sichtbar auseinanderfaellt.
+  var texte = JSON.parse(document.getElementById("texte").textContent);
+
   function nachricht(rolle, text) {
     var huelle = document.createElement("div");
     huelle.className = "nachricht " + rolle;
@@ -30,7 +37,7 @@
     var block = document.createElement("div");
     block.className = "quellen";
     var titel = document.createElement("span");
-    titel.textContent = quellen.length === 1 ? "Quelle" : "Quellen";
+    titel.textContent = quellen.length === 1 ? texte.quelle : texte.quellen;
     block.appendChild(titel);
 
     var liste = document.createElement("ul");
@@ -56,14 +63,9 @@
     var hinweis = document.createElement("div");
     hinweis.className = "eskalation";
     var stark = document.createElement("strong");
-    stark.textContent = "Nicht in den Unterlagen. ";
+    stark.textContent = texte.eskalation_titel;
     hinweis.appendChild(stark);
-    hinweis.appendChild(
-      document.createTextNode(
-        "Diese Frage wird von den hinterlegten Inhalten nicht abgedeckt. " +
-          "Der Assistent rät in diesem Fall nicht, sondern verweist weiter."
-      )
-    );
+    hinweis.appendChild(document.createTextNode(texte.eskalation_hinweis));
     inhalt.appendChild(hinweis);
   }
 
@@ -71,7 +73,7 @@
     senden.disabled = true;
     eingabe.disabled = true;
 
-    var wartet = nachricht("assistent wartet", "Sucht in den Unterlagen …");
+    var wartet = nachricht("assistent wartet", texte.sucht);
 
     fetch("/t/" + encodeURIComponent(token) + "/chat", {
       method: "POST",
@@ -80,13 +82,18 @@
     })
       .then(function (antwort) {
         if (antwort.status === 429) {
-          var warte = antwort.headers.get("Retry-After") || "einige";
+          var warte = antwort.headers.get("Retry-After");
+          // Ohne Retry-After gibt es keine Zahl zu nennen. Dann der Satz ohne
+          // Zeitangabe statt eines Platzhalterworts - das liesse sich nicht in
+          // jede Sprache einsetzen, ohne den Satzbau zu brechen.
           throw new Error(
-            "Zu viele Anfragen. Bitte " + warte + " Sekunden warten."
+            warte
+              ? texte.ratenlimit_mit_zeit.replace("{sekunden}", warte)
+              : texte.ratenlimit_ohne_zeit
           );
         }
         if (!antwort.ok) {
-          throw new Error("Die Anfrage ist fehlgeschlagen.");
+          throw new Error(texte.anfrage_fehlgeschlagen);
         }
         return antwort.json();
       })

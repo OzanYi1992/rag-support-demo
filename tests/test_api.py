@@ -18,8 +18,9 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.embeddings import E5Embeddings
-from app.main import create_app
+from app.main import NICHT_GEFUNDEN, create_app
 from app.prompts import GroundedAnswer
+from app.texts import JAVASCRIPT_SCHLUESSEL
 from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, lege_mandant_an
 
 ACME_TOKEN = "acme-token-1234567890"
@@ -39,6 +40,16 @@ Die Montage ist im Preis enthalten.
 
 ACME_ESKALATION = "Dazu finde ich in den Unterlagen der ACME nichts."
 
+ENGLISCH_TOKEN = "englisch-token-1234567890"
+
+ENGLISCH_TEXT = """# Shipping
+
+Standard delivery takes three working days. Express delivery arrives the next
+working day if the order is placed before noon.
+"""
+
+ENGLISCH_ESKALATION = "I cannot find that in the documents. Please write to hello@example.test."
+
 
 def _umgebung(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
     from app.ingest import ingest_tenant
@@ -47,6 +58,14 @@ def _umgebung(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
     tenants_root.mkdir()
     lege_mandant_an(tenants_root, "demo-acme", ACME_TEXT, ACME_TOKEN, ACME_ESKALATION)
     lege_mandant_an(tenants_root, "demo-nordwind", NORDWIND_TEXT, NORDWIND_TOKEN)
+    lege_mandant_an(
+        tenants_root,
+        "demo-englisch",
+        ENGLISCH_TEXT,
+        ENGLISCH_TOKEN,
+        ENGLISCH_ESKALATION,
+        language="en",
+    )
 
     settings = Settings(
         openai_api_key="platzhalter",
@@ -58,7 +77,7 @@ def _umgebung(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
         chunk_overlap=20,
     )
     embeddings = E5Embeddings(FakeBackend(), expected_dimension=FAKE_DIMENSION)
-    for slug in ("demo-acme", "demo-nordwind"):
+    for slug in ("demo-acme", "demo-nordwind", "demo-englisch"):
         ingest_tenant(slug, settings=settings, embeddings=embeddings)
     return settings, embeddings
 
@@ -170,8 +189,39 @@ def test_wurzel_ist_404_und_hinterlaesst_eine_spur(
         antwort = client.get("/")
 
     assert antwort.status_code == 404
-    assert antwort.json() == {"detail": "Diese Adresse gibt es nicht."}
+    assert antwort.json() == {"detail": NICHT_GEFUNDEN}
     assert any("route_unbekannt" in eintrag.message for eintrag in caplog.records)
+
+
+def test_nicht_gefunden_ist_zweisprachig_und_ueberall_derselbe_wortlaut(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Der 404 traegt beide Sprachen und richtet sich nach keinem Mandanten.
+
+    Zwei Gruende, und beide muessen gleichzeitig gelten:
+
+    1. Ein zerbrochener Link kommt auch bei einem englischsprachigen
+       Empfaenger an. Ein rein deutscher Satz laesst ihn ratlos zurueck.
+    2. Der Wortlaut darf sich NICHT nach einer Sprache richten. Er faellt,
+       bevor ein Mandant aufgeloest ist - und zwei verschiedene Wortlaute
+       waeren ein Orakel, an dem sich die Existenz eines Token ablesen liesse.
+
+    Deshalb: beide Haelften immer zusammen, fuer jeden Aufruf identisch.
+    """
+    client, _ = _client(umgebung)
+
+    assert "Diese Adresse gibt es nicht." in NICHT_GEFUNDEN
+    assert "This address does not exist." in NICHT_GEFUNDEN
+
+    antworten = [
+        client.get("/"),
+        client.get("/t/gibtesnichtaberlangenug/"),
+        client.get("/t/kurz/"),
+        client.get("/beliebiger-unbekannter-pfad"),
+    ]
+    for antwort in antworten:
+        assert antwort.status_code == 404
+        assert antwort.json() == {"detail": NICHT_GEFUNDEN}
 
 
 def test_log_enthaelt_niemals_das_token(
@@ -195,6 +245,162 @@ def test_log_enthaelt_niemals_das_token(
     # Und die tenant_id ist als Dimension da, wo ein Mandant aufgeloest wurde
     # (ADR-002).
     assert "demo-acme" in gesamtes_log
+
+
+# --- Sprache der Oberflaeche ------------------------------------------------
+
+
+def _seite(client: TestClient, token: str) -> str:
+    antwort = client.get(f"/t/{token}/")
+    assert antwort.status_code == 200
+    return antwort.text
+
+
+def test_englischer_mandant_liefert_eine_englische_seite(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    client, _ = _client(umgebung)
+    seite = _seite(client, ENGLISCH_TOKEN)
+
+    assert '<html lang="en">' in seite
+    assert "Support Assistant" in seite
+    assert "Your question" in seite
+    assert ">Send<" in seite
+    assert "Answers come exclusively from the stored documents." in seite
+
+    # Und keine deutsche Zeile bleibt stehen.
+    for deutsch in ("Support-Assistent", "Ihre Frage", ">Senden<", "Guten Tag"):
+        assert deutsch not in seite, deutsch
+
+
+def test_deutscher_mandant_liefert_unveraendert_eine_deutsche_seite(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Gegenprobe. Ohne sie zeigt der Test oben nur, dass sich etwas geaendert hat."""
+    client, _ = _client(umgebung)
+    seite = _seite(client, ACME_TOKEN)
+
+    assert '<html lang="de">' in seite
+    assert "Support-Assistent" in seite
+    assert "Ihre Frage" in seite
+    assert ">Senden<" in seite
+    assert "Support Assistant" not in seite
+
+
+def test_kein_platzhalter_bleibt_ungefuellt(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Ein vergessener Platzhalter steht sonst woertlich in der Seite.
+
+    Er stuerzt nicht ab und faellt in keinem anderen Test auf - er steht
+    einfach da, vor dem Interessenten.
+    """
+    client, _ = _client(umgebung)
+    for token in (ACME_TOKEN, NORDWIND_TOKEN, ENGLISCH_TOKEN):
+        seite = _seite(client, token)
+        assert "{{" not in seite, token
+        assert "}}" not in seite, token
+        # Der Platzhalter INNERHALB eines Katalogtextes muss ebenfalls
+        # eingesetzt sein.
+        assert "{display_name}" not in seite, token
+
+
+def test_browsertexte_stehen_als_gueltiges_json_in_der_seite(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """app.js liest seine Texte aus diesem Block. Ist er kaputt, ist die
+    Oberflaeche stumm - ohne Fehler auf der Serverseite."""
+    import json
+    import re
+
+    client, _ = _client(umgebung)
+    for token, erwartet in (
+        (ACME_TOKEN, "Sucht in den Unterlagen …"),
+        (ENGLISCH_TOKEN, "Searching the documents …"),
+    ):
+        seite = _seite(client, token)
+        treffer = re.search(
+            r'<script id="texte" type="application/json">(.*?)</script>', seite, re.S
+        )
+        assert treffer, token
+        daten = json.loads(treffer.group(1))
+        assert daten["sucht"] == erwartet
+        assert set(daten) == set(JAVASCRIPT_SCHLUESSEL)
+        # Was nur der Server braucht, steht nicht in der ausgelieferten Seite.
+        assert "ratenlimit_detail" not in daten
+
+
+def test_json_block_kann_nicht_vorzeitig_schliessen(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Ein `<` im JSON-Block waere der Anfang eines Tags, nicht Daten."""
+    client, _ = _client(umgebung)
+    import re
+
+    seite = _seite(client, ENGLISCH_TOKEN)
+    treffer = re.search(r'<script id="texte" type="application/json">(.*?)</script>', seite, re.S)
+    assert treffer
+    assert "<" not in treffer.group(1)
+    assert ">" not in treffer.group(1)
+
+
+def test_ratenlimit_meldung_folgt_der_mandantensprache(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Der Mandant ist hier aufgeloest, also gibt es eine Sprache.
+
+    Anders als beim 404 verraet dieser Text nichts: Wer ihn sieht, hat bereits
+    ein gueltiges Token.
+    """
+    client, _ = _client(umgebung, rate_limit=1)
+
+    client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": "How long is delivery?"})
+    gebremst = client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": "And express?"})
+
+    assert gebremst.status_code == 429
+    assert gebremst.json()["detail"] == "Too many requests. Please wait a moment."
+
+    # Gegenprobe beim deutschen Mandanten, eigenes Kontingent je Token.
+    client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Wie lange gilt die RMA?"})
+    deutsch = client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Und ohne Nummer?"})
+
+    assert deutsch.status_code == 429
+    assert deutsch.json()["detail"] == "Zu viele Anfragen. Bitte kurz warten."
+
+
+def test_englischer_mandant_eskaliert_auf_englisch(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Eskalationsnachricht kommt aus der tenant.yaml, nicht aus dem Katalog.
+
+    Sie nennt die Supportadresse dieses Mandanten; ein globaler Katalog kann
+    das nicht tragen. Der Test haelt fest, dass der englische Mandant auf
+    Englisch eskaliert - ohne dass der Katalog daran beteiligt ist.
+    """
+    llm = FakeLlm(parsed=GroundedAnswer(answerable=False, answer="", sources=[], language="en"))
+    client, _ = _client(umgebung, llm=llm)
+    antwort = client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": "What colour is the box?"})
+
+    assert antwort.status_code == 200
+    daten = antwort.json()
+    assert daten["escalated"] is True
+    assert daten["text"] == ENGLISCH_ESKALATION
+
+
+def test_sprache_steht_im_log_und_der_token_nicht(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Die Sprache ist eine Dimension, das Token bleibt draussen."""
+    client, _ = _client(umgebung)
+    with caplog.at_level("INFO", logger="rag.api"):
+        client.get(f"/t/{ENGLISCH_TOKEN}/")
+
+    gesamtes_log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert gesamtes_log, "Kein Logeintrag - der Test waere sonst blind."
+    assert '"sprache": "en"' in gesamtes_log
+    assert '"tenant_id": "demo-englisch"' in gesamtes_log
+    assert ENGLISCH_TOKEN not in gesamtes_log
 
 
 # --- Chat -------------------------------------------------------------------

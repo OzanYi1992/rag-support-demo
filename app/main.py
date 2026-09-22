@@ -54,13 +54,25 @@ from app.tenants import (
     TenantNotFound,
     resolve_token,
 )
+from app.texts import Texte, texte_fuer
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 # Ein einziger Wortlaut fuer jeden Fall, in dem kein Mandant aufgeloest werden
 # konnte. Verschiedene Texte waeren ein Orakel: wer den Unterschied zwischen
 # "ungueltig" und "unbekannt" sieht, kann Token erraten.
-NICHT_GEFUNDEN = "Diese Adresse gibt es nicht."
+#
+# Der Wortlaut steht BEWUSST nicht im Textkatalog und richtet sich nicht nach
+# einer Mandantensprache. Er faellt, bevor ein Mandant aufgeloest ist - es gibt
+# an dieser Stelle keine Sprache, aus der er sich ableiten liesse. Selbst wenn
+# es sie gaebe, waere ein sprachabhaengiger Wortlaut genau das Orakel, das diese
+# Konstante verhindern soll.
+#
+# Zweisprachig und fest, weil ein zerbrochener Link auch bei einem
+# englischsprachigen Empfaenger ankommt, der mit einem rein deutschen Satz
+# nichts anfangen kann. Beide Haelften stehen immer zusammen; damit ist der
+# Wortlaut fuer jeden Aufruf identisch.
+NICHT_GEFUNDEN = "Diese Adresse gibt es nicht. / This address does not exist."
 
 _log = logging.getLogger("rag.api")
 
@@ -99,6 +111,23 @@ def _pfadmuster(pfad: str) -> str:
         teile[2] = "{token}"
         return "/".join(teile)
     return pfad
+
+
+def _texte_als_json(texte: Texte) -> str:
+    """Serialisiert die Browsertexte fuer den <script>-Block der Seite.
+
+    `<`, `>` und `&` werden als \\u-Folgen geschrieben. Ohne das koennte ein
+    Text, der zufaellig `</script>` enthaelt, den Block vorzeitig schliessen -
+    und alles danach waere Markup statt Daten. Die Texte stammen zwar aus dem
+    Katalog dieses Repos und nicht von aussen, aber die Maskierung kostet
+    nichts und haelt die Stelle auch dann sicher, wenn spaeter jemand einen
+    Text ergaenzt, ohne an diesen Block zu denken.
+
+    Bewusst NICHT html.escape: Der Inhalt eines <script>-Elements ist kein
+    HTML-Text. Ein &quot; darin waere kaputtes JSON.
+    """
+    roh = json.dumps(texte.fuer_javascript(), ensure_ascii=False)
+    return roh.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 class ChatAnfrage(BaseModel):
@@ -217,7 +246,10 @@ def create_app(
             _ereignis("rate_limit", tenant.slug, frei_in_sekunden=frei_in)
             raise HTTPException(
                 status_code=429,
-                detail="Zu viele Anfragen. Bitte kurz warten.",
+                # Der Mandant ist hier bereits aufgeloest, also gibt es eine
+                # Sprache. Anders als beim 404 verraet dieser Text nichts:
+                # Wer ihn sieht, hat schon ein gueltiges Token.
+                detail=texte_fuer(tenant.language).ratenlimit_detail,
                 headers={"Retry-After": str(frei_in)},
             )
 
@@ -233,20 +265,42 @@ def create_app(
     @app.get("/t/{url_token}/", response_class=HTMLResponse)
     def oberflaeche(url_token: str) -> HTMLResponse:
         tenant = _mandant(url_token)
+        texte = texte_fuer(tenant.language)
+
         vorlage = STATIC_DIR / "index.html"
         if not vorlage.is_file():
-            raise HTTPException(status_code=500, detail="Oberflaeche fehlt.")
+            raise HTTPException(status_code=500, detail=texte.oberflaeche_fehlt)
 
         # Der Mandantenname kommt aus der TenantConfig und wird serverseitig
         # gesetzt. Es gibt keinen Endpunkt, ueber den die Oberflaeche ihn
         # nachladen koennte - das waere ein Endpunkt, der Mandantendaten
         # ausgibt.
-        seite = (
-            vorlage.read_text(encoding="utf-8")
-            .replace("{{display_name}}", html.escape(tenant.display_name))
-            .replace("{{url_token}}", html.escape(url_token))
-        )
-        _ereignis("oberflaeche", tenant.slug)
+        #
+        # Dasselbe gilt fuer die Sprache: Sie wird hier eingesetzt und nicht
+        # im Browser aus einer Kennung abgeleitet. Die Seite eines Mandanten
+        # ist in genau einer Sprache, und welche das ist, entscheidet die
+        # tenant.yaml - nicht die Browsereinstellung des Besuchers.
+        ersetzungen = {
+            "{{lang}}": tenant.language,
+            "{{titel}}": html.escape(texte.titel),
+            "{{display_name}}": html.escape(tenant.display_name),
+            "{{begruessung}}": html.escape(
+                texte.begruessung.format(display_name=tenant.display_name)
+            ),
+            "{{frage_label}}": html.escape(texte.frage_label),
+            "{{frage_platzhalter}}": html.escape(texte.frage_platzhalter),
+            "{{senden}}": html.escape(texte.senden),
+            "{{fusszeile}}": html.escape(texte.fusszeile),
+            "{{url_token}}": html.escape(url_token),
+            # Steht im <script>-Element und wird deshalb anders maskiert.
+            "{{texte_json}}": _texte_als_json(texte),
+        }
+
+        seite = vorlage.read_text(encoding="utf-8")
+        for platzhalter, wert in ersetzungen.items():
+            seite = seite.replace(platzhalter, wert)
+
+        _ereignis("oberflaeche", tenant.slug, sprache=tenant.language)
         return HTMLResponse(seite)
 
     @app.post("/t/{url_token}/chat")
