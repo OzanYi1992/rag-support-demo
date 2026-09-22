@@ -12,6 +12,7 @@ Richtungen hat, die verschiedene Fehler fangen.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -58,13 +59,17 @@ def test_allowlist_ist_leer_ohne_freigabe(tmp_tenants_dir: Path) -> None:
     assert allowlist_berechnen(tmp_tenants_dir) == []
 
 
-def test_allowlist_enthaelt_beide_demo_mandanten(demo_tenants_dir: Path) -> None:
+def test_allowlist_enthaelt_alle_demo_mandanten(demo_tenants_dir: Path) -> None:
     """Gegenprobe: Ueber dem echten tenants/ muss die Berechnung treffen.
 
     Ohne diesen Test waere die leere Liste oben von einem Werkzeugfehler nicht
     zu unterscheiden.
+
+    Die Liste ist fest und nicht "mindestens zwei". Eine Berechnung, die einen
+    Mandanten zu viel liefert, ist genauso falsch wie eine, die einen zu wenig
+    liefert - nur teurer, weil sie ins Image fuehrt.
     """
-    assert allowlist_berechnen(demo_tenants_dir) == ["demo-acme", "demo-nordwind"]
+    assert allowlist_berechnen(demo_tenants_dir) == ["demo-acme", "demo-fellgate", "demo-nordwind"]
 
 
 def test_allowlist_schreiben_und_lesen_ergibt_dasselbe(tmp_path: Path) -> None:
@@ -245,4 +250,53 @@ def test_cli_schreiben_ohne_freigegebenen_mandanten_meldet_fehler(tmp_path: Path
             ]
         )
         == 1
+    )
+
+
+# --- Freigegeben heisst nichts, wenn die Datei nicht mitkommt --------------
+
+
+def test_freigegebene_mandanten_sind_von_git_verfolgt(demo_tenants_dir: Path) -> None:
+    """Jeder freigegebene Mandant muss auch wirklich im Repo liegen.
+
+    Der Fehler, den dieser Test faengt, ist vollstaendig still. `.gitignore`
+    schliesst `tenants/*` aus und nimmt die Demo-Mandanten einzeln wieder auf.
+    Wird ein neuer Mandant dort vergessen, passiert LOKAL nichts Auffaelliges:
+    Er liegt im Arbeitsbaum, `list_tenants()` findet ihn, das Build-Gate
+    berechnet seine Allowlist aus dem Kontext und meldet gruen.
+
+    Erst ein Bau aus einem frischen Checkout haette ihn nicht. Und auch dann
+    bleibt es still: Das Gate berechnet die Allowlist wieder aus dem Kontext -
+    diesmal ohne ihn - findet Uebereinstimmung und meldet erneut gruen. Das
+    Image waere einen Mandanten zu klein, ohne eine einzige Fehlermeldung, und
+    der Link darauf liefe ins Leere.
+
+    Das Gate kann diesen Fall nicht sehen. Es vergleicht den Kontext mit sich
+    selbst. Nur git weiss, was tatsaechlich mitkommt.
+    """
+    wurzel = demo_tenants_dir.parent
+    if not (wurzel / ".git").exists():
+        pytest.skip("Kein git-Arbeitsbaum - im Container gibt es keinen.")
+
+    lauf = subprocess.run(
+        ["git", "ls-files", "--", "tenants/"],
+        cwd=wurzel,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if lauf.returncode != 0:
+        pytest.skip(f"git ls-files nicht ausfuehrbar: {lauf.stderr.strip()}")
+
+    verfolgt = {zeile.split("/")[1] for zeile in lauf.stdout.splitlines() if "/" in zeile}
+    # Gegenprobe: Faende git gar nichts, waere die Pruefung blind und jede
+    # Aussage darunter wertlos.
+    assert verfolgt, "git ls-files liefert nichts unter tenants/ - der Test waere blind."
+
+    freigegeben = set(allowlist_berechnen(demo_tenants_dir))
+    fehlend = sorted(freigegeben - verfolgt)
+    assert not fehlend, (
+        f"Diese Mandanten sind fuer ein oeffentliches Image freigegeben, werden aber "
+        f"nicht von git verfolgt: {fehlend}. Sie fehlen in einem Bau aus einem frischen "
+        f"Checkout, und zwar ohne Fehlermeldung. In .gitignore namentlich aufnehmen."
     )

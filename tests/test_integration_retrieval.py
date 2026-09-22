@@ -28,9 +28,22 @@ pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+ALLE_MANDANTEN = ("demo-acme", "demo-fellgate", "demo-nordwind")
+
 # Merkmale, die es im jeweils anderen Mandanten weder gibt noch geben koennte.
 ACME_MERKMAL = "Brauche ich eine RMA-Nummer fuer eine Ruecksendung?"
 NORDWIND_MERKMAL = "Wie laeuft die Zwei-Mann-Montage mit Terminfenster ab?"
+FELLGATE_MERKMAL = "How long are my Trail Club points valid before they expire?"
+
+# Eine Frage, die AUSSCHLIESSLICH demo-acme beantworten kann - und zwar aus
+# dessen ENGLISCHEM Dokument technical-support-en.md.
+#
+# Warum sie eigens hier steht: Bei jeder anderen fremder_mandant-Frage kann die
+# Sprachgrenze die Trennung mitgetragen haben, ohne dass es auffaellt. Eine
+# deutsche Frage findet in einem englischen Korpus schon deshalb wenig, weil sie
+# deutsch ist. Hier nicht: Frage englisch, fremder Korpus englisch, eigener
+# Korpus englisch. Was trennt, kann nur noch die Mandantengrenze sein.
+ACME_MERKMAL_ENGLISCH = "Do I have to quote a case number when I follow up on a fault?"
 
 # Frage ohne ein einziges gemeinsames Wort mit technical-support-en.md.
 # Geprueft, nicht behauptet: siehe test_deutsche_frage_teilt_kein_wort.
@@ -41,9 +54,9 @@ DEUTSCHE_FRAGE_AUF_ENGLISCHES_DOKUMENT = (
 
 @pytest.fixture(scope="module")
 def echte_umgebung(tmp_path_factory: pytest.TempPathFactory) -> Settings:
-    """Ingestiert beide Demo-Mandanten mit dem echten Modell."""
+    """Ingestiert alle drei Demo-Mandanten mit dem echten Modell."""
     tenants_root = REPO_ROOT / "tenants"
-    for slug in ("demo-acme", "demo-nordwind"):
+    for slug in ALLE_MANDANTEN:
         docs = tenants_root / slug / "docs"
         if not docs.is_dir() or not list(docs.glob("*.md")):
             pytest.skip(
@@ -58,7 +71,7 @@ def echte_umgebung(tmp_path_factory: pytest.TempPathFactory) -> Settings:
         index_dir=tmp_path_factory.mktemp("index"),
     )
     embeddings = build_embeddings(settings)
-    for slug in ("demo-acme", "demo-nordwind"):
+    for slug in ALLE_MANDANTEN:
         ingest_tenant(slug, settings=settings, embeddings=embeddings)
     return settings
 
@@ -119,11 +132,17 @@ def test_deutsche_frage_findet_englisches_dokument(echte_umgebung: Settings) -> 
     )
 
 
+# Alle sechs geordneten Paare ueber drei Mandanten. Nicht drei: Die Trennung ist
+# gerichtet, und "A sieht B nicht" ist keine Aussage ueber "B sieht A nicht".
 @pytest.mark.parametrize(
     ("slug", "fremd", "eigene_frage", "fremde_frage"),
     [
         ("demo-acme", "demo-nordwind", ACME_MERKMAL, NORDWIND_MERKMAL),
+        ("demo-acme", "demo-fellgate", ACME_MERKMAL, FELLGATE_MERKMAL),
         ("demo-nordwind", "demo-acme", NORDWIND_MERKMAL, ACME_MERKMAL),
+        ("demo-nordwind", "demo-fellgate", NORDWIND_MERKMAL, FELLGATE_MERKMAL),
+        ("demo-fellgate", "demo-acme", FELLGATE_MERKMAL, ACME_MERKMAL),
+        ("demo-fellgate", "demo-nordwind", FELLGATE_MERKMAL, NORDWIND_MERKMAL),
     ],
 )
 def test_isolation_in_beide_richtungen(
@@ -180,3 +199,41 @@ def test_dimension_und_norm_des_echten_modells(echte_umgebung: Settings) -> None
     norm = sum(v * v for v in vektor) ** 0.5
     assert abs(norm - 1.0) < 1e-3
     assert embeddings.max_seq_length == 512
+
+
+def test_gleiche_sprache_auf_beiden_seiten_trennt_trotzdem(
+    echte_umgebung: Settings,
+) -> None:
+    """Der schaerfste Isolationsfall, den dieser Korpus hergibt.
+
+    Bei jeder anderen Fremdfrage kann die Sprachgrenze die Trennung
+    mitgetragen haben. Eine deutsche Frage findet in einem englischen Korpus
+    schon deshalb wenig, weil sie deutsch ist - und ein bestandener Test
+    belegt dann nicht, was er zu belegen vorgibt.
+
+    Hier faellt dieser Einwand weg: Die Frage ist englisch, der fremde Korpus
+    ist englisch (demo-acme fuehrt technical-support-en.md), und der eigene
+    Korpus ist vollstaendig englisch. Was noch trennt, kann nur die
+    Mandantengrenze sein.
+
+    Gegenprobe im selben Test: Dieselbe Frage MUSS bei demo-acme das englische
+    Dokument finden. Ohne sie waere ein leeres Ergebnis bei demo-fellgate auch
+    dann gruen, wenn die Frage schlicht nirgends trifft.
+    """
+    bei_fellgate = search_tenant(
+        "demo-fellgate", ACME_MERKMAL_ENGLISCH, k=5, settings=echte_umgebung
+    )
+    bei_acme = search_tenant("demo-acme", ACME_MERKMAL_ENGLISCH, k=5, settings=echte_umgebung)
+
+    # Gegenprobe zuerst: Trifft die Frage bei ihrem eigenen Mandanten nicht,
+    # ist der Test blind und sein Ergebnis wertlos.
+    assert bei_acme, "Die Frage trifft bei demo-acme nichts - der Test ist blind."
+    quellen_acme = {t.source_file for t in bei_acme}
+    assert "technical-support-en.md" in quellen_acme, (
+        f"Erwartet wurde das englische Acme-Dokument, gefunden: {sorted(quellen_acme)}"
+    )
+
+    # Die eigentliche Aussage: kein Chunk von acme liegt in Fellgates Index.
+    assert bei_fellgate
+    assert all(t.tenant_slug == "demo-fellgate" for t in bei_fellgate)
+    assert not any(t.source_file == "technical-support-en.md" for t in bei_fellgate)

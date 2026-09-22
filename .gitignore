@@ -32,11 +32,21 @@ htmlcov/
 # Reihenfolge ist bedeutungstragend: erst alles unter tenants/ ausschliessen,
 # dann die Demo-Mandanten gezielt wieder aufnehmen. Eine Datei laesst sich nicht
 # wieder einschliessen, wenn ihr Verzeichnis ausgeschlossen ist.
+#
+# ACHTUNG beim Anlegen eines neuen Demo-Mandanten: Er muss hier namentlich
+# aufgenommen werden, sonst wird er ignoriert - und das faellt lokal NICHT auf.
+# Lokal liegt er ja im Arbeitsbaum, Tests und Build-Gate laufen gruen. Erst ein
+# Bau aus einem frischen Checkout haette ihn nicht, das Gate berechnete seine
+# Allowlist aus dem Kontext ohne ihn und meldete trotzdem gruen. Das Image waere
+# einen Mandanten zu klein, und der Link darauf liefe ins Leere.
+# Ein Test faengt das: siehe tests/test_pruefe_public_image.py.
 tenants/*
 !tenants/demo-acme/
 !tenants/demo-acme/**
 !tenants/demo-nordwind/
 !tenants/demo-nordwind/**
+!tenants/demo-fellgate/
+!tenants/demo-fellgate/**
 tenants/*/index/
 
 # --- Werkzeuge und Betriebssystem ------------------------------------------

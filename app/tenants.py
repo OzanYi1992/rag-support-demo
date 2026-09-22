@@ -14,10 +14,10 @@ import secrets
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import get_settings
-from app.texts import VERFUEGBARE_SPRACHEN
+from app.texts import VERFUEGBARE_SPRACHEN, passt_zur_sprache
 
 # Kein Punkt, kein Schraegstrich, keine Grossbuchstaben. Damit ist "../" nicht
 # darstellbar - Traversal scheitert bereits an der Form, nicht erst am Pfad.
@@ -104,6 +104,35 @@ class TenantConfig(BaseModel):
                 f"anderen."
             )
         return wert
+
+    @model_validator(mode="after")
+    def _eskalationsnachricht_in_der_sprache_des_mandanten(self) -> TenantConfig:
+        """Weist eine Eskalationsnachricht ab, die offensichtlich in der
+        falschen Sprache verfasst ist.
+
+        Diese Nachricht ist der einzige Text eines Mandanten, den kein Katalog
+        traegt - sie nennt dessen Supportadresse. Damit ist sie auch der
+        einzige, den kein Katalogtest schuetzt. Ohne diese Pruefung besteht ein
+        Mandant mit language "en" und einer deutschen Nachricht jeden Test und
+        faellt erst vor einem Interessenten auf: bei der nicht gedeckten Frage,
+        also genau dort, wo das System sich von seiner guten Seite zeigen soll.
+
+        Geprueft wird beim LADEN, nicht beim ersten Aufruf. Ein Mandant, der
+        sich nicht laden laesst, faellt sofort auf; einer, der erst in der
+        Demo auffaellt, hat den Termin schon gekostet.
+
+        Die Pruefung ist eine Heuristik und bewusst konservativ - sie weist nur
+        ab, wenn die andere Sprache deutlich gewinnt. Sie ersetzt kein Lesen
+        der Datei.
+        """
+        grund = passt_zur_sprache(self.escalation_message, self.language)
+        if grund is not None:
+            raise ValueError(
+                f"escalation_message von {self.slug!r} passt nicht zu language "
+                f"{self.language!r}: {grund}. Entweder die Nachricht uebersetzen "
+                f"oder language korrigieren."
+            )
+        return self
 
 
 def generate_url_token() -> str:

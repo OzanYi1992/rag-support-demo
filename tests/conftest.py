@@ -96,19 +96,35 @@ class FakeLlm:
         )
 
 
+# Eskalationsnachrichten je Sprache. Der Default haengt an `language`, weil ein
+# Mandant mit `language: en` und einer deutschen Nachricht seit EN-2 beim Laden
+# abgewiesen wird - zu Recht. Ein fester deutscher Default haette jeden
+# englischen Testmandanten unbaubar gemacht.
+STANDARD_ESKALATION: dict[str, str] = {
+    "de": "Dazu finde ich in den Unterlagen nichts.",
+    "en": "I cannot find anything about that in the documents.",
+}
+
+
 def lege_mandant_an(
     root: Path,
     slug: str,
     text: str,
     token: str,
-    escalation_message: str = "Dazu finde ich in den Unterlagen nichts.",
+    escalation_message: str | None = None,
     language: str = "de",
 ) -> None:
     """Legt einen Mandanten mit einem Dokument an. Fuer Tests gegen tmp_path.
 
     `language` ist der Schalter fuer Oberflaechensprache und Prompt-Regelwerk.
     Default "de", damit bestehende Aufrufe unveraendert bleiben.
+
+    `escalation_message` folgt der Sprache, wenn nichts uebergeben wird. Wer
+    einen Text uebergibt, ist selbst dafuer verantwortlich, dass er zur Sprache
+    passt - auch das pruefen Tests, dort absichtlich mit falschem Text.
     """
+    if escalation_message is None:
+        escalation_message = STANDARD_ESKALATION[language]
     tenant_dir = root / slug
     (tenant_dir / "docs").mkdir(parents=True)
     (tenant_dir / "tenant.yaml").write_text(

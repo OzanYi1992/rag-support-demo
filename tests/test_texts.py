@@ -11,7 +11,14 @@ from __future__ import annotations
 import pytest
 
 from app.prompts import _REGELWERK
-from app.texts import JAVASCRIPT_SCHLUESSEL, TEXTE, VERFUEGBARE_SPRACHEN, Texte, texte_fuer
+from app.texts import (
+    JAVASCRIPT_SCHLUESSEL,
+    TEXTE,
+    VERFUEGBARE_SPRACHEN,
+    Texte,
+    passt_zur_sprache,
+    texte_fuer,
+)
 
 
 def test_beide_sprachen_vorhanden() -> None:
@@ -96,3 +103,71 @@ def test_englischer_katalog_traegt_keine_umlaute() -> None:
         wert = getattr(englisch, name)
         for zeichen in "äöüÄÖÜß":
             assert zeichen not in wert, f"en.{name} enthaelt {zeichen!r}"
+
+
+# --- Sprachpruefung fuer Texte, die kein Katalog traegt ---------------------
+
+DE_ECHT = (
+    "Dazu finde ich in den Unterlagen von ACME nichts Belastbares. "
+    "Bitte wenden Sie sich an den Support."
+)
+EN_ECHT = (
+    "I cannot find anything reliable about that in the documents. Please write to our support desk."
+)
+
+
+def test_richtige_sprache_wird_durchgelassen() -> None:
+    """Der Positivtest. Ohne ihn koennte die Pruefung alles abweisen."""
+    assert passt_zur_sprache(DE_ECHT, "de") is None
+    assert passt_zur_sprache(EN_ECHT, "en") is None
+
+
+def test_falsche_sprache_wird_abgewiesen() -> None:
+    """Der Negativtest, und der eigentliche Zweck der Pruefung."""
+    grund = passt_zur_sprache(DE_ECHT, "en")
+    assert grund is not None and "'de'" in grund
+
+    grund = passt_zur_sprache(EN_ECHT, "de")
+    assert grund is not None and "'en'" in grund
+
+
+def test_deutsche_sonderzeichen_in_einem_englischen_text() -> None:
+    """Ein hartes Signal, das auch ohne Marker greift.
+
+    Der Satz traegt absichtlich kaum deutsche Funktionswoerter - er soll allein
+    an den Umlauten scheitern, damit die zweite Regel nachweislich wirkt und
+    nicht nur die erste.
+    """
+    grund = passt_zur_sprache(
+        "Gruesse aus Muenchen: Groesse XL, Qualitaet geprueft.".replace("ue", "ü")
+        .replace("oe", "ö")
+        .replace("ae", "ä"),
+        "en",
+    )
+    assert grund is not None
+    assert "Englischen nicht gibt" in grund
+
+
+def test_die_kataloge_selbst_bestehen_ihre_eigene_pruefung() -> None:
+    """Gegenprobe gegen die Heuristik: Die gepflegten Texte muessen durchlaufen.
+
+    Weist sie hier etwas ab, ist die Heuristik zu scharf - und nicht der Text
+    falsch.
+    """
+    for sprache, texte in TEXTE.items():
+        for name in Texte.model_fields:
+            wert = getattr(texte, name)
+            if len(wert.split()) < 4:
+                # Ein bis drei Woerter tragen keine Funktionswoerter. Dort kann
+                # die Heuristik nichts sehen, und das soll sie auch nicht.
+                continue
+            assert passt_zur_sprache(wert, sprache) is None, f"{sprache}.{name}"
+
+
+def test_kurzer_text_ohne_marker_laeuft_durch() -> None:
+    """Die Heuristik ist konservativ: Was sie nicht sieht, weist sie nicht ab.
+
+    Sonst waere sie an Randfaellen laut und am eigentlichen Fehler still.
+    """
+    assert passt_zur_sprache("Support: 12345", "de") is None
+    assert passt_zur_sprache("Support: 12345", "en") is None

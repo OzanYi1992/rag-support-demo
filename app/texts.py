@@ -138,6 +138,126 @@ TEXTE: dict[str, Texte] = {"de": _DE, "en": _EN}
 VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
 
 
+# Kurze Markerlisten fuer die Sprachpruefung unten. Bewusst Funktionswoerter:
+# Sie kommen in fast jedem Satz vor, stehen in beiden Sprachen praktisch nie
+# gleichzeitig, und sie haengen nicht am Thema des Textes.
+_MARKER: dict[str, frozenset[str]] = {
+    "de": frozenset(
+        {
+            "der",
+            "die",
+            "das",
+            "den",
+            "dem",
+            "des",
+            "ein",
+            "eine",
+            "einen",
+            "und",
+            "oder",
+            "nicht",
+            "kein",
+            "keine",
+            "ist",
+            "sind",
+            "wir",
+            "sie",
+            "ihnen",
+            "ihre",
+            "sich",
+            "dazu",
+            "bitte",
+            "finde",
+            "steht",
+            "unterlagen",
+            "mit",
+            "von",
+            "auf",
+            "wenden",
+            "weiter",
+            "direkt",
+        }
+    ),
+    "en": frozenset(
+        {
+            "the",
+            "and",
+            "not",
+            "cannot",
+            "can",
+            "that",
+            "this",
+            "with",
+            "from",
+            "for",
+            "about",
+            "please",
+            "you",
+            "your",
+            "our",
+            "will",
+            "find",
+            "anything",
+            "documents",
+            "someone",
+            "help",
+            "write",
+            "there",
+            "them",
+            "have",
+        }
+    ),
+}
+
+# Zeichen, die es nur im Deutschen gibt. Ein hartes Signal: Steht eines davon in
+# einem englischen Text, ist es kein englischer Text.
+_DEUTSCHE_ZEICHEN = frozenset("äöüÄÖÜß")
+
+
+def passt_zur_sprache(text: str, language: str) -> str | None:
+    """Prueft grob, ob ein Text in der erwarteten Sprache verfasst ist.
+
+    Gibt None zurueck, wenn nichts dagegen spricht, sonst eine Begruendung.
+
+    Wofuer das da ist: Die `escalation_message` eines Mandanten ist der einzige
+    Text, den kein Katalog traegt - sie nennt die Supportadresse dieses
+    Mandanten. Damit ist sie auch der einzige, den kein Katalogtest schuetzt.
+    Ein Mandant mit `language: en` und einer deutschen Eskalationsnachricht
+    besteht sonst jede Pruefung und faellt erst vor einem Interessenten auf,
+    und zwar genau bei der Frage, die das System richtig beantwortet: der nicht
+    gedeckten.
+
+    Das ist eine Heuristik und will keine Spracherkennung sein. Sie ist
+    bewusst KONSERVATIV: Abgewiesen wird nur, wenn die andere Sprache deutlich
+    gewinnt. Ein kurzer oder ungewoehnlicher Text, bei dem kein Marker greift,
+    laeuft durch. Der Fehler, den sie fangen soll, ist ein ganzer Satz in der
+    falschen Sprache - und der bringt reichlich Marker mit.
+
+    Kein Sprachmodell: Das waere ein Netzaufruf beim Laden eines Mandanten und
+    eine Abhaengigkeit an einer Stelle, die keine braucht.
+    """
+    if language not in _MARKER:
+        raise KeyError(f"Keine Marker fuer die Sprache {language!r}.")
+
+    if language == "en" and set(text) & _DEUTSCHE_ZEICHEN:
+        getroffen = "".join(sorted(set(text) & _DEUTSCHE_ZEICHEN))
+        return f"enthaelt die Zeichen {getroffen!r}, die es im Englischen nicht gibt"
+
+    woerter = {wort.strip(".,;:!?()\"'").lower() for wort in text.split()}
+    eigene = len(woerter & _MARKER[language])
+    fremde = {
+        andere: len(woerter & marker) for andere, marker in _MARKER.items() if andere != language
+    }
+    staerkste, punkte = max(fremde.items(), key=lambda paar: paar[1])
+
+    if punkte > eigene:
+        return (
+            f"enthaelt {punkte} typische Woerter der Sprache {staerkste!r}, "
+            f"aber nur {eigene} der erwarteten Sprache {language!r}"
+        )
+    return None
+
+
 def texte_fuer(language: str) -> Texte:
     """Liefert den Katalog einer Sprache.
 

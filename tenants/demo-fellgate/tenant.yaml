@@ -1,0 +1,52 @@
+# Demo-Mandant. ERFUNDENE Inhalte, keine echten Interessentendaten.
+#
+# Dieser Mandant liegt im oeffentlichen Repo und darf in ein oeffentliches
+# Container-Image (public_image_allowed: true). Das ist nur zulaessig, WEIL die
+# Inhalte erfunden sind.
+#
+# Angelegt fuer die englischsprachige Welle. Bewusst ein eigener Zuschnitt und
+# KEINE Uebersetzung von Acme oder Nordwind: Outdoor-Ausruestung im
+# Versandhandel, eigene Produkte, eigene Fristen, eigene Zahlen. Ueberlappende
+# Korpora machen den Nachweis fremder_mandant wertlos.
+#
+# Bewusst NICHT abgedeckt: technischer Support, Vorgangsnummern,
+# Reaktionszeiten, Eskalationsstufen. Diese Themen liegen bei demo-acme, und
+# zwar auch auf Englisch (docs/technical-support-en.md). Genau daraus wird im
+# Goldsatz der schaerfste Isolationsfall: gleiche Sprache auf beiden Seiten,
+# nur die Mandantengrenze trennt.
+#
+# Der slug steht bewusst nicht in dieser Datei - er kommt aus dem
+# Verzeichnisnamen.
+
+display_name: "Fellgate Outdoor"
+
+# Oberflaeche, serverseitige Meldungen und die Sprache des Regelwerks im
+# System-Prompt. Nicht die Antwortsprache.
+language: en
+
+system_prompt_extra: >
+  Fellgate Outdoor sells outdoor clothing and equipment by mail order to private
+  customers. Answer plainly and in full sentences. Whenever a deadline, a price
+  or a threshold is involved, state the exact figure from the knowledge base and
+  never an estimate. Many rules differ by delivery zone or by Trail Club level;
+  if the answer depends on one of those, say which.
+
+escalation_message: >
+  I cannot find anything reliable about that in the Fellgate Outdoor documents.
+  Please write to support@fellgate.example and someone will help you directly.
+
+# Kein Override: dieser Mandant nutzt das Modell aus der Konfiguration.
+model_override: null
+
+# Kein Override: dieser Mandant nutzt RETRIEVAL_TOP_K aus der Konfiguration.
+# Bewusst wie demo-nordwind und anders als demo-acme, damit die drei Mandanten
+# sich nicht nur im Inhalt unterscheiden.
+retrieval_top_k: null
+
+# Oeffentliche Adresse des Mandanten. Erzeugt mit
+# app.tenants.generate_url_token(): 32 Zeichen, 192 Bit, ohne Mandantennamen.
+# Anders als bei den beiden bestehenden Mandanten, die den Slug noch im Token
+# tragen.
+url_token: d87hbtOOvupTpJcbDIlZ4oqIX6dsKVoI
+
+public_image_allowed: true

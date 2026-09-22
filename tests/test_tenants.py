@@ -58,7 +58,13 @@ def test_slug_kommt_aus_dem_verzeichnis(demo_tenants_dir: Path) -> None:
 
 
 def test_list_tenants(demo_tenants_dir: Path) -> None:
-    assert list_tenants(demo_tenants_dir) == ["demo-acme", "demo-nordwind"]
+    """Sortiert, vollstaendig, und genau diese drei.
+
+    Bewusst eine feste Liste und kein "mindestens": Ein Mandant, der hier
+    unbemerkt dazukommt, ist ein Mandant, der unbemerkt in ein oeffentliches
+    Image geraten koennte.
+    """
+    assert list_tenants(demo_tenants_dir) == ["demo-acme", "demo-fellgate", "demo-nordwind"]
 
 
 # --- Slug-Validierung ------------------------------------------------------
@@ -199,7 +205,17 @@ def test_dritte_sprache_scheitert_beim_laden(tmp_path: Path) -> None:
     Mandant in einer anderen - und aufgefallen waere es erst, wenn jemand die
     Seite aufruft.
     """
-    lege_mandant_an(tmp_path, "demo-franzoesisch", "Doc", "franz-token-1234567890", language="fr")
+    # Eigener Text statt des Fixture-Defaults: Den gibt es fuer "fr" bewusst
+    # nicht, und der Test will die Ablehnung beim LADEN pruefen, nicht ein
+    # Scheitern schon beim Anlegen der Datei.
+    lege_mandant_an(
+        tmp_path,
+        "demo-franzoesisch",
+        "Doc",
+        "franz-token-1234567890",
+        escalation_message="Je ne trouve rien a ce sujet.",
+        language="fr",
+    )
 
     with pytest.raises(ValidationError) as fehler:
         load_tenant("demo-franzoesisch", tmp_path)
@@ -228,6 +244,63 @@ def test_language_haelt_sich_an_den_textkatalog() -> None:
         assert mandant.language == sprache
 
 
+def test_eskalationsnachricht_in_falscher_sprache_scheitert_beim_laden(
+    tmp_path: Path,
+) -> None:
+    """Der Fall, der ohne diese Pruefung jeden Test bestehen wuerde.
+
+    Ein englischer Mandant mit deutscher Eskalationsnachricht faellt sonst erst
+    vor einem Interessenten auf - und zwar bei der nicht gedeckten Frage, also
+    genau dort, wo das System sich von seiner guten Seite zeigen soll.
+    """
+    lege_mandant_an(
+        tmp_path,
+        "demo-falschsprachig",
+        "Doc",
+        "falschsprachig-token-12345",
+        escalation_message=(
+            "Dazu finde ich in den Unterlagen leider nichts. Bitte wenden Sie sich an den Support."
+        ),
+        language="en",
+    )
+
+    with pytest.raises(ValidationError) as fehler:
+        load_tenant("demo-falschsprachig", tmp_path)
+
+    meldung = str(fehler.value)
+    assert "escalation_message" in meldung
+    assert "demo-falschsprachig" in meldung
+
+
+def test_eskalationsnachricht_in_richtiger_sprache_laedt(tmp_path: Path) -> None:
+    """Gegenprobe. Ohne sie zeigt der Test oben nur, dass irgendetwas scheitert."""
+    lege_mandant_an(
+        tmp_path,
+        "demo-richtigsprachig",
+        "Doc",
+        "richtigsprachig-token-1234",
+        escalation_message=(
+            "I cannot find anything about that in the documents. Please write to our support desk."
+        ),
+        language="en",
+    )
+
+    mandant = load_tenant("demo-richtigsprachig", tmp_path)
+    assert mandant.language == "en"
+
+
+def test_bestehende_mandanten_bestehen_die_sprachpruefung(demo_tenants_dir: Path) -> None:
+    """Die Pruefung darf die gepflegten Mandanten nicht abweisen.
+
+    Weist sie hier etwas ab, ist die Heuristik zu scharf - nicht der Mandant
+    falsch. Der Test laeuft gegen das echte tenants/-Verzeichnis und deckt
+    damit jeden Mandanten ab, der spaeter dazukommt.
+    """
+    for slug in list_tenants(demo_tenants_dir):
+        mandant = load_tenant(slug, demo_tenants_dir)
+        assert mandant.escalation_message.strip(), slug
+
+
 # --- public_image_allowed (ADR-014) ----------------------------------------
 
 
@@ -245,5 +318,16 @@ def test_absent_flag_not_in_public_list(tmp_tenants_dir: Path) -> None:
 
 
 def test_demo_tenants_in_public_list(demo_tenants_dir: Path) -> None:
-    """Die beiden Demo-Mandanten setzen das Flag ausdruecklich auf True."""
-    assert tenants_for_public_image(demo_tenants_dir) == ["demo-acme", "demo-nordwind"]
+    """Alle drei Demo-Mandanten setzen das Flag ausdruecklich auf True.
+
+    Der Vergleich mit list_tenants() darunter ist der eigentliche Punkt: Er
+    haelt fest, dass HEUTE jeder vorhandene Mandant freigegeben ist. Kommt ein
+    Interessentenmandant dazu, faellt dieser Test - und zwar bevor das Image
+    gebaut wird.
+    """
+    assert tenants_for_public_image(demo_tenants_dir) == [
+        "demo-acme",
+        "demo-fellgate",
+        "demo-nordwind",
+    ]
+    assert tenants_for_public_image(demo_tenants_dir) == list_tenants(demo_tenants_dir)
