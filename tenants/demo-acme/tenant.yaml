@@ -13,10 +13,14 @@ display_name: "ACME Elektronikhandel"
 # Sprache, in der das Regelwerk des System-Prompts formuliert ist. NICHT die
 # Antwortsprache - die folgt weiterhin der Frage.
 #
-# Stand vorher: eine Liste languages: [de, en]. Sie wurde von keiner Zeile
-# Code gelesen und behauptete fuer diesen Mandanten eine Englischdeckung, die
-# die Messung nicht traegt: Eine englische Frage gegen diesen deutschen Korpus
-# findet die richtigen Stellen nicht.
+# Stand vorher: eine Liste languages: [de, en]. Sie wurde von keiner Zeile Code
+# gelesen und ist deshalb entfallen.
+#
+# Die Angabe war inhaltlich richtig: docs/ enthaelt mit technical-support-en.md
+# eine englische Parallelfassung. Der Mandant bleibt trotzdem language: de - das
+# Feld sagt, in welcher Sprache die Oberflaeche laeuft, nicht welche Sprachen im
+# Korpus vorkommen. Ein deutscher Interessent soll eine deutsche Oberflaeche
+# sehen, auch wenn ein Dokument englisch ist.
 language: de
 
 system_prompt_extra: >
