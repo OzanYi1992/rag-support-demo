@@ -11,6 +11,9 @@ Zwei Zusicherungen werden hier durchgesetzt, nicht behauptet (P-009, P-010):
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 
 from eval.run import (
@@ -21,10 +24,15 @@ from eval.run import (
     ABW_UNBESTIMMT,
     METRIK_DATEI_UND_CHUNK,
     QUELLE_NICHT_ANWENDBAR,
+    SCORE_TOLERANZ,
+    CloudZiel,
     Frageergebnis,
     _abweichungsklasse,
+    cloud_antwort,
+    main,
     pruefe_goldsatz,
     pruefe_kopf,
+    vergleiche_scores,
 )
 
 
@@ -156,3 +164,82 @@ def test_die_echten_goldsaetze_sind_gueltig() -> None:
         pruefe_goldsatz(yaml.safe_load(pfad.read_text(encoding="utf-8")), str(pfad))
         geprueft += 1
     assert geprueft == 2, "Es sollten zwei Goldsaetze geprueft worden sein."
+
+
+# --- Cloud-Lauf ---------------------------------------------------------------
+#
+# Drei Zusicherungen: Der Score-Vergleich ist beziffert und nicht nur behauptet,
+# der Generierungsschritt trifft genau den Chat-Pfad der Instanz, und das
+# url_token taucht in keiner Ausgabe auf - auch nicht in einer Fehlermeldung.
+
+TEST_TOKEN = "nur-ein-testwert-fuer-den-pfad-0001"
+
+
+def _cloud(handler: object) -> CloudZiel:
+    client = httpx.Client(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+    return CloudZiel("https://instanz.invalid", "sha256:abc", client)
+
+
+def test_scores_innerhalb_der_toleranz_gelten_als_gleich() -> None:
+    gleich, abweichung = vergleiche_scores([0.91, 0.87], [0.9101, 0.8699])
+    assert gleich is True
+    assert abweichung is not None and abweichung <= SCORE_TOLERANZ
+
+
+def test_scores_ausserhalb_der_toleranz_gelten_als_verschieden() -> None:
+    """Die Gegenprobe: Ein anderer Index darf nicht als gleich durchgehen."""
+    gleich, abweichung = vergleiche_scores([0.91, 0.87], [0.91, 0.80])
+    assert gleich is False
+    assert abweichung == pytest.approx(0.07)
+
+
+def test_verschiedene_laenge_gilt_als_verschieden() -> None:
+    assert vergleiche_scores([0.9, 0.8], [0.9]) == (False, None)
+
+
+def test_cloud_antwort_trifft_den_chatpfad() -> None:
+    gesehen: dict[str, object] = {}
+
+    def handler(anfrage: httpx.Request) -> httpx.Response:
+        gesehen["pfad"] = anfrage.url.path
+        gesehen["rumpf"] = json.loads(anfrage.content)
+        return httpx.Response(200, json={"escalated": False, "retrieval_scores": [0.9]})
+
+    daten = cloud_antwort(_cloud(handler), TEST_TOKEN, "Wie lange gilt die RMA?")
+
+    assert gesehen["pfad"] == f"/t/{TEST_TOKEN}/chat"
+    assert gesehen["rumpf"] == {"question": "Wie lange gilt die RMA?"}
+    assert TEST_TOKEN not in json.dumps(daten)
+
+
+def test_cloud_fehler_nennt_das_token_nicht() -> None:
+    """raise_for_status() wuerde die URL samt Token in die Meldung schreiben."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"detail": "Zu viele Anfragen."})
+
+    with pytest.raises(RuntimeError) as fehler:
+        cloud_antwort(_cloud(handler), TEST_TOKEN, "egal")
+
+    assert "429" in str(fehler.value)
+    assert TEST_TOKEN not in str(fehler.value)
+
+
+def test_cloud_lauf_ohne_image_digest_wird_abgelehnt() -> None:
+    """Ein Cloud-Ergebnis ohne Image-Bezug waere spaeter nicht einzuordnen."""
+    with pytest.raises(SystemExit):
+        main(["demo-acme", "--base-url", "https://instanz.invalid"])
+
+
+def test_cloud_lauf_mit_nur_retrieval_wird_abgelehnt() -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "demo-acme",
+                "--base-url",
+                "https://instanz.invalid",
+                "--image-digest",
+                "sha256:abc",
+                "--retrieval-only",
+            ]
+        )
