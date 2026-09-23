@@ -15,12 +15,30 @@ using 'main.bicep'
 param standort = 'swedencentral'
 param praefix = 'priv-ragdemo'
 param appName = 'ca-ragdemo'
-param image = 'ghcr.io/ozanyi1992/rag-support-demo@sha256:591fd63f83eb7f8e10f526147184fd039c72a888145e7886765b14840743616f'
+// Digest, kein Tag. Ein Tag laesst sich verschieben, ein Digest nicht.
+//
+// Nachgezogen am 2026-09-23 auf das Dreimandantenimage aus Commit bbe8b97.
+// Vorher: sha256:591fd63f... (zwei Mandanten, gebaut am 2026-09-18).
+//
+// Der Inhaltsvergleich gegen "git archive bbe8b97" ist vor dem Tag gelaufen,
+// Rueckgabewert 0, mit Gegenprobe. Die Layer sind anonym abrufbar, geprueft
+// ueber eine Bereichsabfrage gegen die Registry.
+param image = 'ghcr.io/ozanyi1992/rag-support-demo@sha256:25bc3bc724429a45cdfb059b0a0f5a55aa40478e1b94ca3bf0277160ea2e079c'
 param openaiModel = 'gpt-5.4-mini-2026-03-17'
 
 // 1 fuer die Akquise-Phase. Gemessen wurden 46 s von der ersten Anfrage bis /health, wenn
 // die App auf null skaliert war; das wartet kein Interessent ab. Wer die Outreach-Wellen
 // beendet, stellt hier auf 0 zurueck und spart die Wochenkosten.
+//
+// ENDDATUM 2026-10-31, festgelegt am 2026-09-23. Ein Datum und keine Bedingung: "wenn die
+// Wellen beendet sind" ist die Formulierung, bei der nichts passiert. Am 31.10. wird hier
+// auf 0 gestellt und neu deployt, unabhaengig davon, wie die Welle gelaufen ist.
+//
+// Die Zahlen dahinter, gemessen am 2026-09-23: Der Kaltstart betraegt lokal 10,25 s, davon
+// 8,2 s Containerstart. In der Cloud kommen 18 bis 21 s Ziehzeit und 12 bis 16 s
+// Plattformaktivierung dazu. Scale-to-zero heisst damit knapp eine Minute fuer den ersten
+// Klick eines Empfaengers - genau den Klick, auf den die Mail hinauslaeuft.
+// Rund fuenf Wochen zu 18,14 USD, also etwa 90 USD fuer die Welle.
 //
 // Der Wert steht hier UND als Standardwert in der Vorlage. Grund: Scale ist
 // revision-scope, und ein Deployment mit 0 wuerde eine Umstellung per CLI still
