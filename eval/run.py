@@ -298,6 +298,15 @@ class CloudZiel:
     image_digest: str
     client: httpx.Client
 
+    # Name der Revision, die zum Messzeitpunkt Verkehr getragen hat.
+    #
+    # Warum getrennt vom Digest: Der Digest sagt, was DEPLOYT wurde. Antworten
+    # kann in der Luecke eines Rollouts eine andere Revision - am 2026-09-23
+    # sind auf diese Weise drei Messwerte am Vorgaenger entstanden, alle echt
+    # gemessen und alle am falschen Gegenstand. Ohne diesen Namen ist einem
+    # Ergebnis hinterher nicht anzusehen, WER geantwortet hat.
+    revision: str | None = None
+
 
 def cloud_antwort(ziel: CloudZiel, url_token: str, frage: str) -> dict[str, Any]:
     """Stellt eine Frage an die deployte Instanz.
@@ -690,6 +699,7 @@ def fahre(
             "antwort_quelle": "cloud",
             "fqdn": urlparse(cloud.base_url).hostname,
             "image_digest": cloud.image_digest,
+            "antwortende_revision": cloud.revision,
             "rangliste_stimmt_ueberein": f"{gleich}/{len(verglichen)}",
             "score_abweichung_max": max(abweichungen) if abweichungen else None,
             "score_toleranz": SCORE_TOLERANZ,
@@ -757,7 +767,8 @@ def _zielzeile(kopf: dict[str, Any]) -> str:
     if kopf.get("ziel") != "cloud":
         return "ZIEL: lokal"
     return (
-        f"ZIEL: cloud ({kopf['fqdn']})   Raenge: lokal   "
+        f"ZIEL: cloud ({kopf['fqdn']})   Revision: {kopf.get('antwortende_revision')}   "
+        f"Raenge: lokal   "
         f"Top-k-Scores wie lokal: {kopf['rangliste_stimmt_ueberein']} "
         f"(max. Abweichung {kopf['score_abweichung_max']})"
     )
@@ -871,8 +882,22 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Pflicht zu --base-url: Digest des deployten Images, landet im Ergebniskopf",
     )
+    p.add_argument(
+        "--revision",
+        default=None,
+        help=(
+            "Name der Revision, die zum Messzeitpunkt Verkehr traegt. Pflicht zu "
+            "--base-url: Der Digest sagt, was deployt wurde, nicht wer geantwortet hat"
+        ),
+    )
     args = p.parse_args(argv)
 
+    if args.base_url and not args.revision:
+        p.error(
+            "--base-url verlangt --revision: Ein Cloud-Ergebnis ohne die antwortende "
+            "Revision ist nicht einzuordnen. In der Luecke eines Rollouts antwortet "
+            "der Vorgaenger, und das Ergebnis sieht genauso aus."
+        )
     if args.base_url and not args.image_digest:
         p.error(
             "--base-url verlangt --image-digest: "
@@ -896,7 +921,11 @@ def main(argv: list[str] | None = None) -> int:
 
     ERGEBNIS_DIR.mkdir(parents=True, exist_ok=True)
     with httpx.Client() as client:
-        cloud = CloudZiel(args.base_url, args.image_digest, client) if args.base_url else None
+        cloud = (
+            CloudZiel(args.base_url, args.image_digest, client, args.revision)
+            if args.base_url
+            else None
+        )
         for slug in slugs:
             bericht = fahre(slug, args.top_k, args.retrieval_only, args.lauf, args.baseline, cloud)
             pruefe_kopf(bericht)

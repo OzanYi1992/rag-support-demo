@@ -474,3 +474,33 @@ def test_aggregation_meldet_nichts_wenn_die_frage_getroffen_hat() -> None:
     a = aggregiere(ergebnisse, top_k=4, preise={}, modell=None)["direkt"]
 
     assert a["kontrollfrage_fehlt"] == []
+
+
+def test_cloud_lauf_ohne_revision_wird_abgelehnt() -> None:
+    """Ein Cloud-Ergebnis ohne die antwortende Revision ist nicht einzuordnen.
+
+    Der Digest sagt, was deployt wurde. In der Luecke eines Rollouts antwortet
+    der Vorgaenger, und das Ergebnis sieht genauso aus - am 2026-09-23 sind so
+    drei Messwerte am falschen Gegenstand entstanden.
+    """
+    with pytest.raises(SystemExit):
+        main(["demo-acme", "--base-url", "https://x.invalid", "--image-digest", "sha256:abc"])
+
+
+def test_cloud_ziel_traegt_die_revision() -> None:
+    """Gegenprobe zum Test darueber: mit Revision laesst sich das Ziel bauen."""
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    ziel = CloudZiel("https://x.invalid", "sha256:abc", client, "ca-ragdemo--0000002")
+    assert ziel.revision == "ca-ragdemo--0000002"
+    client.close()
+
+
+def test_cloud_ziel_ohne_revision_ist_moeglich_aber_leer() -> None:
+    """Das Feld hat einen Default, damit bestehende Aufrufe nicht brechen.
+
+    Erzwungen wird die Angabe auf der CLI, nicht im Datentyp - sonst waere jeder
+    Test, der ein CloudZiel baut, an einen Wert gebunden, der ihn nicht betrifft.
+    """
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    assert CloudZiel("https://x.invalid", "sha256:abc", client).revision is None
+    client.close()
