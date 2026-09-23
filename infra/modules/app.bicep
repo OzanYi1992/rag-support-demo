@@ -124,6 +124,48 @@ resource anwendung 'Microsoft.App/containerApps@2026-01-01' = {
               value: 'false'
             }
             {
+              // Behebt ein gemessenes Verhalten, kein vorsorglicher Schalter.
+              //
+              // BEFUND vom 2026-09-23, lokal gegen das Image bbe8b97: Eine Anfrage
+              // auf /t/<token> ohne abschliessenden Schraegstrich antwortet mit 307
+              // und einer Location, deren Schema IMMER http ist -- auch wenn die
+              // Anfrage X-Forwarded-Proto: https mitbringt. Der Ingress terminiert
+              // TLS und leitet intern per http weiter; die Antwort schickt den
+              // Client damit aus https heraus.
+              //
+              // URSACHE: uvicorn hat proxy_headers standardmaessig aktiv, vertraut
+              // den Kopfzeilen laut eigener Doku aber nur von 127.0.0.1 und ::1.
+              // Der Ingress erreicht den Container aus einer anderen Adresse, also
+              // werden sie verworfen. Der Startbefehl im Image setzt
+              // --forwarded-allow-ips nicht, deshalb greift die Umgebungsvariable:
+              // "Defaults to $FORWARDED_ALLOW_IPS if set."
+              //
+              // WARUM DAS HIER STEHT UND NICHT IM DOCKERFILE: Die Variable wirkt
+              // ohne Neubau. Image bbe8b97 und sein Digest bleiben gueltig, EN-4
+              // muss nicht wiederholt werden. Waere der Wert im CMD, haetten wir
+              // ein neues Image, einen neuen Digest und einen neuen
+              // Inhaltsvergleich fuer eine Einstellung, die zur Umgebung gehoert
+              // und nicht zum Programm.
+              //
+              // WERT '*' HEISST: JEDE ADRESSE DARF PROXY-KOPFZEILEN SETZEN.
+              // Das ist nur deshalb vertretbar, weil der Container ausschliesslich
+              // ueber den Ingress erreichbar ist -- targetPort ist nirgends sonst
+              // exponiert, es gibt keine zweite Route auf den Port.
+              //
+              // DIESE ANNAHME IST DIE GANZE BEGRUENDUNG. Waere der Port direkt
+              // erreichbar, koennte ein beliebiger Client X-Forwarded-Proto und
+              // X-Forwarded-For frei setzen: das Schema der Weiterleitungen faelschen
+              // und im Log eine fremde Herkunftsadresse hinterlassen.
+              //
+              // Wer die Netzkonfiguration aendert -- zweiter Ingress, internes
+              // Ingress zusaetzlich, Dapr, ein Sidecar, direkte Erreichbarkeit im
+              // VNet -- macht diesen Wert damit unsicher. Dann gehoert hier eine
+              // Adressliste hin und kein Stern. Der Kommentar steht hier, damit das
+              // bei einer solchen Aenderung auffaellt und nicht uebersehen wird.
+              name: 'FORWARDED_ALLOW_IPS'
+              value: '*'
+            }
+            {
               name: 'OPENAI_API_KEY'
               secretRef: 'openai-api-key'
             }
