@@ -154,7 +154,7 @@ def answer(
     # --- Generierung -------------------------------------------------------
     aktives_llm = llm if llm is not None else build_llm(aktive_settings, tenant.model_override)
     system_prompt = build_system_prompt(tenant, response_language)
-    user_prompt = build_user_prompt(question, treffer)
+    user_prompt = build_user_prompt(question, treffer, tenant.language)
 
     start = time.perf_counter()
     ergebnis = aktives_llm.generate(system_prompt, user_prompt)

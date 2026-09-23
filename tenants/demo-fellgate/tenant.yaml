@@ -38,10 +38,17 @@ escalation_message: >
 # Kein Override: dieser Mandant nutzt das Modell aus der Konfiguration.
 model_override: null
 
-# Kein Override: dieser Mandant nutzt RETRIEVAL_TOP_K aus der Konfiguration.
-# Bewusst wie demo-nordwind und anders als demo-acme, damit die drei Mandanten
-# sich nicht nur im Inhalt unterscheiden.
-retrieval_top_k: null
+# Verankert an demo-acme, NICHT an einem Messergebnis.
+#
+# Acme faehrt 6 bei 16.248 Zeichen Korpus, Fellgate hat 16.340 - praktisch
+# derselbe Umfang, also derselbe Wert. Das ist die ganze Begruendung.
+#
+# Was hier ausdruecklich NICHT eingeflossen ist: Im Goldsatzlauf vom 2026-09-22
+# lag eine erwartete Textstelle auf Chunkrang 7. Ein top_k von 7 haette genau
+# diese Frage gruen gemacht - und damit waere der Messaufbau aus dem
+# gewuenschten Ergebnis abgeleitet. Der Wert waere dann keine Einstellung mehr,
+# sondern eine Anpassung an den eigenen Test.
+retrieval_top_k: 6
 
 # Oeffentliche Adresse des Mandanten. Erzeugt mit
 # app.tenants.generate_url_token(): 32 Zeichen, 192 Bit, ohne Mandantennamen.

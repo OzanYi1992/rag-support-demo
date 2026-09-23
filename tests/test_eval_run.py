@@ -22,12 +22,17 @@ from eval.run import (
     ABW_NICHT_BEWERTBAR,
     ABW_NICHT_IM_KONTEXT,
     ABW_UNBESTIMMT,
+    KONTROLLE_RETRIEVAL,
+    KONTROLLE_SPRACHABSTAND,
     METRIK_DATEI_UND_CHUNK,
     QUELLE_NICHT_ANWENDBAR,
     SCORE_TOLERANZ,
     CloudZiel,
     Frageergebnis,
     _abweichungsklasse,
+    _hat_ziel_verfehlt,
+    _kontrolle_fahren,
+    aggregiere,
     cloud_antwort,
     main,
     pruefe_goldsatz,
@@ -163,7 +168,83 @@ def test_die_echten_goldsaetze_sind_gueltig() -> None:
     for pfad in sorted(pathlib.Path(EVAL_DIR).glob("*/gold.yaml")):
         pruefe_goldsatz(yaml.safe_load(pfad.read_text(encoding="utf-8")), str(pfad))
         geprueft += 1
-    assert geprueft == 2, "Es sollten zwei Goldsaetze geprueft worden sein."
+    assert geprueft == 3, "Es sollten drei Goldsaetze geprueft worden sein."
+
+
+def test_jede_erwartete_textstelle_steht_woertlich_im_korpus() -> None:
+    """Eine Textstelle mit Tippfehler misst dauerhaft null, ohne Fehlermeldung.
+
+    `rang_chunk` bleibt dann None, `antwort_im_kontext` False - und das sieht
+    im Ergebnis aus wie ein Retrievalproblem. Der Goldsatz waere kaputt, die
+    Zahl waere falsch, und nichts wuerde darauf hinweisen.
+
+    Beim Anlegen des Fellgate-Goldsatzes hat genau das zugeschlagen: zwei
+    Textstellen liefen im Dokument ueber einen Zeilenumbruch, standen im
+    Goldsatz aber einzeilig. Dieser Test faengt das.
+    """
+    import pathlib
+
+    import yaml
+
+    from eval.run import EVAL_DIR, QUELLE_PLATZHALTER
+
+    wurzel = pathlib.Path(EVAL_DIR).parent / "tenants"
+    geprueft = 0
+    fehlend: list[str] = []
+
+    for pfad in sorted(pathlib.Path(EVAL_DIR).glob("*/gold.yaml")):
+        gold = yaml.safe_load(pfad.read_text(encoding="utf-8"))
+        docs = wurzel / gold["mandant"] / "docs"
+        if not docs.is_dir():
+            pytest.skip(f"Kein Korpus unter {docs} - der Test waere blind.")
+        for f in gold["fragen"]:
+            stelle = f.get("erwartete_textstelle")
+            quelle = f.get("erwartete_quelle")
+            if not stelle or quelle in QUELLE_PLATZHALTER:
+                continue
+            datei = docs / quelle
+            if not datei.is_file():
+                fehlend.append(f"{f['id']}: Datei {quelle} fehlt")
+                continue
+            geprueft += 1
+            if stelle not in datei.read_text(encoding="utf-8"):
+                fehlend.append(f"{f['id']}: {stelle!r} steht nicht in {quelle}")
+
+    # Gegenprobe: Haette die Schleife nichts geprueft, waere ein leeres
+    # `fehlend` kein Ergebnis, sondern ein Werkzeugfehler.
+    assert geprueft > 10, f"Nur {geprueft} Textstellen geprueft - der Test waere fast blind."
+    assert not fehlend, "Erwartete Textstellen fehlen im Korpus:\n  " + "\n  ".join(fehlend)
+
+
+def test_jede_kontrollfrage_zielt_auf_dieselbe_stelle() -> None:
+    """Eine Kontrollfrage auf ein anderes Ziel beantwortet eine andere Frage.
+
+    Der Befund waere dann nicht deutbar: Ein Treffer der Kontrolle hiesse nicht
+    mehr "die Stelle ist erreichbar", sondern nur "irgendeine Stelle ist
+    erreichbar". Geprueft wird deshalb, dass ueberhaupt eine Stelle vorliegt,
+    an der sich beide messen lassen.
+    """
+    import pathlib
+
+    import yaml
+
+    from eval.run import EVAL_DIR
+
+    mit_kontrolle = 0
+    for pfad in sorted(pathlib.Path(EVAL_DIR).glob("*/gold.yaml")):
+        gold = yaml.safe_load(pfad.read_text(encoding="utf-8"))
+        for f in gold["fragen"]:
+            if not f.get("kontrollfrage"):
+                continue
+            mit_kontrolle += 1
+            assert f.get("erwartete_textstelle"), (
+                f"{f['id']} hat eine Kontrollfrage, aber keine erwartete Textstelle - "
+                f"dann gibt es keinen gemeinsamen Massstab."
+            )
+            assert f["kontrollfrage"] != f["frage"], (
+                f"{f['id']}: Kontrollfrage und Frage sind identisch."
+            )
+    assert mit_kontrolle >= 3, "Zu wenige Kontrollfragen - der Test waere fast blind."
 
 
 # --- Cloud-Lauf ---------------------------------------------------------------
@@ -243,3 +324,153 @@ def test_cloud_lauf_mit_nur_retrieval_wird_abgelehnt() -> None:
                 "--retrieval-only",
             ]
         )
+
+
+# --- Kontrollfrage ----------------------------------------------------------
+#
+# Wozu sie da ist: Eine kundennah formulierte Frage kann aus zwei Gruenden
+# scheitern - das Retrieval gibt die Stelle nicht her, oder die Frage ist
+# schlecht formuliert. Ohne Kontrollfall sind die beiden nicht zu trennen, und
+# ein roter Eintrag im Goldsatz ist dann nicht deutbar.
+
+
+class _FakeSuche:
+    """Liefert je Frage eine feste Trefferliste. Kein Modell, kein Index."""
+
+    def __init__(self, nach_frage: dict[str, list[tuple[str, str]]]) -> None:
+        self._nach_frage = nach_frage
+        self.gefragt: list[str] = []
+
+    def __call__(
+        self, slug: str, frage: str, k: int, settings: object, embeddings: object
+    ) -> list[object]:
+        self.gefragt.append(frage)
+
+        class _Treffer:
+            def __init__(self, quelle: str, text: str) -> None:
+                self.source_file = quelle
+                self.text = text
+                self.score = 0.9
+                self.tenant_slug = slug
+
+        return [_Treffer(q, t) for q, t in self._nach_frage.get(frage, [])]
+
+
+def _fahre_kontrolle(
+    monkeypatch: pytest.MonkeyPatch,
+    erg: Frageergebnis,
+    nach_frage: dict[str, list[tuple[str, str]]],
+    top_k: int = 2,
+) -> _FakeSuche:
+    suche = _FakeSuche(nach_frage)
+    monkeypatch.setattr("eval.run.search_tenant", suche)
+    _kontrolle_fahren("demo-test", erg, settings=None, top_k=top_k, gesamtzahl=10, embedder=None)  # type: ignore[arg-type]
+    return suche
+
+
+def test_verfehlt_wenn_datei_nicht_in_top_k() -> None:
+    assert _hat_ziel_verfehlt(_frage(in_top_k=False, antwort_im_kontext=True))
+
+
+def test_verfehlt_wenn_antwort_nicht_im_kontext() -> None:
+    """Datei auf Rang 3 nuetzt nichts, wenn der Chunk mit der Zahl fehlt."""
+    assert _hat_ziel_verfehlt(_frage(in_top_k=True, antwort_im_kontext=False))
+
+
+def test_nicht_verfehlt_wenn_beides_stimmt() -> None:
+    """Die Gegenprobe. Ohne sie faende der Test oben alles verfehlt."""
+    assert not _hat_ziel_verfehlt(_frage(in_top_k=True, antwort_im_kontext=True))
+
+
+def test_kontrolle_laeuft_gar_nicht_wenn_die_frage_getroffen_hat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sonst verdoppelt sie die Retrievalzeit jedes Laufs, ohne etwas zu sagen."""
+    erg = _frage(in_top_k=True, antwort_im_kontext=True, kontrollfrage="Dokumentfassung")
+    suche = _fahre_kontrolle(monkeypatch, erg, {})
+
+    assert suche.gefragt == []
+    assert erg.kontroll_befund is None
+
+
+def test_kontrolle_laeuft_nicht_ohne_kontrollfrage(monkeypatch: pytest.MonkeyPatch) -> None:
+    erg = _frage(in_top_k=False, antwort_im_kontext=False, kontrollfrage=None)
+    suche = _fahre_kontrolle(monkeypatch, erg, {})
+
+    assert suche.gefragt == []
+    assert erg.kontroll_befund is None
+
+
+def test_befund_retrieval_wenn_auch_die_dokumentfassung_nichts_findet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Beide scheitern -> das Retrieval gibt die Stelle nicht her."""
+    erg = _frage(in_top_k=False, antwort_im_kontext=False, kontrollfrage="Dokumentfassung")
+    suche = _fahre_kontrolle(
+        monkeypatch, erg, {"Dokumentfassung": [("b.md", "etwas ganz anderes")]}
+    )
+
+    assert suche.gefragt == ["Dokumentfassung"]
+    assert erg.kontroll_befund == KONTROLLE_RETRIEVAL
+    assert erg.kontroll_in_top_k is False
+
+
+def test_befund_sprachabstand_wenn_nur_die_dokumentfassung_findet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nur die Dokumentfassung trifft -> Abstand Kundensprache/Dokumentsprache.
+
+    Das ist ein Befund ueber das System, kein Fehler im Goldsatz. Genau diese
+    Unterscheidung ist der Zweck der Kontrollfrage.
+    """
+    erg = _frage(in_top_k=False, antwort_im_kontext=False, kontrollfrage="Dokumentfassung")
+    _fahre_kontrolle(monkeypatch, erg, {"Dokumentfassung": [("a.md", "eine Stelle steht hier")]})
+
+    assert erg.kontroll_befund == KONTROLLE_SPRACHABSTAND
+    assert erg.kontroll_rang == 1
+    assert erg.kontroll_antwort_im_kontext is True
+
+
+def test_kontrolle_misst_mit_demselben_massstab(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Richtige Datei, aber die Textstelle fehlt -> weiterhin Retrievalbefund.
+
+    Waere der Massstab hier lockerer als bei der eigentlichen Frage, verglichen
+    Befund und Fehlschlag zwei verschiedene Dinge.
+    """
+    erg = _frage(in_top_k=False, antwort_im_kontext=False, kontrollfrage="Dokumentfassung")
+    _fahre_kontrolle(monkeypatch, erg, {"Dokumentfassung": [("a.md", "steht nicht drin")]})
+
+    assert erg.kontroll_rang == 1
+    assert erg.kontroll_antwort_im_kontext is False
+    assert erg.kontroll_befund == KONTROLLE_RETRIEVAL
+
+
+def test_aggregation_weist_die_beiden_befunde_getrennt_aus() -> None:
+    """Zusammengezaehlt verdeckten sie genau den Unterschied, der zaehlt."""
+    ergebnisse = [
+        _frage(id="a", kontrollfrage="x", kontroll_befund=KONTROLLE_RETRIEVAL),
+        _frage(id="b", kontrollfrage="x", kontroll_befund=KONTROLLE_SPRACHABSTAND),
+        _frage(id="c", kontrollfrage="x", kontroll_befund=KONTROLLE_SPRACHABSTAND),
+        _frage(id="d", kontrollfrage="x", in_top_k=True, antwort_im_kontext=True),
+    ]
+    a = aggregiere(ergebnisse, top_k=4, preise={}, modell=None)["direkt"]
+
+    assert a["kontrolle_retrieval"] == 1
+    assert a["kontrolle_sprachabstand"] == 2
+    assert a["kontrolle_nicht_gefahren"] == 1
+
+
+def test_aggregation_meldet_eine_fehlende_kontrollfrage() -> None:
+    """Ein verfehlter Eintrag ohne Kontrollfall ist nicht deutbar - das muss auffallen."""
+    ergebnisse = [_frage(id="ohne-kontrolle", in_top_k=False, antwort_im_kontext=False)]
+    a = aggregiere(ergebnisse, top_k=4, preise={}, modell=None)["direkt"]
+
+    assert a["kontrollfrage_fehlt"] == ["ohne-kontrolle"]
+
+
+def test_aggregation_meldet_nichts_wenn_die_frage_getroffen_hat() -> None:
+    """Gegenprobe zum Test darueber."""
+    ergebnisse = [_frage(id="getroffen", in_top_k=True, antwort_im_kontext=True)]
+    a = aggregiere(ergebnisse, top_k=4, preise={}, modell=None)["direkt"]
+
+    assert a["kontrollfrage_fehlt"] == []

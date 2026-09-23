@@ -49,6 +49,7 @@ from app.escalation import (
 from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, answer
 from app.search import search_tenant
 from app.tenants import load_tenant
+from app.texts import VERFUEGBARE_SPRACHEN, passt_zur_sprache
 
 EVAL_DIR = PROJEKTWURZEL / "eval"
 ERGEBNIS_DIR = EVAL_DIR / "results"
@@ -118,6 +119,13 @@ HINWEIS_CROSS_LINGUAL_UMGEKEHRT = (
 )
 
 
+# Befunde der Kontrollfrage. Sie laeuft NUR, wenn die kundennah formulierte
+# Frage ihr Ziel verfehlt hat, und beantwortet dann genau eine Frage: Lag es am
+# Retrieval oder an der Distanz zwischen Kundensprache und Dokumentsprache?
+KONTROLLE_RETRIEVAL = "retrieval"  # auch die Dokumentformulierung findet nichts
+KONTROLLE_SPRACHABSTAND = "sprachabstand"  # nur die Dokumentformulierung findet
+
+
 @dataclass
 class Frageergebnis:
     id: str
@@ -152,6 +160,44 @@ class Frageergebnis:
     completion_tokens: int | None = None
     antworttext: str | None = None
     modell: str | None = None
+
+    # --- Kontrollfrage ---------------------------------------------------
+    # Die Dokumentformulierung derselben Frage, auf dieselbe Textstelle.
+    #
+    # Wozu: Eine kundennah formulierte Frage kann aus zwei Gruenden scheitern -
+    # weil das Retrieval die Stelle nicht hergibt, oder weil sie schlecht
+    # formuliert ist. Ohne Kontrollfall sind die beiden nicht zu trennen, und
+    # ein roter Goldsatzeintrag sagt dann nichts darueber aus, WAS nicht
+    # funktioniert.
+    #
+    # Findet die Dokumentformulierung ebenfalls nichts, liegt es am Retrieval.
+    # Findet sie, liegt es an der Distanz zwischen Kundensprache und
+    # Dokumentsprache - und das ist ein Befund ueber das System, kein Fehler im
+    # Goldsatz. Genau diese Unterscheidung ist der Grund, warum die
+    # Kontrollfrage existiert.
+    #
+    # Sie laeuft nur bei einem Fehlschlag und nur im Retrieval: kein
+    # Modellaufruf, keine Kosten, keine Verzerrung der Latenzzahlen.
+    kontrollfrage: str | None = None
+    kontroll_rang: int | None = None
+    kontroll_rang_chunk: int | None = None
+    kontroll_in_top_k: bool | None = None
+    kontroll_antwort_im_kontext: bool | None = None
+    kontroll_befund: str | None = None
+
+    # --- Antwortsprache ---------------------------------------------------
+    # `lang` ist die Angabe des MODELLS ueber die von ihm benutzte Sprache.
+    # `sprache_folgt_frage` ist die Nachpruefung an den Texten - die beiden
+    # koennen auseinanderfallen, und dann ist die Selbstauskunft falsch.
+    #
+    # Warum das hier steht: Am 2026-09-23 beantwortete der englische Mandant
+    # drei von elf englischen Fragen auf Deutsch. Aufgefallen ist das nur, weil
+    # jemand die Antworttexte gelesen hat - keine Zahl im Bericht zeigte es.
+    # Eine Eigenschaft, die man nur durch Lesen entdeckt, ist nicht gemessen.
+    lang: str | None = None
+    sprache_der_frage: str | None = None
+    sprache_der_antwort: str | None = None
+    sprache_folgt_frage: bool | None = None
 
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
@@ -289,6 +335,87 @@ def vergleiche_scores(lokal: list[float], cloud: list[float]) -> tuple[bool, flo
     return abweichung <= SCORE_TOLERANZ, round(abweichung, 6)
 
 
+def _hat_ziel_verfehlt(erg: Frageergebnis) -> bool:
+    """Verfehlt heisst: Datei nicht in den Top-k ODER Antwort nicht im Kontext.
+
+    Beides zaehlt, weil beides fuer den Interessenten dasselbe bedeutet - er
+    bekommt die Auskunft nicht. Die Datei auf Rang 3 zu haben nuetzt nichts,
+    wenn der Chunk mit der Zahl nie geliefert wurde.
+    """
+    if erg.erwartete_quelle and erg.erwartete_quelle not in QUELLE_PLATZHALTER:
+        if not erg.in_top_k:
+            return True
+    if erg.erwartete_textstelle and not erg.antwort_im_kontext:
+        return True
+    return False
+
+
+def _kontrolle_fahren(
+    slug: str,
+    erg: Frageergebnis,
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    embedder: Any,  # noqa: ANN401
+) -> None:
+    """Faehrt die Kontrollfrage, wenn die eigentliche Frage ihr Ziel verfehlt hat.
+
+    Bewusst NUR dann. Eine Kontrollfrage, die immer mitlaeuft, verdoppelt die
+    Retrievalzeit jedes Laufs und liefert in dem Fall, der interessiert, keine
+    zusaetzliche Information - denn wenn die Kundenfrage trifft, ist nichts zu
+    erklaeren.
+
+    `embedder` ist der bereits aufgeloeste Embedder des Aufrufers. Ihn hier neu
+    zu holen waere zwar zulaessig, wuerde die Messung aber um einen Aufruf
+    verschieben, den es im Normalfall nicht gibt.
+
+    `Any` fuer `embedder`: Der Typ ist E5Embeddings, aber eval/ importiert ihn
+    sonst nirgends und ein Import nur fuer eine Annotation zoege das
+    Embeddingmodul in jede Nutzung dieses Moduls.
+    """
+    if not erg.kontrollfrage or not _hat_ziel_verfehlt(erg):
+        return
+
+    alle = search_tenant(
+        slug, erg.kontrollfrage, k=gesamtzahl, settings=settings, embeddings=embedder
+    )
+
+    if erg.erwartete_quelle and erg.erwartete_quelle not in QUELLE_PLATZHALTER:
+        for platz, treffer in enumerate(alle, start=1):
+            if treffer.source_file == erg.erwartete_quelle:
+                erg.kontroll_rang = platz
+                break
+        erg.kontroll_in_top_k = erg.kontroll_rang is not None and erg.kontroll_rang <= top_k
+
+    if erg.erwartete_textstelle:
+        for platz, treffer in enumerate(alle, start=1):
+            if erg.erwartete_textstelle in treffer.text:
+                erg.kontroll_rang_chunk = platz
+                break
+        erg.kontroll_antwort_im_kontext = (
+            erg.kontroll_rang_chunk is not None and erg.kontroll_rang_chunk <= top_k
+        )
+
+    # Die Kontrollfrage gilt als getroffen, wenn sie dieselbe Huerde nimmt, an
+    # der die Kundenfrage gescheitert ist. Derselbe Massstab fuer beide, sonst
+    # vergleicht der Befund zwei verschiedene Dinge.
+    kontroll_ergebnis = Frageergebnis(
+        id=erg.id,
+        kategorie=erg.kategorie,
+        frage=erg.kontrollfrage,
+        erwartete_quelle=erg.erwartete_quelle,
+        erwartete_textstelle=erg.erwartete_textstelle,
+        erwartet_eskalation=erg.erwartet_eskalation,
+        rang=erg.kontroll_rang,
+        in_top_k=bool(erg.kontroll_in_top_k),
+        rang_chunk=erg.kontroll_rang_chunk,
+        antwort_im_kontext=erg.kontroll_antwort_im_kontext,
+    )
+    erg.kontroll_befund = (
+        KONTROLLE_RETRIEVAL if _hat_ziel_verfehlt(kontroll_ergebnis) else KONTROLLE_SPRACHABSTAND
+    )
+
+
 def eine_frage(
     slug: str,
     eintrag: dict[str, Any],
@@ -329,6 +456,9 @@ def eine_frage(
                 break
         erg.antwort_im_kontext = erg.rang_chunk is not None and erg.rang_chunk <= top_k
 
+    erg.kontrollfrage = eintrag.get("kontrollfrage")
+    _kontrolle_fahren(slug, erg, settings, top_k, gesamtzahl, embedder)
+
     top = alle[:top_k]
     lokale_scores = [t.score for t in top]
     erg.top_k_scores = [round(s, 4) for s in lokale_scores]
@@ -366,11 +496,39 @@ def eine_frage(
         erg.completion_tokens = antwort.completion_tokens
         erg.antworttext = antwort.text
         erg.modell = antwort.model
+        erg.lang = antwort.lang
 
     erg.tor = _tor_von(erg.grund)
     erg.eskalation_wie_erwartet = erg.eskaliert == erg.erwartet_eskalation
     erg.abweichungsklasse = _abweichungsklasse(erg)
+    _sprache_pruefen(erg)
     return erg
+
+
+def _rate_sprache(text: str) -> str | None:
+    """Raet die Sprache eines Textes ueber die Markerlisten aus app/texts.py.
+
+    Gibt None zurueck, wenn sich keine Sprache entscheiden laesst - bei einem
+    kurzen Text ohne Funktionswoerter etwa. Das ist kein Mangel: Eine geratene
+    Sprache waere schlechter als keine, weil sie in die Auswertung einginge.
+    """
+    passende = [s for s in VERFUEGBARE_SPRACHEN if passt_zur_sprache(text, s) is None]
+    return passende[0] if len(passende) == 1 else None
+
+
+def _sprache_pruefen(erg: Frageergebnis) -> None:
+    """Haelt fest, ob die Antwort der Sprache der Frage folgt.
+
+    Nur fuer nicht eskalierte Antworten. Der Eskalationstext ist der des
+    Mandanten und folgt per Konstruktion dessen Sprache, nicht der Frage - ihn
+    mitzuzaehlen wuerde die Zahl verwaessern.
+    """
+    if erg.eskaliert is not False or not erg.antworttext:
+        return
+    erg.sprache_der_frage = _rate_sprache(erg.frage)
+    erg.sprache_der_antwort = _rate_sprache(erg.antworttext)
+    if erg.sprache_der_frage and erg.sprache_der_antwort:
+        erg.sprache_folgt_frage = erg.sprache_der_frage == erg.sprache_der_antwort
 
 
 def aggregiere(
@@ -417,6 +575,30 @@ def aggregiere(
                 round(len(im_kontext) / len(mit_stelle), 4) if mit_stelle else None
             ),
             "raenge_chunk": [e.rang_chunk for e in mit_stelle],
+            # Kontrollfragen: Nur die gescheiterten Fragen haben einen Befund.
+            # Getrennt ausgewiesen, weil die beiden Befunde verschiedene Dinge
+            # bedeuten - "retrieval" ist ein Mangel, "sprachabstand" ist eine
+            # Eigenschaft, und beide in eine Zahl zu werfen verdeckt genau das.
+            "kontrolle_retrieval": sum(
+                1 for e in gruppe if e.kontroll_befund == KONTROLLE_RETRIEVAL
+            ),
+            "kontrolle_sprachabstand": sum(
+                1 for e in gruppe if e.kontroll_befund == KONTROLLE_SPRACHABSTAND
+            ),
+            "kontrolle_nicht_gefahren": sum(
+                1 for e in gruppe if e.kontrollfrage and e.kontroll_befund is None
+            ),
+            "kontrollfrage_fehlt": sorted(
+                e.id
+                for e in gruppe
+                if not e.kontrollfrage
+                and _hat_ziel_verfehlt(e)
+                and e.erwartete_quelle
+                and e.erwartete_quelle not in QUELLE_PLATZHALTER
+            ),
+            "sprache_folgt_frage_nicht": sorted(
+                e.id for e in gruppe if e.sprache_folgt_frage is False
+            ),
             "eskaliert": len(eskaliert),
             "eskaliert_retrieval": sum(1 for e in eskaliert if e.tor == "retrieval"),
             "eskaliert_groundedness": sum(1 for e in eskaliert if e.tor == "groundedness"),
@@ -610,6 +792,53 @@ def tabelle(bericht: dict[str, Any]) -> str:
         z.append(f"{kategorie:<26}{hit:>9}{antw:>9}{mrr:>7}{a['eskaliert']:>8}  {tore:<10}{p50:>6}")
     fremd = sorted({t for f in bericht["fragen"] for t in f["fremde_chunks"]})
     z += ["", f"Fremde Mandanten in irgendeiner Trefferliste: {fremd or 'keine'}"]
+
+    # Kontrollfragen. Ein Befund, der nirgends auftaucht, ist keiner.
+    befunde = [
+        (f["id"], f["kontroll_befund"], f["frage"], f.get("kontrollfrage"))
+        for f in bericht["fragen"]
+        if f.get("kontroll_befund")
+    ]
+    if befunde:
+        z += ["", "Kontrollfragen (nur bei verfehltem Ziel gefahren):"]
+        for fid, befund, frage, kontrolle in befunde:
+            deutung = (
+                "Retrieval gibt die Stelle nicht her"
+                if befund == KONTROLLE_RETRIEVAL
+                else "Abstand Kundensprache/Dokumentsprache - Befund, kein Goldsatzfehler"
+            )
+            z.append(f"  {fid}: {befund} - {deutung}")
+            z.append(f"      gefragt:    {frage}")
+            z.append(f"      Kontrolle:  {kontrolle}")
+
+    falsche_sprache = sorted(
+        {
+            fid
+            for a in bericht["aggregiert_je_kategorie"].values()
+            for fid in a.get("sprache_folgt_frage_nicht", [])
+        }
+    )
+    if falsche_sprache:
+        z += [
+            "",
+            f"ACHTUNG: Antwortsprache folgt der Frage NICHT: {', '.join(falsche_sprache)}",
+            "  Vor einem Interessenten ist das der sichtbarste Fehler ueberhaupt.",
+        ]
+
+    fehlt = sorted(
+        {
+            fid
+            for a in bericht["aggregiert_je_kategorie"].values()
+            for fid in a.get("kontrollfrage_fehlt", [])
+        }
+    )
+    if fehlt:
+        z += [
+            "",
+            f"ACHTUNG: verfehlt, aber ohne Kontrollfrage: {', '.join(fehlt)}",
+            "  Ohne Kontrollfall ist nicht zu sagen, ob es am Retrieval liegt",
+            "  oder an der Formulierung. Der rote Eintrag ist nicht deutbar.",
+        ]
     if not kopf["preise_hinterlegt"]:
         z.append("Kosten: keine Preise in eval/preise.yaml hinterlegt, Spalte leer.")
     return "\n".join(z)

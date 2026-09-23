@@ -115,6 +115,21 @@ _SPRACHE_VORGEGEBEN_EN = """\
 _ZUSATZ_DE = "\nZusaetzlich fuer diesen Mandanten:\n"
 _ZUSATZ_EN = "\nAdditionally for this tenant:\n"
 
+# Der Rahmen des Userprompts - die Woerter, die den Kontextblock und die Frage
+# beschriften.
+#
+# Bis zum 2026-09-23 waren diese vier Zeichenketten fest deutsch, fuer JEDEN
+# Mandanten. Ein englischer Mandant bekam damit bei jeder einzelnen Anfrage
+# einen deutsch gerahmten Prompt: "Kontext:", "[Quelle: ...]", "Frage:". Der
+# System-Prompt war englisch, der Userprompt deutsch - und gemessen hat das
+# Modell daraufhin drei von elf englischen Fragen auf Deutsch beantwortet.
+#
+# Das ist kein Schoenheitsfehler. Vor einem nordischen Empfaenger ist eine
+# deutsche Antwort auf eine englische Frage genau der Fehler, gegen den die
+# ganze EN-Reihe gebaut ist.
+_RAHMEN_DE = ("Kontext", "Quelle", "Frage", "(kein Kontext gefunden)")
+_RAHMEN_EN = ("Context", "Source", "Question", "(no context found)")
+
 
 class _Regelwerk(NamedTuple):
     """Die vier Bausteine des System-Prompts in einer Sprache."""
@@ -123,6 +138,8 @@ class _Regelwerk(NamedTuple):
     sprache_folgt_frage: str
     sprache_vorgegeben: str
     zusatz: str
+    # (Kontext, Quelle, Frage, kein-Kontext) - der Rahmen des Userprompts.
+    rahmen: tuple[str, str, str, str]
 
 
 # Das Regelwerk steht hier und nicht im Textkatalog: Es richtet sich an das
@@ -135,12 +152,14 @@ _REGELWERK: dict[str, _Regelwerk] = {
         sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_DE,
         sprache_vorgegeben=_SPRACHE_VORGEGEBEN_DE,
         zusatz=_ZUSATZ_DE,
+        rahmen=_RAHMEN_DE,
     ),
     "en": _Regelwerk(
         basis=_BASIS_REGELN_EN,
         sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_EN,
         sprache_vorgegeben=_SPRACHE_VORGEGEBEN_EN,
         zusatz=_ZUSATZ_EN,
+        rahmen=_RAHMEN_EN,
     ),
 }
 
@@ -177,15 +196,25 @@ def build_system_prompt(tenant: TenantConfig, response_language: str | None = No
     return "\n".join(teile)
 
 
-def build_user_prompt(question: str, hits: list[SearchHit]) -> str:
-    """Baut den Kontextblock und die Frage.
+def build_user_prompt(question: str, hits: list[SearchHit], language: str = "de") -> str:
+    """Baut den Kontextblock und die Frage, im Rahmen der Mandantensprache.
 
     Der Score steht bewusst NICHT im Kontext. Er ist eine interne Kennzahl; dem
     Modell hilft er nicht bei der Antwort und koennte es dazu verleiten, einen
     hohen Wert als Beleg fuer Abdeckung zu lesen. Genau diese Verwechslung -
     Aehnlichkeit statt Abdeckung - ist der Grund fuer das zweite Tor.
-    """
-    abschnitte = [f"[Quelle: {hit.source_file}]\n{hit.text}" for hit in hits]
-    kontext = "\n\n---\n\n".join(abschnitte) if abschnitte else "(kein Kontext gefunden)"
 
-    return f"Kontext:\n\n{kontext}\n\n---\n\nFrage: {question}"
+    `language` ist die Sprache des MANDANTEN, nicht die der Frage. Der Rahmen
+    gehoert zum Prompt und nicht zur Antwort: Er beschriftet dem Modell, was
+    Kontext ist und was Frage. Steht er in einer anderen Sprache als das
+    Regelwerk darueber, bekommt das Modell einen zweisprachigen Prompt - und
+    richtet sich bei der Antwortsprache messbar danach.
+
+    Default "de", damit ein Aufruf ohne Angabe sich verhaelt wie bisher.
+    """
+    kontext_wort, quelle_wort, frage_wort, leer = _REGELWERK[language].rahmen
+
+    abschnitte = [f"[{quelle_wort}: {hit.source_file}]\n{hit.text}" for hit in hits]
+    kontext = "\n\n---\n\n".join(abschnitte) if abschnitte else leer
+
+    return f"{kontext_wort}:\n\n{kontext}\n\n---\n\n{frage_wort}: {question}"

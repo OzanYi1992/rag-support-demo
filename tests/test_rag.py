@@ -397,6 +397,61 @@ def test_system_prompt_enthaelt_mandantenzusatz(umgebung: tuple[Settings, E5Embe
     assert "AUSSCHLIESSLICH aus dem gelieferten Kontext" in prompt
 
 
+def test_userprompt_eines_englischen_mandanten_ist_durchgehend_englisch() -> None:
+    """Der Rahmen des Userprompts folgt der Mandantensprache.
+
+    Der Fehler, den dieser Test faengt, ist am 2026-09-23 gemessen worden und
+    war vorher unsichtbar: Der System-Prompt war englisch, der Userprompt fest
+    deutsch. Das Modell bekam also bei jeder Anfrage einen zweisprachigen
+    Prompt - und beantwortete daraufhin drei von elf englischen Fragen auf
+    Deutsch.
+
+    Keine Zeile Code war dabei falsch, und kein Test war rot. Sichtbar wurde es
+    erst an den Antworttexten eines echten Laufs.
+    """
+    treffer = [
+        SearchHit(
+            tenant_slug="demo-englisch",
+            source_file="a.md",
+            chunk_index=0,
+            text="Standard delivery takes three working days.",
+            score=0.9,
+        )
+    ]
+    prompt = build_user_prompt("How long is delivery?", treffer, "en")
+
+    assert "Context:" in prompt
+    assert "[Source: a.md]" in prompt
+    assert "Question: How long is delivery?" in prompt
+    for deutsch in ("Kontext", "Quelle", "Frage"):
+        assert deutsch not in prompt, f"{deutsch!r} steht im englischen Userprompt"
+
+
+def test_userprompt_eines_deutschen_mandanten_bleibt_deutsch() -> None:
+    """Gegenprobe. Ohne sie zeigt der Test oben nur, dass sich etwas geaendert hat."""
+    treffer = [
+        SearchHit(
+            tenant_slug="demo-acme",
+            source_file="a.md",
+            chunk_index=0,
+            text="Die RMA-Nummer gilt 21 Kalendertage.",
+            score=0.9,
+        )
+    ]
+    prompt = build_user_prompt("Wie lange gilt die RMA?", treffer, "de")
+
+    assert "Kontext:" in prompt
+    assert "[Quelle: a.md]" in prompt
+    assert "Frage: Wie lange gilt die RMA?" in prompt
+    assert "Context" not in prompt
+
+
+def test_leerer_kontext_ist_ebenfalls_sprachabhaengig() -> None:
+    """Auch der Platzhalter fuer 'nichts gefunden' gehoert in die Mandantensprache."""
+    assert "(no context found)" in build_user_prompt("Anything?", [], "en")
+    assert "(kein Kontext gefunden)" in build_user_prompt("Irgendwas?", [], "de")
+
+
 def test_user_prompt_traegt_keinen_score() -> None:
     """Der Score ist eine interne Kennzahl.
 

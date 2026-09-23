@@ -1,0 +1,315 @@
+# Goldsatz demo-fellgate
+#
+# Messinstrument. Eine schwache Frage macht die Zahl unbrauchbar, ohne dass es
+# hinterher auffaellt - deshalb traegt jede Frage ihre Begruendung.
+#
+# Kategorien werden IMMER getrennt ausgewertet. Ein Mittel ueber alle Fragen
+# mittelt den cross_lingual-Ausfall mit den direkten Treffern weg und sieht
+# brauchbar aus, waehrend das Verkaufsargument nicht traegt.
+#
+# BESONDERHEIT DIESES GOLDSATZES, und der Grund, warum er anders gelesen werden
+# muss als die beiden deutschen:
+#
+# Korpus und Goldsatz stammen aus derselben Feder. Sollmenge und Istmenge haben
+# damit dieselbe Quelle, und eine kundennah gemeinte Frage, die zufaellig die
+# Woerter des Dokuments benutzt, besteht durch Konstruktion - gemessen waere
+# dann lexikalische Ueberlappung und nicht Retrieval. Zwei Vorkehrungen dagegen:
+#
+# 1. Jede umgangssprachliche Frage nennt unter geteilte_inhaltswoerter, welche
+#    Inhaltswoerter sie mit ihrem Beleg teilt. Sind es die Fachbegriffe des
+#    Dokuments, ist die Frage falsch gebaut und wird neu geschrieben. Ohne diese
+#    Notiz bleibt "kundennah formuliert" eine Behauptung.
+#
+# 2. Jede Frage, die ihr Ziel verfehlen KANN, traegt eine kontrollfrage: also
+#    ausser umgangssprachlich auch cross_lingual_umgekehrt und
+#    fremder_mandant. Es ist dieselbe Frage in
+#    der Sprache des Dokuments, auf dieselbe Textstelle. Sie laeuft NUR, wenn
+#    die eigentliche Frage ihr Ziel verfehlt, und nur im Retrieval. Sie trennt
+#    die beiden Gruende, aus denen eine kundennahe Frage scheitern kann:
+#      - Kontrolle findet auch nichts -> das Retrieval gibt die Stelle nicht her
+#      - Kontrolle findet    -> Abstand zwischen Kundensprache und
+#                               Dokumentsprache. Das ist ein Befund ueber das
+#                               System, kein Fehler im Goldsatz.
+#    Ohne diesen Kontrollfall ist ein roter Eintrag nicht deutbar.
+#
+# Die Kategorie direkt bleibt bewusst in Dokumentsprache, wie bei den beiden
+# deutschen Mandanten. Sie ist kein Retrievalmass, sondern der Kanarienvogel:
+# trifft sie nicht, ist etwas grundlegend falsch. Sie kundennah zu formulieren
+# haette sie mit umgangssprachlich verschmolzen und den Vergleich ueber die drei
+# Mandanten zerstoert.
+
+mandant: demo-fellgate
+stand: 2026-09-22
+korpus_dateien: 6
+korpus_chunks: 24
+
+fragen:
+
+  # --- direkt ---------------------------------------------------------------
+  # Dokumentsprache, Antwort steht woertlich da. Kanarienvogel, kein Messwert.
+
+  - id: fell-01
+    kategorie: direkt
+    frage: "How long is the return window?"
+    erwartete_quelle: returns-and-exchanges.md
+    erwartete_textstelle: "return window is **30 days**"
+    erwartet_eskalation: false
+    begruendung: >
+      Fachbegriff aus dem Dokument, Zahl steht woertlich da. Trifft das nicht
+      auf Rang 1, ist etwas grundlegend falsch.
+
+  - id: fell-02
+    kategorie: direkt
+    frage: "How long can an order be changed after it is confirmed?"
+    erwartete_quelle: order-status-and-changes.md
+    erwartete_textstelle: "changed for **60 minutes**"
+    erwartet_eskalation: false
+    begruendung: >
+      Zweiter Kanarienvogel, anderes Dokument. Prueft zugleich, ob der
+      Statusabschnitt vom Chunking sauber getrennt wird.
+
+  - id: fell-03
+    kategorie: direkt
+    frage: "What does a sole replacement for boots cost?"
+    erwartete_quelle: gear-care-and-repairs.md
+    erwartete_textstelle: "Sole replacement, boots | 65.00"
+    erwartet_eskalation: false
+    begruendung: >
+      Wert aus der Preistabelle. Prueft, ob Tabellenzeilen den Chunking-Schnitt
+      ueberleben - dieselbe Pruefung wie acme-03 bei der Rabattstaffel.
+
+  # --- umgangssprachlich ----------------------------------------------------
+  # So getippt, wie jemand es tatsaechlich tippt: klein, ohne Satzzeichen,
+  # als Situation statt als Fachbegriff.
+  #
+  # HIER liegt das Retrievalmass dieses Goldsatzes, nicht bei direkt.
+  # Jede Frage nennt ihre geteilten Inhaltswoerter und traegt ihre
+  # Kontrollfrage.
+
+  - id: fell-04
+    kategorie: umgangssprachlich
+    frage: "i bought boots three weeks ago and they dont fit am i too late"
+    erwartete_quelle: returns-and-exchanges.md
+    erwartete_textstelle: "return window is **30 days**"
+    erwartet_eskalation: false
+    kontrollfrage: "How long is the return window after delivery?"
+    geteilte_inhaltswoerter: >
+      boots. Sonst keines: weder "return" noch "window" noch "days" noch die
+      Zahl 30 kommen in der Frage vor. Die Frage nennt eine Situation - drei
+      Wochen her, passt nicht - und ueberlaesst dem Retrieval die Uebersetzung
+      in "Ruecksendefenster".
+    begruendung: >
+      Die Vorlage fuer diesen Goldsatz. "What is the return window" waere der
+      Dokumentsatz mit einem Fragezeichen; diese Fassung zwingt das Modell, aus
+      "drei Wochen" und "passt nicht" auf die Frist zu schliessen.
+
+  - id: fell-05
+    kategorie: umgangssprachlich
+    frage: "jacke lasst wasser durch obwohl sie neu aussieht was mache ich"
+    erwartete_quelle: gear-care-and-repairs.md
+    erwartete_textstelle: "Never use fabric softener"
+    erwartet_eskalation: false
+    kontrollfrage: "How do I wash and reproof a waterproof shell?"
+    geteilte_inhaltswoerter: >
+      keines. Weder "waterproof" noch "shell" noch "wash" noch "reproof" noch
+      "softener" stehen in der Frage. Zusaetzliche Huerde: Die Frage ist
+      DEUTSCH gestellt, waehrend Korpus und erwartete Stelle englisch sind -
+      insofern ueberlappt sie sich auch mit cross_lingual_umgekehrt, dort aber
+      mit anderer Erwartung.
+    begruendung: >
+      Zielabschnitt "Washing waterproof garments". Der Kunde beschreibt ein
+      Symptom (laesst Wasser durch), das Dokument beschreibt eine Ursache (die
+      Impraegnierung ist hin). Genau die Bruecke, die Semantik leisten muss und
+      Wortgleichheit nicht.
+
+  - id: fell-06
+    kategorie: umgangssprachlich
+    frage: "gesammelte punkte einfach weg wenn ich das konto zumache"
+    erwartete_quelle: trail-club-membership.md
+    erwartete_textstelle: "Closing forfeits any points"
+    erwartet_eskalation: false
+    kontrollfrage: "What happens to my points when I close my account?"
+    geteilte_inhaltswoerter: >
+      keines im Englischen. Die Frage ist deutsch; "punkte" und "konto" sind
+      Uebersetzungen von "points" und "account", keine woertlichen Treffer.
+    begruendung: >
+      Zielabschnitt "Closing an account". Der Abschnitt steht am Dateiende und
+      ist kurz - er misst zugleich, ob spaete Chunks einer Datei erreichbar
+      bleiben oder von den frueheren verdraengt werden.
+
+  # --- cross_lingual_umgekehrt ----------------------------------------------
+  # Deutsche Frage gegen den ENGLISCHEN Korpus. Die Gegenrichtung zu acme.
+  #
+  # Die Erwartung wird hier NICHT auf Erfolg gesetzt. Der Fehlschlag ist ein
+  # bekannter Befund (Language Bias, e5-small), kein neuer. Was zaehlt, ist der
+  # gemessene Rang, so wie er bei acme mit 22 und 20 dokumentiert ist.
+  #
+  # Beide Fragen sind ohne Wortbruecke gebaut. Die einzige Frage, die e5-small
+  # in der frueheren Messung loeste, hatte eine.
+
+  - id: fell-07
+    kategorie: cross_lingual_umgekehrt
+    frage: "bis wann kann ich eine bestellung noch stornieren"
+    erwartete_quelle: order-status-and-changes.md
+    erwartete_textstelle: "cancelled at any point before Dispatched"
+    erwartet_eskalation: false
+    kontrollfrage: "Until when can an order be cancelled?"
+    begruendung: >
+      Ziel ist "Cancelling". Keine Wortbruecke: "stornieren" und "cancel"
+      teilen kein Wort, "Bestellung" und "order" ebenfalls nicht.
+
+  - id: fell-08
+    kategorie: cross_lingual_umgekehrt
+    frage: "wie lange dauert es bis das geld zurueck auf der karte ist"
+    erwartete_quelle: payment-and-refunds.md
+    erwartete_textstelle: "5 working days from the day we process it"
+    erwartet_eskalation: false
+    kontrollfrage: "How long does a refund to a card take?"
+    begruendung: >
+      Ziel ist die Erstattungstabelle. "Karte" und "card" sind sich aehnlich
+      genug, um eine schwache Bruecke zu bilden - bewusst so gewaehlt, damit
+      die beiden cross_lingual-Fragen nicht beide am selben Extrem liegen.
+      fell-07 ist der harte Fall, fell-08 der mildere.
+
+  # --- nicht_abgedeckt ------------------------------------------------------
+  # Muessen eskalieren. Thematisch nah, inhaltlich nicht im Korpus.
+  #
+  # Geprueft wurde je Frage zweierlei: dass die Antwort nicht im Korpus steht,
+  # UND dass die naheliegende Halluzination keinen woertlichen Anker hat. Steht
+  # die plausible Erfindung woertlich da, ist Erfindung nicht von falscher
+  # Uebertragung zu trennen, und die Messung misst nichts.
+
+  - id: fell-09
+    kategorie: nicht_abgedeckt
+    frage: "How much is the student discount?"
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
+    erwartet_eskalation: true
+    thematisch_nah: trail-club-membership.md
+    naheliegende_halluzination: "ein Studentenrabatt von 10 Prozent"
+    anker_geprueft: >
+      "student|discount" - 0 Treffer im gesamten Korpus. Gegenprobe "return":
+      Treffer in fuenf von sechs Dateien, die Suche war also nicht blind.
+    begruendung: >
+      Im Outdoor-Versandhandel ueblich und deshalb plausibel. Der Korpus ist
+      voller Vergunstigungen - Stufen, Punkte, Freigrenzen -, sodass ein
+      Rabatt dazwischen naheliegt.
+
+  - id: fell-10
+    kategorie: nicht_abgedeckt
+    frage: "Do you match a competitor's price if I find the item cheaper elsewhere?"
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
+    erwartet_eskalation: true
+    thematisch_nah: payment-and-refunds.md
+    naheliegende_halluzination: >
+      die Regel aus "Price adjustments" uebertragen, also 14 Tage Differenz
+      erstatten - nur gilt die fuer den EIGENEN Preis, nicht fuer fremde.
+    anker_geprueft: >
+      "match|competitor|rival" - ein einziger Treffer, und der ist das
+      Wortfragment "rival" in "arrival" (gear-care-and-repairs.md, Turnaround).
+      Kein Konzepttreffer.
+    begruendung: >
+      Die haerteste der vier, und dieselbe Bauart wie acme-12. Der Abschnitt
+      "Price adjustments" trifft mit hohem Score und beantwortet die Frage
+      trotzdem nicht: Er regelt die eigene Preissenkung, nicht den Abgleich mit
+      einem Wettbewerber. Ein Modell, das beides gleichsetzt, antwortet
+      zuversichtlich falsch.
+
+  - id: fell-11
+    kategorie: nicht_abgedeckt
+    frage: "Can I have the parcel delivered to a parcel locker or pickup point?"
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
+    erwartet_eskalation: true
+    thematisch_nah: shipping-and-delivery.md
+    naheliegende_halluzination: "Zustellung an eine Paketstation gegen Aufpreis"
+    anker_geprueft: >
+      "locker|pickup point|collection point|click" - 0 Treffer. Der Korpus
+      kennt Zonen, Dienste und Fristen, aber keine Abgabestellen.
+    begruendung: >
+      Das Versanddokument ist detailliert genug, um den Eindruck zu erwecken,
+      es decke alle Zustellfragen ab. Genau dieser Eindruck ist die Falle.
+
+  - id: fell-12
+    kategorie: nicht_abgedeckt
+    frage: "Is there a warranty on a repair you have carried out?"
+    erwartete_quelle: nicht_anwendbar   # es GIBT keine richtige Quelle
+    erwartet_eskalation: true
+    thematisch_nah: gear-care-and-repairs.md
+    naheliegende_halluzination: "sechs Monate Gewaehrleistung auf die Reparatur"
+    anker_geprueft: >
+      "warrant|guarante" - ein Treffer, "under warranty" in
+      gear-care-and-repairs.md. Der bezieht sich auf die Zweijahresfrist fuer
+      MAENGEL, nicht auf eine Zusage fuer ausgefuehrte Reparaturen.
+    begruendung: >
+      Dieselbe Bauart wie acme-10: Der Begriff steht im Korpus, die Aussage
+      nicht. Das Dokument nennt Reparaturpreise und eine Zweijahresfrist
+      direkt nebeneinander - ein hilfsbereites Modell verbindet die beiden.
+
+  # --- fremder_mandant ------------------------------------------------------
+  # Trifft das Alleinstellungsmerkmal eines anderen Mandanten, klingt aber im
+  # eigenen Korpus plausibel, weil es dort ein thematisches Gegenstueck gibt.
+  # Ohne das Gegenstueck belegte ein sauberes Ergebnis nur, dass die Themen weit
+  # auseinanderliegen - und nicht, dass die Trennung greift.
+
+  - id: fell-13
+    kategorie: fremder_mandant
+    frage: "do i have to quote a case number when i follow up on a fault"
+    erwartete_quelle: shipping-and-delivery.md
+    erwartete_textstelle: "contact us with the order number"
+    # KORRIGIERT am 2026-09-22 nach dem ersten Lauf. Hier stand false, nach dem
+    # Muster von acme-13 und nord-13, wo das Gegenstueck im eigenen Korpus die
+    # Frage wirklich beantwortet.
+    #
+    # Hier tut es das nicht. Acmes "case number" und Fellgates "order number"
+    # sind keine Entsprechung, sondern zwei verschiedene Dinge: Das eine
+    # entsteht bei einer Stoerungsmeldung, das andere bei der Bestellung. Das
+    # Modell hat die Frage deshalb als unbeantwortbar behandelt, und das ist
+    # richtig - falsch war meine Erwartung.
+    erwartet_eskalation: true
+    kontrollfrage: "What do I need to provide when a parcel is late?"
+    verboten_aus: demo-acme
+    gegenstueck_im_eigenen_korpus: >
+      Abschnitt "When a parcel is late": Kontakt mit der ORDER NUMBER. Fellgate
+      hat also ein Aktenzeichen fuer Rueckfragen, es heisst nur anders und
+      entsteht anders.
+    begruendung: >
+      DER Isolationsfall dieses Projekts, und der Grund, warum der
+      Fellgate-Korpus technischen Support bewusst auslaesst.
+      tenants/demo-acme/docs/technical-support-en.md ist ENGLISCH - eine echte
+      Parallelfassung. Damit haben Frage, fremder Korpus und eigener Korpus
+      dieselbe Sprache, und was noch trennt, kann nur die Mandantengrenze sein.
+      Bei jeder anderen fremder_mandant-Frage kann die Sprachgrenze die
+      Trennung mitgetragen haben, ohne dass es auffaellt.
+
+      Die Erwartung ist Eskalation, und das ist der SCHAERFERE Nachweis als eine
+      Antwort aus dem eigenen Korpus: Das Modell sieht Fellgates order number,
+      erkennt sie als etwas anderes als eine case number und erfindet keine
+      Entsprechung. Ein Leck haette hier Acmes Vorgangsnummern geliefert.
+
+  - id: fell-14
+    kategorie: fremder_mandant
+    frage: "wird das zelt bis in die wohnung getragen und dort aufgebaut"
+    erwartete_quelle: shipping-and-delivery.md
+    erwartete_textstelle: "Oversized freight adds two working days"
+    # KORRIGIERT am 2026-09-22 nach dem zweiten Lauf, aus demselben Grund wie
+    # bei fell-13. Mit top_k 6 liegt die Stelle im Kontext, und das Modell
+    # eskaliert TROTZDEM - zu Recht.
+    #
+    # Mein Gegenstueck-Argument war falsch. Bei acme-13 verneint der Korpus
+    # ausdruecklich ("frei Bordsteinkante"), hier SCHWEIGT er: Geprueft mit
+    # "carr|assembl|into the|set up" gegen shipping-and-delivery.md - die
+    # einzigen Treffer sind "carrier" und "carries" in ganz anderem
+    # Zusammenhang. Schweigen ist kein Nein, und eine Antwort daraus zu bauen
+    # waere genau die Erfindung, die dieses System verhindern soll.
+    erwartet_eskalation: true
+    kontrollfrage: "How are oversized items such as tents delivered?"
+    verboten_aus: demo-nordwind
+    gegenstueck_im_eigenen_korpus: >
+      Abschnitt "Oversized items": Zelte ueber 6 kg reisen als Sperrgut, mit
+      zwei zusaetzlichen Werktagen. Fellgate regelt also grosse Sendungen -
+      sagt aber NICHT, wie weit die Lieferung geht. Das Gegenstueck macht die
+      Frage im eigenen Korpus plausibel, ohne sie zu beantworten.
+    begruendung: >
+      Trifft die Zwei-Mann-Montage von nordwind ins Zentrum. Beide Mandanten
+      versenden sperrige Gueter. Ein Leck waere hier inhaltlich verheerend: Der
+      Interessent bekaeme eine Zusage, die Fellgate nie gemacht hat - und
+      nordwinds Zwei-Mann-Montage steht woertlich als solche Zusage bereit.
