@@ -218,13 +218,39 @@ fragen:
     frage: "kann ich auf rechnung kaufen mit 14 tagen zahlungsziel"
     erwartete_quelle: massanfertigung-und-lieferzeiten.md
     erwartete_textstelle: "Anzahlung von 40 Prozent"
-    erwartet_eskalation: false
+    # Korrigiert am 2026-09-24 von false auf true.
+    #
+    # Die alte Erwartung war UNERREICHBAR, und das ist gemessen: Die erwartete
+    # Textstelle liegt auf Chunkrang 11. Nordwind faehrt top_k 4, und auch bei 6
+    # bliebe sie aussen. Sie erreicht das Modell nie, also kann die Antwort nicht
+    # aus ihr kommen - die Eskalation war nicht eine Instabilitaet, sondern der
+    # einzig moegliche Ausgang.
+    #
+    # Inhaltlich traegt die Korrektur ebenfalls: Der Korpus regelt den ZEITPUNKT
+    # der Zahlung (40 Prozent bei Freigabe, Rest vor Auslieferung), nicht die
+    # ZAHLUNGSART. "Kann ich auf Rechnung kaufen" ist damit nicht gedeckt, und
+    # eine Antwort waere eine Auskunft ueber etwas, das der Korpus nicht sagt.
+    #
+    # Die Erwartung wird ausdruecklich NICHT deshalb gedreht, weil gemessen 20
+    # von 20 eskaliert wurde. Sie wird gedreht, weil der Beleg auf Rang 11 liegt
+    # und weil der Korpus die Frage inhaltlich nicht beantwortet. Beides steht
+    # unabhaengig vom Ergebnis fest (P-023, dritte Ebene).
+    erwartet_eskalation: true
     verboten_aus: demo-acme
+    # Die Kontrollfrage unterscheidet Retrieval von Formulierung: Sie fragt
+    # dieselbe Auskunft in der Sprache des Dokuments. Kommt sie damit an den
+    # Chunk heran, liegt es an der Formulierung der Kundenfrage; kommt sie nicht
+    # heran, liegt es am Retrieval. Ohne sie ist der rote Eintrag nicht deutbar,
+    # und eval/run.py hat das zu Recht angemahnt.
+    kontrollfrage: "Wie hoch ist die Anzahlung bei einer Massanfertigung und wann ist der Rest faellig?"
     gegenstueck_im_eigenen_korpus: >
       Abschnitt "Anzahlung": 40 Prozent bei Freigabe, Restbetrag vor
       Auslieferung. Nordwind regelt Zahlungszeitpunkte, nur ohne Rechnungskauf.
+      Das ist ein Nachbarthema und keine Antwort auf die Frage nach der
+      Zahlungsart.
     begruendung: >
       Rechnungskauf mit 14 Tagen netto ist woertlich acme. Zusaetzlicher Reiz:
       "14 Tage" kommt bei nordwind ebenfalls vor - als Widerrufsfrist und als
       Erstattungsfrist. Die Zahl ist also im Korpus, die Aussage nicht. Wenn
-      eine Frage einen falschen Chunk anzieht, dann diese.
+      eine Frage einen falschen Chunk anzieht, dann diese. Genau das ist
+      eingetreten: widerruf.md gewinnt, und der Beleg liegt auf Rang 11.
