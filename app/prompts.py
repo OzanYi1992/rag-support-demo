@@ -4,49 +4,81 @@ Die Struktur ist der Kern dieser Datei. Ein Modell, das nur Text zurueckgibt,
 laesst sich nicht danach fragen, ob es die Antwort wirklich im Kontext gefunden
 hat - es wuerde die Frage im selben Fliesstext beantworten, den es gerade
 erfunden hat. Ein eigenes Feld dafuer trennt die Aussage von der Antwort.
+
+Drei Dinge gehen an das Modell, und alle drei sind sprachabhaengig:
+
+  Regelwerk           System-Prompt, `_REGELWERK` hier
+  Rahmen              Userprompt, `_RAHMEN_DE` / `_RAHMEN_EN` hier
+  Feldbeschreibungen  Strukturschema, Katalog in `app/texts.py`
+
+Die dritte Zeile ist am 2026-09-24 dazugekommen. Sie fehlte, und weil sie das
+Modell ueber `response_format` erreicht und kein Mensch sie liest, ist sie
+niemandem aufgefallen - bis ein englischer Mandant 23 von 30 Fragen auf Deutsch
+beantwortete. Wer hier eine vierte modellgerichtete Zeichenkette ergaenzt,
+prueft sie gegen alle Sprachen, nicht nur gegen die eigene.
 """
 
 from __future__ import annotations
 
+from functools import cache
 from typing import NamedTuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from app.search import SearchHit
 from app.tenants import TenantConfig
+from app.texts import schemabeschreibungen_fuer
 
 
+# Bewusst OHNE Docstring, und das ist kein Versehen: Pydantic uebernimmt den
+# Docstring einer Klasse als `description` der obersten Ebene in das JSON-Schema.
+# Diese Klasse ist nur die Struktur - Namen, Typen, Standardwerte - und soll dem
+# Modell keinen Text beitragen. Die Beschreibungen kommen sprachabhaengig aus
+# `antwortmodell_fuer()`.
+#
+# Was die Struktur leistet, gehoert trotzdem aufgeschrieben, deshalb hier:
+# `answerable` ist das zweite Eskalationstor (ADR-019). Es ist ein eigenes Feld
+# und keine Formulierung im Antworttext, weil ein "das steht leider nicht in den
+# Unterlagen" mitten in einem ansonsten erfundenen Absatz nicht auswertbar waere.
+#
+# Diese Klasse DIREKT an with_structured_output zu geben ist ein Fehler - das
+# Modell bekaeme ein Schema ohne jede Feldbeschreibung. Deshalb verlangt
+# build_llm() das Antwortmodell als Pflichtargument; es gibt keinen Standardwert,
+# auf den man versehentlich zurueckfallen kann.
 class GroundedAnswer(BaseModel):
-    """Was das Modell zurueckgeben muss.
+    answerable: bool
+    answer: str
+    sources: list[str] = Field(default_factory=list)
+    language: str = ""
 
-    `answerable` ist das zweite Eskalationstor. Es ist bewusst ein eigenes Feld
-    und keine Formulierung im Antworttext: Ein "das steht leider nicht in den
-    Unterlagen" mitten in einem ansonsten erfundenen Absatz waere nicht
-    auswertbar.
+
+@cache
+def antwortmodell_fuer(language: str) -> type[GroundedAnswer]:
+    """Die Antwortstruktur mit den Feldbeschreibungen dieser Sprache.
+
+    Warum das eine Funktion ist und keine zwei Klassen: Die Beschreibungen
+    stehen im Katalog in `app/texts.py`, zusammen mit der Liste der Sprachen.
+    Zwei handgeschriebene Klassen waeren eine zweite Aufzaehlung der Sprachen -
+    genau die Doppelfuehrung, die bei `languages` vor EN-1 schon einmal
+    auseinandergelaufen ist.
+
+    Der Cache haengt an der SPRACHE, nicht an einem Mandanten. Er beruehrt
+    ADR-001 nicht: Das Ergebnis ist eine Klasse ohne jeden Mandantenbezug, kein
+    Index und kein Retriever. Zwei Mandanten derselben Sprache teilen sie
+    gefahrlos, weil sie nichts als Beschreibungstexte traegt.
+
+    Der Klassenname bleibt "GroundedAnswer", damit der Name im Schema und in den
+    Fehlermeldungen des Providers derselbe bleibt wie bisher.
     """
-
-    answerable: bool = Field(
-        description=(
-            "true, wenn die Frage aus dem gelieferten Kontext vollstaendig "
-            "beantwortet werden kann. false, wenn der Kontext die Frage nicht "
-            "oder nur teilweise abdeckt."
-        )
-    )
-    answer: str = Field(
-        description=(
-            "Die Antwort, ausschliesslich aus dem Kontext. Leer lassen, wenn answerable false ist."
-        )
-    )
-    sources: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Dateinamen aus dem Kontext, auf denen die Antwort beruht. Nur "
-            "Dateinamen, die im Kontext vorkommen."
-        ),
-    )
-    language: str = Field(
-        default="",
-        description=("Sprache der Antwort als ISO-639-1-Kuerzel, etwa 'de' oder 'en'."),
+    beschreibung = schemabeschreibungen_fuer(language)
+    return create_model(
+        "GroundedAnswer",
+        __base__=GroundedAnswer,
+        __doc__=beschreibung.struktur,
+        answerable=(bool, Field(description=beschreibung.answerable)),
+        answer=(str, Field(description=beschreibung.answer)),
+        sources=(list[str], Field(default_factory=list, description=beschreibung.sources)),
+        language=(str, Field(default="", description=beschreibung.language)),
     )
 
 

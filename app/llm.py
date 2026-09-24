@@ -7,6 +7,11 @@ dieser Datei ist ein Fehler, kein Stil.
 
 Die Tokenzahlen gehen von Anfang an mit. Phase 6 braucht sie, und sie
 nachtraeglich einzuziehen hiesse, jede Aufrufstelle anzufassen.
+
+Alle drei Provider bekommen `temperature` aus den Settings. Seit dem 2026-09-24
+und mit Absicht: Ohne den Parameter entschied der Anbieter, und eine Aenderung
+seines Standards haette jede Messung dieses Projekts verschoben, ohne dass hier
+eine Zeile anders wird. Siehe `Settings.llm_temperature`.
 """
 
 from __future__ import annotations
@@ -64,11 +69,22 @@ class StructuredChatClient:
     und das faellt sofort auf.
     """
 
-    def __init__(self, chat_model: BaseChatModel, configured_model: str) -> None:
+    def __init__(
+        self,
+        chat_model: BaseChatModel,
+        configured_model: str,
+        answer_model: type[GroundedAnswer],
+    ) -> None:
         # include_raw=True liefert ein dict mit "raw", "parsed" und
         # "parsing_error". Nur so sind Struktur UND Tokenzahlen aus einem
         # einzigen Aufruf zu haben.
-        self._runnable = chat_model.with_structured_output(GroundedAnswer, include_raw=True)
+        #
+        # `answer_model` traegt die Feldbeschreibungen in der Sprache des
+        # Mandanten. Es ist ein Pflichtargument und kein Standardwert: Die
+        # Basisklasse GroundedAnswer hat gar keine Beschreibungen, und ein
+        # Standardwert waere der Weg, auf dem wieder ein Schema ohne oder in der
+        # falschen Sprache beim Modell landet.
+        self._runnable = chat_model.with_structured_output(answer_model, include_raw=True)
         self._configured_model = configured_model
 
     def generate(self, system_prompt: str, user_prompt: str) -> LlmResult:
@@ -103,11 +119,21 @@ def _require(settings: Settings, felder: dict[str, str | None], provider: str) -
         )
 
 
-def build_llm(settings: Settings, model_override: str | None = None) -> LlmClient:
+def build_llm(
+    settings: Settings,
+    model_override: str | None = None,
+    *,
+    answer_model: type[GroundedAnswer],
+) -> LlmClient:
     """Baut den Client fuer den konfigurierten Provider.
 
     Bewusst eine Funktion und kein Modul-Level-Objekt (ADR-001). `model_override`
     stammt aus der TenantConfig und sticht die globale Einstellung.
+
+    `answer_model` kommt aus `antwortmodell_fuer(tenant.language)` und traegt die
+    Feldbeschreibungen des Strukturschemas. Nur mit Schluesselwort und ohne
+    Standardwert, damit an keiner Aufrufstelle vergessen werden kann, in welcher
+    Sprache das Modell angesprochen wird.
 
     Geprueft wird die VOLLSTAENDIGE Konfiguration des Providers, nicht nur der
     Schluessel. Bei Azure fehlten sonst Endpunkt und API-Version, und es
@@ -121,7 +147,13 @@ def build_llm(settings: Settings, model_override: str | None = None) -> LlmClien
         from langchain_openai import ChatOpenAI
 
         return StructuredChatClient(
-            ChatOpenAI(model=modell, api_key=settings.openai_api_key), modell
+            ChatOpenAI(
+                model=modell,
+                api_key=settings.openai_api_key,
+                temperature=settings.llm_temperature,
+            ),
+            modell,
+            answer_model,
         )
 
     if provider == "azure":
@@ -142,8 +174,10 @@ def build_llm(settings: Settings, model_override: str | None = None) -> LlmClien
                 api_key=settings.azure_openai_api_key,
                 azure_endpoint=settings.azure_openai_endpoint,
                 api_version=settings.azure_openai_api_version,
+                temperature=settings.llm_temperature,
             ),
             modell,
+            answer_model,
         )
 
     if provider == "anthropic":
@@ -151,7 +185,13 @@ def build_llm(settings: Settings, model_override: str | None = None) -> LlmClien
         from langchain_anthropic import ChatAnthropic
 
         return StructuredChatClient(
-            ChatAnthropic(model=modell, api_key=settings.anthropic_api_key), modell
+            ChatAnthropic(
+                model=modell,
+                api_key=settings.anthropic_api_key,
+                temperature=settings.llm_temperature,
+            ),
+            modell,
+            answer_model,
         )
 
     raise LlmConfigError(f"Unbekannter LLM_PROVIDER: {provider!r}.")

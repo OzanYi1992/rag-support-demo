@@ -108,3 +108,35 @@ def test_absolute_pfade_bleiben_unangetastet(tmp_path: Path) -> None:
     assert settings.tenants_dir == eigen
     assert settings.index_dir == tmp_path / "idx"
     assert PROJEKTWURZEL not in settings.tenants_dir.parents
+
+
+# --- Sampling ---------------------------------------------------------------
+
+
+def test_temperatur_hat_einen_standard_und_der_ist_eins() -> None:
+    """1.0, weil die gpt-5-Familie nichts anderes annimmt.
+
+    Der Standard ist bewusst NICHT 0.0. langchain-openai verwirft jeden anderen
+    Wert als 1 fuer diese Modellfamilie still, und eine Einstellung, die nicht
+    im Payload ankommt, ist eine Behauptung. Siehe
+    `test_nur_temperatur_eins_erreicht_das_konfigurierte_modell`.
+    """
+    assert Settings(**PFLICHT).llm_temperature == 1.0
+
+
+def test_temperatur_nimmt_nur_werte_bis_eins() -> None:
+    """Obergrenze ist der Schnitt aller drei Provider aus ADR-006.
+
+    OpenAI nimmt bis 2.0, Anthropic nur bis 1.0. Ein Wert, der beim
+    Providerwechsel ungueltig wird, macht die Austauschbarkeit zur Behauptung.
+    """
+    with pytest.raises(ValueError):
+        Settings(**PFLICHT, llm_temperature=1.5)
+    with pytest.raises(ValueError):
+        Settings(**PFLICHT, llm_temperature=-0.1)
+
+
+def test_temperatur_nimmt_den_zulaessigen_bereich_an() -> None:
+    """Gegenprobe: Ein Validator, der alles ablehnt, prueft nichts."""
+    for wert in (0.0, 0.5, 1.0):
+        assert Settings(**PFLICHT, llm_temperature=wert).llm_temperature == wert

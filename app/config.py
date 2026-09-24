@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Wurzel des Projekts, abgeleitet aus dem ORT DIESER DATEI - nicht aus
@@ -82,6 +82,45 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str | None = None
     anthropic_model: str | None = None
+
+    # --- Sampling ----------------------------------------------------------
+    # Bis zum 2026-09-24 stand im Payload KEIN Sampling-Parameter. Damit
+    # entschied der Anbieter, und zwar unbemerkt: Aendert er seinen Standard,
+    # verschieben sich alle Messwerte dieses Projekts, ohne dass eine Zeile Code
+    # anders wird. Ein Goldsatz, dessen Streuung von einer Einstellung beim
+    # Anbieter abhaengt, misst nicht das System. Deshalb steht der Wert jetzt
+    # hier, unabhaengig davon, welche Zahl die richtige ist.
+    #
+    # WARUM DER STANDARD 1.0 IST UND NICHT 0.0, und das ist keine Vorliebe:
+    #
+    # Das konfigurierte Modell gehoert zur gpt-5-Familie, und die nimmt
+    # ausschliesslich temperature=1. langchain-openai wirft jeden anderen Wert
+    # in einem Validator STILL weg - kein Fehler, keine Warnung, das Feld ist
+    # danach None und der Parameter fehlt im Payload. Gemessen am 2026-09-24:
+    # uebergeben 0.0 -> Feld None -> Payload ohne temperature. Ein Default von
+    # 0.0 waere also eine Einstellung, die luegt.
+    #
+    # 1.0 ist damit der einzige Wert, der bei diesem Modell tatsaechlich im
+    # Payload ankommt - und genau das ist der Zweck: Wir behaupten die Zahl
+    # nicht, wir senden sie. Aendert der Anbieter seinen Standard, senden wir
+    # weiter 1.0.
+    #
+    # Was 1.0 NICHT leistet: die Streuung verkleinern. Sie bleibt, wie sie ist.
+    # Wer sie verkleinern will, braucht `reasoning_effort="none"` - das schaltet
+    # temperature bei dieser Familie frei, veraendert aber das Antwortverhalten
+    # des Modells und ist damit eine eigene Entscheidung mit eigener Messung
+    # (open-points.md, OP-056).
+    #
+    # Was 1.0 erst recht nicht leistet: die Antwortsprache. Die haengt am
+    # Strukturschema in app/texts.py. Gemessen mit dem damaligen deutschen
+    # Schema lieferte temperature=0 neun von zehn Antworten auf Deutsch - der
+    # Fehler wurde dadurch nicht kleiner, nur gleichmaessiger.
+    #
+    # Obergrenze 1.0 und nicht 2.0: Das ist der Schnitt der zulaessigen Bereiche
+    # aller drei Provider aus ADR-006. OpenAI nimmt bis 2.0, Anthropic nur bis
+    # 1.0. Ein Wert, der beim Providerwechsel ungueltig wird, macht die
+    # Austauschbarkeit zur Behauptung.
+    llm_temperature: float = Field(default=1.0, ge=0.0, le=1.0)
 
     # --- Embeddings --------------------------------------------------------
     # ADR-016: e5-small, Indexdimension 384. Entschieden ueber das Verhaeltnis von

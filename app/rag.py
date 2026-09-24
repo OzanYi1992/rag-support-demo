@@ -25,7 +25,7 @@ from app.config import Settings, get_settings
 from app.embeddings import E5Embeddings
 from app.escalation import EscalationStrategy, build_escalation_strategy
 from app.llm import LlmClient, build_llm
-from app.prompts import build_system_prompt, build_user_prompt
+from app.prompts import antwortmodell_fuer, build_system_prompt, build_user_prompt
 from app.search import SearchHit, search_tenant
 from app.tenants import TenantConfig, load_tenant
 
@@ -152,7 +152,19 @@ def answer(
         )
 
     # --- Generierung -------------------------------------------------------
-    aktives_llm = llm if llm is not None else build_llm(aktive_settings, tenant.model_override)
+    aktives_llm = (
+        llm
+        if llm is not None
+        else build_llm(
+            aktive_settings,
+            tenant.model_override,
+            # Die Sprache des MANDANTEN, nicht die der Frage: Das Schema gehoert
+            # zum Prompt und beschreibt dem Modell die Struktur. Ein englischer
+            # Mandant mit deutsch beschriebenen Feldern antwortet messbar
+            # deutsch, auch auf eine englische Frage (P-024, zweite Ebene).
+            answer_model=antwortmodell_fuer(tenant.language),
+        )
+    )
     system_prompt = build_system_prompt(tenant, response_language)
     user_prompt = build_user_prompt(question, treffer, tenant.language)
 

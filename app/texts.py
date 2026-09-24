@@ -18,8 +18,14 @@ Was hier NICHT hineingehoert:
   aufgeloest ist - an der Stelle gibt es keine Sprache. Zwei Wortlaute waeren
   ausserdem ein Orakel: Wer einen Unterschied sieht, kann Token einkreisen.
   Siehe `app/main.py`.
-* Das Regelwerk des System-Prompts. Es richtet sich an das Modell, nicht an
-  einen Menschen, und steht deshalb in `app/prompts.py`.
+* Das Regelwerk des System-Prompts. Es steht in `app/prompts.py`.
+
+Was hier seit dem 2026-09-24 SEHR WOHL hineingehoert, obwohl es sich an das
+Modell richtet und nicht an einen Menschen: die Feldbeschreibungen der
+Antwortstruktur, siehe `Schemabeschreibungen`. Damit tragen zwei Dateien je
+Sprache formulierten Text fuer das Modell - das Regelwerk dort, die
+Beschreibungen hier. Diese Grenze ist historisch und nicht sachlich; ob sie
+zusammengelegt wird, ist eine offene Frage (open-points.md, OP-055).
 """
 
 from __future__ import annotations
@@ -272,3 +278,115 @@ def texte_fuer(language: str) -> Texte:
             f"Vorhanden: {', '.join(VERFUEGBARE_SPRACHEN)}."
         )
     return TEXTE[language]
+
+
+# =============================================================================
+# DIE FELDBESCHREIBUNGEN DER ANTWORTSTRUKTUR
+#
+# Warum diese Texte eine Sprache haben muessen, und warum das teuer war:
+#
+# Bis zum 2026-09-24 waren sie fest deutsch, fuer JEDEN Mandanten. Sie gehen
+# nicht ueber den System- oder Userprompt an das Modell, sondern ueber
+# `response_format` - also an einer Stelle, die kein Mensch je zu Gesicht
+# bekommt und die keine Testhilfe beruehrt.
+#
+# Gemessen am 2026-09-24 gegen `demo-fellgate` (language: en), Frage
+# "Can I Return my boots", System- und Userprompt vollstaendig englisch:
+# 23 von 30 Antworten kamen auf DEUTSCH. Mit inhaltlich gleichen, aber
+# englischen Beschreibungen: 0 von 10. Eine Variable, eindeutige Wirkung.
+#
+# Das ist P-024 eine Ebene tiefer. Beim ersten Mal war es der Rahmen des
+# Userprompts, hier die Beschreibung des Feldes, in das die Antwort geschrieben
+# wird. Beide Male eine Anweisung in der falschen Sprache an einer Stelle, die
+# nur das Modell liest.
+# =============================================================================
+
+
+class Schemabeschreibungen(BaseModel, frozen=True):
+    """Die Feldbeschreibungen der Antwortstruktur in einer Sprache.
+
+    Die Feldnamen sind genau die des Schemas, damit die Zuordnung ohne
+    Nachdenken stimmt. `struktur` ist die Beschreibung der Struktur selbst; sie
+    landet im Schema als `description` auf der obersten Ebene.
+
+    Ein frozenes Modell und kein `dict`, aus demselben Grund wie bei `Texte`:
+    Eine im zweiten Katalog vergessene Zeile ist ein Fehler beim Import und
+    nicht eine deutsche Zeile im Prompt eines englischen Mandanten.
+    """
+
+    struktur: str
+    answerable: str
+    answer: str
+    sources: str
+    language: str
+
+
+# Der deutsche Wortlaut ist UNVERAENDERT der, der bis zum 2026-09-24 in
+# app/prompts.py stand - Zeichen fuer Zeichen, inklusive der Zeilenumbrueche im
+# Strukturtext. Fuer die deutschen Mandanten aendert sich damit nichts, und
+# `test_deutsches_schema_ist_wortgleich_mit_dem_alten_stand` haelt das fest.
+_SCHEMA_DE = Schemabeschreibungen(
+    struktur=(
+        "Was das Modell zurueckgeben muss.\n"
+        "\n"
+        "`answerable` ist das zweite Eskalationstor. Es ist bewusst ein eigenes Feld\n"
+        'und keine Formulierung im Antworttext: Ein "das steht leider nicht in den\n'
+        'Unterlagen" mitten in einem ansonsten erfundenen Absatz waere nicht\n'
+        "auswertbar."
+    ),
+    answerable=(
+        "true, wenn die Frage aus dem gelieferten Kontext vollstaendig "
+        "beantwortet werden kann. false, wenn der Kontext die Frage nicht "
+        "oder nur teilweise abdeckt."
+    ),
+    answer=(
+        "Die Antwort, ausschliesslich aus dem Kontext. Leer lassen, wenn answerable false ist."
+    ),
+    sources=(
+        "Dateinamen aus dem Kontext, auf denen die Antwort beruht. Nur "
+        "Dateinamen, die im Kontext vorkommen."
+    ),
+    language="Sprache der Antwort als ISO-639-1-Kuerzel, etwa 'de' oder 'en'.",
+)
+
+# Inhaltlich dieselben Aussagen, nicht mehr und nicht weniger. Insbesondere
+# bleibt Punkt 4 des Regelwerks erhalten - "oder nur teilweise abdeckt" ist die
+# Haelfte des Groundedness-Tors und darf in der Uebersetzung nicht weicher
+# werden.
+_SCHEMA_EN = Schemabeschreibungen(
+    struktur=(
+        "What the model must return.\n"
+        "\n"
+        "`answerable` is the second escalation gate. It is deliberately a field of\n"
+        'its own and not a phrase in the answer text: a "that is unfortunately not\n'
+        'in the documents" in the middle of an otherwise invented paragraph would\n'
+        "not be evaluable."
+    ),
+    answerable=(
+        "true if the question can be answered completely from the context "
+        "provided. false if the context does not cover the question, or "
+        "covers it only partially."
+    ),
+    answer=("The answer, exclusively from the context. Leave empty when answerable is false."),
+    sources=(
+        "File names from the context that the answer rests on. Only file "
+        "names that appear in the context."
+    ),
+    language="Language of the answer as an ISO 639-1 code, for example 'de' or 'en'.",
+)
+
+SCHEMABESCHREIBUNGEN: dict[str, Schemabeschreibungen] = {"de": _SCHEMA_DE, "en": _SCHEMA_EN}
+
+
+def schemabeschreibungen_fuer(language: str) -> Schemabeschreibungen:
+    """Liefert die Feldbeschreibungen einer Sprache.
+
+    Kein Rueckfall auf Deutsch, aus demselben Grund wie bei `texte_fuer`, und
+    hier waere der Rueckfall genau der Fehler, den diese Datei abstellt.
+    """
+    if language not in SCHEMABESCHREIBUNGEN:
+        raise KeyError(
+            f"Keine Schemabeschreibungen fuer die Sprache {language!r}. "
+            f"Vorhanden: {', '.join(sorted(SCHEMABESCHREIBUNGEN))}."
+        )
+    return SCHEMABESCHREIBUNGEN[language]
