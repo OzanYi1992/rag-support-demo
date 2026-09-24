@@ -17,13 +17,25 @@ param praefix = 'priv-ragdemo'
 param appName = 'ca-ragdemo'
 // Digest, kein Tag. Ein Tag laesst sich verschieben, ein Digest nicht.
 //
-// Nachgezogen am 2026-09-23 auf das Dreimandantenimage aus Commit bbe8b97.
-// Vorher: sha256:591fd63f... (zwei Mandanten, gebaut am 2026-09-18).
+// Nachgezogen am 2026-09-24 auf Commit 20351c0. Vorher:
+//   sha256:25bc3bc7... (Commit bbe8b97, drei Mandanten, 2026-09-23)
+//   sha256:591fd63f... (zwei Mandanten, 2026-09-18)
 //
-// Der Inhaltsvergleich gegen "git archive bbe8b97" ist vor dem Tag gelaufen,
-// Rueckgabewert 0, mit Gegenprobe. Die Layer sind anonym abrufbar, geprueft
-// ueber eine Bereichsabfrage gegen die Registry.
-param image = 'ghcr.io/ozanyi1992/rag-support-demo@sha256:25bc3bc724429a45cdfb059b0a0f5a55aa40478e1b94ca3bf0277160ea2e079c'
+// Was dieses Image gegenueber 25bc3bc7 traegt: das sprachabhaengige
+// Strukturschema (ADR-029), die gesetzte temperature (ADR-030), Quellen je
+// Datei mit dem richtigen Score, die Themen in der Begruessung, Cache-Busting
+// ueber einen Inhaltsschluessel und die Laengenbegrenzung in der Anzeige.
+//
+// Was es ausdruecklich NICHT traegt: eine Knappheitsforderung im Prompt. Sie
+// hat zweimal eine Eigenschaft beschaedigt, mit der sie inhaltlich nichts zu
+// tun hat - erst die Antwortsprache, dann das Eskalationstor (pitfalls.md,
+// P-030).
+//
+// Geprueft vor dem Tag, beides mit Gegenprobe:
+//   Inhaltsvergleich gegen "git archive 20351c0"  Rueckgabewert 0
+//   Layer anonym abrufbar, Bereichsabfrage        HTTP 206
+//   Attestation vcs:revision                      20351c010bd059c8...
+param image = 'ghcr.io/ozanyi1992/rag-support-demo@sha256:9fa76bc7de3ed805907a71253141883fafbed99173128b98b111f2ad7ead7910'
 param openaiModel = 'gpt-5.4-mini-2026-03-17'
 
 // 1 fuer die Akquise-Phase. Gemessen wurden 46 s von der ersten Anfrage bis /health, wenn
