@@ -337,6 +337,19 @@ class CloudZiel:
     revision: str | None = None
 
 
+# Pause zwischen zwei Cloudaufrufen, in Sekunden.
+#
+# Die Anwendung begrenzt auf 30 Anfragen je 60 Sekunden und Token
+# (app/main.py, RateLimiter). Ein Lauf mit fuenf Wiederholungen je Frage stellt
+# 70 Anfragen an denselben Mandanten - ohne Pause laeuft er nach etwa der Haelfte
+# in ein 429 und stirbt mitten in der Messung.
+#
+# 2.2 Sekunden ergeben rund 27 Anfragen je Minute und damit Luft nach unten. Die
+# Pause verfaelscht keine Messung: Latenzen kommen aus den Feldern der Antwort,
+# nicht aus der Wanduhr.
+CLOUD_PAUSE_S = 2.2
+
+
 def cloud_antwort(ziel: CloudZiel, url_token: str, frage: str) -> dict[str, Any]:
     """Stellt eine Frage an die deployte Instanz.
 
@@ -345,18 +358,27 @@ def cloud_antwort(ziel: CloudZiel, url_token: str, frage: str) -> dict[str, Any]
     die Zugangskontrolle (ADR-007), und Ergebnisdateien liegen im oeffentlichen
     Repository. Deshalb kein raise_for_status(): dessen Meldung enthaelt die URL.
     """
-    antwort = ziel.client.post(
-        f"{ziel.base_url.rstrip('/')}/t/{url_token}/chat",
-        json={"question": frage},
-        timeout=180.0,
-    )
-    if antwort.status_code != 200:
+    adresse = f"{ziel.base_url.rstrip('/')}/t/{url_token}/chat"
+    for versuch in (1, 2):
+        antwort = ziel.client.post(adresse, json={"question": frage}, timeout=180.0)
+        if antwort.status_code == 200:
+            daten: dict[str, Any] = antwort.json()
+            return daten
+        # Ein 429 ist kein Messergebnis, sondern ein Taktproblem: Die Anfrage hat
+        # das Modell nie erreicht. Der Limiter sagt selbst, wie lange zu warten
+        # ist - also wird gewartet und einmal wiederholt, statt den Lauf zu
+        # verlieren. Eine Wiederholung verfaelscht nichts, weil nichts gemessen
+        # wurde.
+        if antwort.status_code == 429 and versuch == 1:
+            warte = int(antwort.headers.get("Retry-After", "5")) + 1
+            print(f"    HTTP 429, warte {warte} s und wiederhole einmal", file=sys.stderr)
+            time.sleep(warte)
+            continue
         raise RuntimeError(
-            f"Cloud antwortete mit HTTP {antwort.status_code}. "
+            f"Cloud antwortete mit HTTP {antwort.status_code} in Versuch {versuch}. "
             f"Die URL wird nicht ausgegeben, sie enthaelt das url_token."
         )
-    daten: dict[str, Any] = antwort.json()
-    return daten
+    raise RuntimeError("Cloud antwortete zweimal nicht mit 200.")
 
 
 def vergleiche_scores(lokal: list[float], cloud: list[float]) -> tuple[bool, float | None]:
@@ -521,6 +543,12 @@ def eine_frage(
     scorelisten: list[list[float]] = []
 
     for lauf_nr in range(laeufe):
+        # Vor JEDEM Cloudaufruf, auch dem ersten einer Frage. Nur zwischen den
+        # Wiederholungen zu pausieren waere ein Taktfehler: Fuenf Aufrufe in neun
+        # Sekunden und dann sofort die naechste Frage ergeben rund 33 Anfragen je
+        # Minute - drei ueber dem Limit, und der Lauf stirbt nach etwa der Haelfte.
+        if cloud is not None:
+            time.sleep(CLOUD_PAUSE_S)
         if cloud is not None:
             # Nur die Generierung laeuft gegen die deployte Instanz. Die Raenge
             # oben bleiben lokal - die Schnittstelle liefert keine vollstaendige
@@ -940,8 +968,8 @@ def tabelle(bericht: dict[str, Any]) -> str:
         _zielzeile(kopf),
         f"{'=' * 78}",
         "",
-        f"{'Kategorie':<24}{'Hit@k':>7}{'Kontext':>8}{'MRR':>7}"
-        f"{'Eskal.':>8}{' Tor':<10}{'Sprache':>9}{'p50':>6}",
+        f"{'Kategorie':<22}{'Hit@k':>6}{'Kontext':>8}{'MRR':>6}"
+        f"{'Eskal.':>7}{'wieErw':>8}{' Tor':<10}{'Sprache':>8}{'p50':>6}",
         "-" * 78,
     ]
     for kategorie, a in bericht["aggregiert_je_kategorie"].items():
@@ -965,8 +993,25 @@ def tabelle(bericht: dict[str, Any]) -> str:
         # Eskalation als LAEUFE, gleiche Zaehlweise wie die Sprachspalte. "3/10"
         # heisst drei von zehn Laeufen dieser Kategorie eskalierten.
         eskal = f"{a['eskaliert_laeufe']}/{a['laeufe_gesamt']}"
+
+        # "wieErw" macht die Zeile ueberhaupt lesbar, ergaenzt am 2026-09-24.
+        # Grund: Die Kategorie fremder_mandant bedeutet je Mandant das GEGENTEIL.
+        # Bei demo-fellgate muss eskaliert werden, die Antwort liegt nur im
+        # fremden Korpus. Bei demo-acme und demo-nordwind gerade nicht - dort ist
+        # es eine fremd KLINGENDE Frage, die der eigene Korpus deckt. Ohne diese
+        # Spalte liest sich "9/10 eskaliert" bei Acme wie ein Erfolg und ist fast
+        # durchweg ein Fehlschlag. Siehe OP-058.
+        # Gegaengelt am vorhandenen Feld eskalation_wie_erwartet: Es ist None,
+        # wenn keine Frage eine Eskalationsentscheidung hatte - also im reinen
+        # Retrievallauf. Dort waere "0/4" kein Ergebnis, sondern ein Fehlschluss.
+        wie_erwartet = (
+            f"{a['eskalation_wie_erwartet_laeufe']}/{a['laeufe_gesamt']}"
+            if a.get("eskalation_wie_erwartet") is not None
+            else "–"
+        )
         z.append(
-            f"{kategorie:<24}{hit:>7}{antw:>8}{mrr:>7}{eskal:>8} {tore:<9}{sprache:>9}{p50:>6}"
+            f"{kategorie:<22}{hit:>6}{antw:>8}{mrr:>6}"
+            f"{eskal:>7}{wie_erwartet:>8} {tore:<9}{sprache:>8}{p50:>6}"
         )
     fremd = sorted({t for f in bericht["fragen"] for t in f["fremde_chunks"]})
     z += ["", f"Fremde Mandanten in irgendeiner Trefferliste: {fremd or 'keine'}"]
