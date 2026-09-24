@@ -32,6 +32,15 @@
     return { huelle: huelle, inhalt: inhalt };
   }
 
+  // quellen und scores kommen BEIDE aus daten.source_scores beziehungsweise
+  // daten.sources und sind gleich lang - der Server hat sie in
+  // app/rag.py, _quellen_verdichten() gemeinsam gebildet: eine Datei, ein
+  // Eintrag, der beste Score der Chunks dieser Datei.
+  //
+  // Bis zum 2026-09-24 stand hier daten.retrieval_scores. Das war falsch, und
+  // zwar unauffaellig falsch: Die Liste zaehlt CHUNKS in Trefferreihenfolge,
+  // quellen zaehlt DATEIEN, die das Modell zitiert. Die Zahl neben einem
+  // Dateinamen war damit der Score des i-ten Chunks und nicht der dieser Datei.
   function quellenAnhaengen(inhalt, quellen, scores) {
     if (!quellen || quellen.length === 0) return;
     var block = document.createElement("div");
@@ -103,7 +112,7 @@
         if (daten.escalated) {
           eskalationAnhaengen(wartet.inhalt);
         } else {
-          quellenAnhaengen(wartet.inhalt, daten.sources, daten.retrieval_scores);
+          quellenAnhaengen(wartet.inhalt, daten.sources, daten.source_scores);
         }
       })
       .catch(function (fehler) {

@@ -45,6 +45,7 @@ def _lege_mandant_an(root: Path, slug: str, text: str, token: str) -> None:
             {
                 "display_name": slug,
                 "language": "de",
+                "topics": "Versand und Retouren",
                 "escalation_message": "Dazu finde ich nichts.",
                 "url_token": token,
                 "public_image_allowed": True,

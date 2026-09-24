@@ -11,6 +11,8 @@ geantwortet wird - das tut test_rag.py. Hier geht es um vier Fragen:
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 
 import pytest
@@ -18,8 +20,9 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.embeddings import E5Embeddings
-from app.main import NICHT_GEFUNDEN, create_app
+from app.main import NICHT_GEFUNDEN, create_app, statische_fassung
 from app.prompts import GroundedAnswer
+from app.tenants import load_tenant
 from app.texts import JAVASCRIPT_SCHLUESSEL
 from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, lege_mandant_an
 
@@ -681,3 +684,118 @@ def test_fehlschlag_beim_laden_verhindert_den_start(
         with TestClient(app):
             pass
     assert fabrik.aufrufe == 1
+
+
+# =============================================================================
+# CACHE: die Seite nie, die versionierten Dateien lange
+#
+# Der Anlass steht in OP-054. Am 2026-09-23 lieferte ein Browser ein app.js von
+# vor EN-1 mit deutschen Zeichenketten aus, obwohl die Datei im Image englisch
+# war. Gemeldet als Sprachfehler, war es ein Cachefehler - /static/ trug keinen
+# Cache-Control-Kopf, und der Browser entschied nach eigener Heuristik.
+#
+# Geprueft wird an den Kopfzeilen und an der ausgelieferten Adresse, nicht am
+# Code, der sie erzeugt.
+# =============================================================================
+
+
+def test_die_seite_wird_nie_zwischengespeichert(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """no-store, aus zwei Gruenden.
+
+    Die Seite traegt die Adressen der versionierten Dateien - eine
+    zwischengespeicherte Seite verweist weiter auf die alte Fassung, und das
+    Verfahren laeuft leer. Und sie traegt das url_token, das ist die
+    Zugangskontrolle (ADR-007).
+    """
+    client, _ = _client(umgebung)
+    antwort = client.get(f"/t/{ACME_TOKEN}/")
+    assert antwort.status_code == 200
+    assert antwort.headers["Cache-Control"] == "no-store"
+
+
+def test_versionierte_dateien_duerfen_lange_behalten_werden(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Lange und immutable - unter einer gegebenen Adresse kann sich nichts
+    aendern, weil der Inhaltsschluessel in der Adresse steht."""
+    client, _ = _client(umgebung)
+    for pfad in ("/static/app.js", "/static/style.css"):
+        antwort = client.get(pfad)
+        assert antwort.status_code == 200, pfad
+        kopf = antwort.headers["Cache-Control"]
+        assert "immutable" in kopf, pfad
+        assert "max-age=31536000" in kopf, pfad
+
+
+def test_die_vorlage_unter_static_wird_nicht_zwischengespeichert(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """index.html liegt im selben Verzeichnis, darf aber nicht lange gelten.
+
+    Sie ist die Vorlage mit den Platzhaltern. Ein immutable darauf waere genau
+    der Fehler, den dieses Verfahren verhindern soll - nur eine Ebene hoeher.
+    """
+    client, _ = _client(umgebung)
+    antwort = client.get("/static/index.html")
+    assert antwort.status_code == 200
+    assert antwort.headers["Cache-Control"] == "no-store"
+
+
+def test_die_seite_bindet_die_dateien_mit_fassungsschluessel_ein(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Weg A aus OP-054: Die Adresse traegt den Schluessel.
+
+    Geprueft wird die ausgelieferte Seite, nicht die Vorlage - zwischen beiden
+    liegt die Ersetzung, und ein nicht ersetzter Platzhalter waere hier sichtbar.
+    """
+    client, _ = _client(umgebung)
+    seite = client.get(f"/t/{ACME_TOKEN}/").text
+    treffer = re.findall(r"/static/(app\.js|style\.css)\?v=([0-9a-f]+)", seite)
+    assert len(treffer) == 2, f"nicht beide Dateien versioniert: {treffer}"
+    schluessel = {wert for _, wert in treffer}
+    assert len(schluessel) == 1, f"verschiedene Schluessel: {schluessel}"
+    assert "{{fassung}}" not in seite
+
+
+def test_der_fassungsschluessel_folgt_dem_inhalt(tmp_path: Path) -> None:
+    """Aendert sich eine Datei, aendert sich der Schluessel - und nur dann.
+
+    Das ist der Unterschied zum Commit als Schluessel: Ein Commit an einer
+    beliebigen Stelle des Projekts wuerde jeden Browsercache entwerten, ein
+    Inhaltshash nur den betroffenen.
+    """
+    verzeichnis = tmp_path / "static"
+    verzeichnis.mkdir()
+    (verzeichnis / "app.js").write_text("var a = 1;", encoding="utf-8")
+    (verzeichnis / "style.css").write_text("body {}", encoding="utf-8")
+
+    vorher = statische_fassung(verzeichnis)
+
+    # Eine unbeteiligte Datei aendert nichts.
+    (verzeichnis / "liesmich.txt").write_text("egal", encoding="utf-8")
+    assert statische_fassung(verzeichnis) == vorher
+
+    # Eine eingebundene Datei aendert alles.
+    (verzeichnis / "app.js").write_text("var a = 2;", encoding="utf-8")
+    nachher = statische_fassung(verzeichnis)
+    assert nachher != vorher
+    assert len(nachher) == 12
+
+
+def test_die_begruessung_nennt_die_themen_des_mandanten(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Ein Interessent soll wissen, worueber er fragen kann.
+
+    Ohne diese Angabe fragt er, was ihm einfaellt, bekommt eine korrekte
+    Eskalation und haelt das System fuer schwach.
+    """
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    seite = client.get(f"/t/{ACME_TOKEN}/").text
+    mandant = load_tenant("demo-acme", settings.tenants_dir)
+    for wort in mandant.topics.split():
+        assert html.escape(wort) in seite, wort

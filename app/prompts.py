@@ -144,6 +144,56 @@ _SPRACHE_VORGEGEBEN_EN = """\
    "{response_language}" in language.
 """
 
+# Die Knappheitsforderung. Sie steht am USERPROMPT bei der Frage und NICHT als
+# Regel 6 und 7 im Regelwerk - und das ist gemessen, nicht gewaehlt.
+#
+# Der Anlass war eine gemessene Antwort auf die Ja-Nein-Frage "Can I Return my
+# boots": Sie mischte vier Chunks aus returns-and-exchanges.md und zwei aus
+# gear-care-and-repairs.md und trug Sohlenabnutzung, Trail-Club-Fristen und
+# Zonenpreise zusammen. Alles korrekt, alles ungefragt. Laengen auf dieselbe
+# Frage: 153 bis 921 Zeichen.
+#
+# WARUM NICHT ALS REGEL 6 UND 7 IM REGELWERK, obwohl das der naheliegende Ort
+# waere: Dort bricht sie die Antwortsprache. Gemessen am 2026-09-24, verschraenkt
+# und mit je 20 Laeufen gegen demo-fellgate, englische Frage, englischer Korpus,
+# englisches Regelwerk:
+#
+#   Regelwerk mit Regel 6 und 7   14 deutsch,  3 englisch,  3 eskaliert
+#   Regelwerk ohne                 1 deutsch, 19 englisch,  0 eskaliert
+#
+# Zwei Gegenentwuerfe wurden geprueft und verworfen:
+#   * Regel 5 (Sprache) an das Ende verschieben, Knappheit davor: 9 von 12
+#     deutsch. Es ist also nicht die Position.
+#   * Die Sprachforderung in Regel 6 und 7 wiederholen: 8 von 15 deutsch.
+#
+# Am Userprompt traegt dieselbe Forderung: 0 von 15 deutsch bei einem Median von
+# 309 statt 445 Zeichen. Warum das so ist, ist nicht geklaert - erklaerbar ist nur,
+# dass zwei zusaetzliche Regeln im Regelwerk die Sprachregel verdraengen. Der Ort
+# der Forderung ist damit eine Messgroesse und keine Geschmacksfrage. Wer sie
+# zurueck in das Regelwerk schiebt, misst vorher.
+#
+# DIE SPRACHNENNUNG IST PFLICHT und gehoert zur Wirkung: Ohne sie waren es 2 von
+# 15 deutsch statt 0 von 15. Deshalb gibt es zwei Fassungen, genau parallel zu
+# Regel 5 - eine fuer "Sprache der Frage" und eine fuer ein gesetztes
+# response_language. Eine feste Fassung wuerde einem gesetzten response_language
+# widersprechen, und der Widerspruch stuende im selben Prompt.
+_KNAPPHEIT_FOLGT_FRAGE_DE = (
+    "Beantworte nur diese Frage, in der Sprache, in der sie gestellt ist, und in "
+    "hoechstens drei Saetzen. Ergaenze nichts, was nicht gefragt war."
+)
+_KNAPPHEIT_VORGEGEBEN_DE = (
+    'Beantworte nur diese Frage, in der Sprache mit dem Kuerzel "{response_language}", '
+    "und in hoechstens drei Saetzen. Ergaenze nichts, was nicht gefragt war."
+)
+_KNAPPHEIT_FOLGT_FRAGE_EN = (
+    "Answer only this question, in the language it is written in, and in at most "
+    "three sentences. Do not add what was not asked."
+)
+_KNAPPHEIT_VORGEGEBEN_EN = (
+    'Answer only this question, in the language with the code "{response_language}", '
+    "and in at most three sentences. Do not add what was not asked."
+)
+
 _ZUSATZ_DE = "\nZusaetzlich fuer diesen Mandanten:\n"
 _ZUSATZ_EN = "\nAdditionally for this tenant:\n"
 
@@ -164,12 +214,16 @@ _RAHMEN_EN = ("Context", "Source", "Question", "(no context found)")
 
 
 class _Regelwerk(NamedTuple):
-    """Die vier Bausteine des System-Prompts in einer Sprache."""
+    """Die Bausteine des System-Prompts in einer Sprache."""
 
     basis: str
     sprache_folgt_frage: str
     sprache_vorgegeben: str
     zusatz: str
+    # Die Knappheitsforderung fuer den Userprompt, in zwei Fassungen - parallel
+    # zu sprache_folgt_frage und sprache_vorgegeben.
+    knappheit_folgt_frage: str
+    knappheit_vorgegeben: str
     # (Kontext, Quelle, Frage, kein-Kontext) - der Rahmen des Userprompts.
     rahmen: tuple[str, str, str, str]
 
@@ -184,6 +238,8 @@ _REGELWERK: dict[str, _Regelwerk] = {
         sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_DE,
         sprache_vorgegeben=_SPRACHE_VORGEGEBEN_DE,
         zusatz=_ZUSATZ_DE,
+        knappheit_folgt_frage=_KNAPPHEIT_FOLGT_FRAGE_DE,
+        knappheit_vorgegeben=_KNAPPHEIT_VORGEGEBEN_DE,
         rahmen=_RAHMEN_DE,
     ),
     "en": _Regelwerk(
@@ -191,6 +247,8 @@ _REGELWERK: dict[str, _Regelwerk] = {
         sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_EN,
         sprache_vorgegeben=_SPRACHE_VORGEGEBEN_EN,
         zusatz=_ZUSATZ_EN,
+        knappheit_folgt_frage=_KNAPPHEIT_FOLGT_FRAGE_EN,
+        knappheit_vorgegeben=_KNAPPHEIT_VORGEGEBEN_EN,
         rahmen=_RAHMEN_EN,
     ),
 }
@@ -221,6 +279,10 @@ def build_system_prompt(tenant: TenantConfig, response_language: str | None = No
     else:
         teile.append(regeln.sprache_folgt_frage)
 
+    # HIER STEHT BEWUSST KEINE KNAPPHEITSREGEL. Sie gehoert an den Userprompt,
+    # siehe build_user_prompt() und die Messung ueber den Bloecken oben: Als
+    # Regel 6 und 7 in diesem Regelwerk verdraengt sie die Sprachregel und
+    # erzeugt 14 von 20 deutschen Antworten bei einem englischen Mandanten.
     if tenant.system_prompt_extra.strip():
         teile.append(regeln.zusatz)
         teile.append(tenant.system_prompt_extra.strip())
@@ -228,7 +290,12 @@ def build_system_prompt(tenant: TenantConfig, response_language: str | None = No
     return "\n".join(teile)
 
 
-def build_user_prompt(question: str, hits: list[SearchHit], language: str = "de") -> str:
+def build_user_prompt(
+    question: str,
+    hits: list[SearchHit],
+    language: str = "de",
+    response_language: str | None = None,
+) -> str:
     """Baut den Kontextblock und die Frage, im Rahmen der Mandantensprache.
 
     Der Score steht bewusst NICHT im Kontext. Er ist eine interne Kennzahl; dem
@@ -243,10 +310,25 @@ def build_user_prompt(question: str, hits: list[SearchHit], language: str = "de"
     richtet sich bei der Antwortsprache messbar danach.
 
     Default "de", damit ein Aufruf ohne Angabe sich verhaelt wie bisher.
+
+    `response_language` steuert nur, wie die Knappheitsforderung am Ende die
+    Sprache benennt. Sie muss dasselbe sagen wie Regel 5 im System-Prompt -
+    zwei widerspruechliche Sprachangaben in einem Prompt waeren schlimmer als
+    keine.
+
+    Die Knappheitsforderung steht hier und nicht im Regelwerk. Der Grund ist
+    gemessen und steht bei den Bausteinen oben: Im Regelwerk verdraengt sie die
+    Sprachregel.
     """
-    kontext_wort, quelle_wort, frage_wort, leer = _REGELWERK[language].rahmen
+    regeln = _REGELWERK[language]
+    kontext_wort, quelle_wort, frage_wort, leer = regeln.rahmen
 
     abschnitte = [f"[{quelle_wort}: {hit.source_file}]\n{hit.text}" for hit in hits]
     kontext = "\n\n---\n\n".join(abschnitte) if abschnitte else leer
 
-    return f"{kontext_wort}:\n\n{kontext}\n\n---\n\n{frage_wort}: {question}"
+    if response_language:
+        knappheit = regeln.knappheit_vorgegeben.format(response_language=response_language)
+    else:
+        knappheit = regeln.knappheit_folgt_frage
+
+    return f"{kontext_wort}:\n\n{kontext}\n\n---\n\n{frage_wort}: {question}\n\n{knappheit}"

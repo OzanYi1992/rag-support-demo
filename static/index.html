@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>{{titel}} — {{display_name}}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{fassung}}">
 </head>
 <body>
 
@@ -20,6 +20,13 @@
 
   Das Token steht in data-token und wird nur fuer den Aufruf des eigenen
   Chat-Endpunkts gebraucht.
+
+  Das ?v= an den beiden statischen Dateien ist der Inhaltsschluessel aus
+  app/main.py, statische_fassung(). Aendert sich eine der Dateien, aendert sich
+  die Adresse, und ein Browser kann die alte Fassung nicht mehr liefern. Der
+  Grund steht in knowledge/open-points.md, OP-054: Am 2026-09-23 lieferte ein
+  Browser ein app.js von vor EN-1 mit deutschen Zeichenketten aus, obwohl die
+  Datei im Image englisch war.
 -->
 
 <header>
@@ -52,6 +59,6 @@
 -->
 <script id="texte" type="application/json">{{texte_json}}</script>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{fassung}}"></script>
 </body>
 </html>

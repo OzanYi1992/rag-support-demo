@@ -27,12 +27,14 @@ Zur Mandantentrennung (ADR-001, ADR-007):
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from os import stat_result
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -40,6 +42,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.responses import Response
+from starlette.types import Scope
 
 from app.config import Settings
 from app.embeddings import E5Embeddings, get_embeddings
@@ -57,6 +61,78 @@ from app.tenants import (
 from app.texts import Texte, texte_fuer
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# Die Dateien, die die Seite einbindet und die deshalb einen Fassungsschluessel
+# in der Adresse tragen. index.html gehoert NICHT dazu - sie ist die Vorlage und
+# wird nie aus dem Cache bedient (siehe _StatischeDateien).
+VERSIONIERTE_DATEIEN: tuple[str, ...] = ("app.js", "style.css")
+
+# Wie lange der Browser eine versionierte Datei behalten darf. Ein Jahr und
+# "immutable", weil sich unter einer gegebenen Adresse nichts mehr aendern KANN:
+# Aendert sich der Inhalt, aendert sich der Schluessel und damit die Adresse.
+_CACHE_VERSIONIERT = "public, max-age=31536000, immutable"
+
+
+def statische_fassung(verzeichnis: Path = STATIC_DIR) -> str:
+    """Kurzer Schluessel ueber den INHALT der eingebundenen Dateien.
+
+    Weg A aus OP-054: Die Seite bindet `/static/app.js?v=<schluessel>` ein, also
+    bekommt der Browser nach einer Aenderung eine andere Adresse und kann die
+    alte Datei nicht mehr liefern.
+
+    Der Schluessel ist ein Inhaltshash und ausdruecklich NICHT der Commit. Beide
+    sind Weg A, aber der Inhaltshash ist der praezisere Schluessel: Er wechselt
+    genau dann, wenn sich etwas an der ausgelieferten Datei aendert, und nicht
+    bei jedem Commit an einer beliebigen Stelle des Projekts. Er braucht
+    ausserdem kein Bauargument - im Container gilt dasselbe Verfahren wie lokal,
+    ohne dass jemand `--build-arg` vergessen kann.
+
+    Berechnet wird er EINMAL beim Bau der Anwendung, nicht je Anfrage. Wer
+    waehrend des Betriebs eine Datei unter `static/` aendert, muss den Prozess
+    neu starten - im Betrieb ist das ein neues Image, lokal reicht `--reload`.
+    """
+    schluessel = hashlib.sha256()
+    for name in sorted(VERSIONIERTE_DATEIEN):
+        datei = verzeichnis / name
+        if datei.is_file():
+            schluessel.update(datei.read_bytes())
+    return schluessel.hexdigest()[:12]
+
+
+class _StatischeDateien(StaticFiles):
+    """StaticFiles mit ausdruecklichen Cache-Kopfzeilen.
+
+    Bis zum 2026-09-24 lieferte `/static/` **keinen** `Cache-Control`-Kopf. Ohne
+    ihn entscheidet der Browser nach eigener Heuristik, wie lange er eine Datei
+    behaelt - und am 2026-09-23 hat genau das dazu gefuehrt, dass ein `app.js`
+    von vor EN-1 mit deutschen Zeichenketten ausgeliefert wurde, obwohl die Datei
+    im Image englisch war. Gemeldet als Sprachfehler, war es ein Cachefehler
+    (OP-054).
+
+    Zwei Faelle, und sie sind entgegengesetzt:
+
+    * **Versionierte Dateien** duerfen sehr lange behalten werden. Ihre Adresse
+      traegt den Inhaltsschluessel; eine Aenderung erzeugt eine neue Adresse.
+    * **index.html** darf NIE aus dem Cache kommen. Sie ist die Vorlage mit den
+      Platzhaltern und traegt die Adressen der versionierten Dateien. Wird sie
+      zwischengespeichert, verweist sie weiter auf die alte Fassung, und das
+      Verfahren oben laeuft leer.
+    """
+
+    def file_response(
+        self,
+        full_path: str | Path,
+        stat_res: stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        antwort = super().file_response(full_path, stat_res, scope, status_code)
+        name = Path(str(full_path)).name
+        antwort.headers["Cache-Control"] = (
+            "no-store" if name == "index.html" else _CACHE_VERSIONIERT
+        )
+        return antwort
+
 
 # Ein einziger Wortlaut fuer jeden Fall, in dem kein Mandant aufgeloest werden
 # konnte. Verschiedene Texte waeren ein Orakel: wer den Unterschied zwischen
@@ -215,8 +291,12 @@ def create_app(
         allow_headers=["Content-Type"],
     )
 
+    # Der Fassungsschluessel wird EINMAL berechnet, nicht je Anfrage: Er haengt
+    # am Dateiinhalt, und der aendert sich im Betrieb nicht.
+    app.state.statische_fassung = statische_fassung()
+
     if STATIC_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+        app.mount("/static", _StatischeDateien(directory=STATIC_DIR), name="static")
 
     def _mandant(url_token: str) -> TenantConfig:
         """Die einzige Stelle, die aus einem Token einen Mandanten macht."""
@@ -285,7 +365,9 @@ def create_app(
             "{{titel}}": html.escape(texte.titel),
             "{{display_name}}": html.escape(tenant.display_name),
             "{{begruessung}}": html.escape(
-                texte.begruessung.format(display_name=tenant.display_name)
+                texte.begruessung.format(
+                    display_name=tenant.display_name, topics=tenant.topics.strip()
+                )
             ),
             "{{frage_label}}": html.escape(texte.frage_label),
             "{{frage_platzhalter}}": html.escape(texte.frage_platzhalter),
@@ -294,6 +376,11 @@ def create_app(
             "{{url_token}}": html.escape(url_token),
             # Steht im <script>-Element und wird deshalb anders maskiert.
             "{{texte_json}}": _texte_als_json(texte),
+            # Inhaltsschluessel der eingebundenen Dateien. Nicht maskiert, weil
+            # es ein Hexadezimalwert aus dem eigenen Prozess ist und kein
+            # Fremdtext - aber ein Wert in einem Attribut, also ist die
+            # Herkunft der Grund, nicht die Bequemlichkeit.
+            "{{fassung}}": app.state.statische_fassung,
         }
 
         seite = vorlage.read_text(encoding="utf-8")
@@ -301,7 +388,12 @@ def create_app(
             seite = seite.replace(platzhalter, wert)
 
         _ereignis("oberflaeche", tenant.slug, sprache=tenant.language)
-        return HTMLResponse(seite)
+        # no-store und nicht no-cache: Die Seite traegt die Adressen der
+        # versionierten Dateien. Eine zwischengespeicherte Seite verweist weiter
+        # auf die alte Fassung, und das Verfahren aus OP-054 laeuft leer. Sie
+        # traegt ausserdem das url_token - eine Kopie davon im Browsercache ist
+        # nichts, was ohne Not entstehen soll.
+        return HTMLResponse(seite, headers={"Cache-Control": "no-store"})
 
     @app.post("/t/{url_token}/chat")
     def chat(url_token: str, anfrage: ChatAnfrage) -> Answer:

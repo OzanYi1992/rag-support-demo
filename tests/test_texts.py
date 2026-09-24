@@ -74,6 +74,11 @@ def test_platzhalter_bleiben_in_beiden_sprachen_erhalten() -> None:
     """Ein in der Uebersetzung verlorener Platzhalter bricht den Satz still."""
     for sprache, texte in TEXTE.items():
         assert "{display_name}" in texte.begruessung, sprache
+        # Seit dem 2026-09-24: Die Begruessung nennt, worueber Auskunft kommt.
+        # Ohne diesen Platzhalter wuesste ein Interessent nicht, was die
+        # Wissensbasis abdeckt - er fragt dann etwas Ungedecktes, bekommt eine
+        # korrekte Eskalation und haelt das System fuer schwach.
+        assert "{topics}" in texte.begruessung, sprache
         assert "{sekunden}" in texte.ratenlimit_mit_zeit, sprache
         # Der Satz ohne Zeitangabe darf KEINEN Platzhalter tragen - er wird
         # genau dann benutzt, wenn es keine Zahl einzusetzen gibt.

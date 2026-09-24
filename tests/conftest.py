@@ -105,6 +105,14 @@ STANDARD_ESKALATION: dict[str, str] = {
     "en": "I cannot find anything about that in the documents.",
 }
 
+# Dasselbe fuer `topics`, aus demselben Grund: Das Feld ist Pflicht, und es wird
+# beim Laden gegen die Sprache des Mandanten geprueft. Ein fester deutscher Text
+# haette jeden englischen Testmandanten unbaubar gemacht.
+STANDARD_THEMEN: dict[str, str] = {
+    "de": "Versand, Retouren und Zahlung",
+    "en": "shipping, returns and payment",
+}
+
 
 def lege_mandant_an(
     root: Path,
@@ -113,6 +121,7 @@ def lege_mandant_an(
     token: str,
     escalation_message: str | None = None,
     language: str = "de",
+    topics: str | None = None,
 ) -> None:
     """Legt einen Mandanten mit einem Dokument an. Fuer Tests gegen tmp_path.
 
@@ -125,6 +134,8 @@ def lege_mandant_an(
     """
     if escalation_message is None:
         escalation_message = STANDARD_ESKALATION[language]
+    if topics is None:
+        topics = STANDARD_THEMEN[language]
     tenant_dir = root / slug
     (tenant_dir / "docs").mkdir(parents=True)
     (tenant_dir / "tenant.yaml").write_text(
@@ -132,6 +143,7 @@ def lege_mandant_an(
             {
                 "display_name": slug,
                 "language": language,
+                "topics": topics,
                 "escalation_message": escalation_message,
                 "url_token": token,
                 "public_image_allowed": True,
@@ -165,6 +177,7 @@ def tmp_tenants_dir(tmp_path: Path) -> Path:
             {
                 "display_name": "Ohne Flag",
                 "language": "de",
+                "topics": "Versand und Retouren",
                 "escalation_message": "Dazu finde ich nichts.",
                 "url_token": "ohne-flag-token-1234567890",
             },
@@ -187,6 +200,7 @@ def tmp_tenants_dir_mit_doppeltem_token(tmp_path: Path) -> Path:
                 {
                     "display_name": slug,
                     "language": "de",
+                    "topics": "Versand und Retouren",
                     "escalation_message": "Dazu finde ich nichts.",
                     "url_token": token,
                 },

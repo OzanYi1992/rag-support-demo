@@ -66,6 +66,21 @@ class TenantConfig(BaseModel):
     # fehlendes Feld ihr Verhalten nicht aendern darf.
     language: str = "de"
 
+    # Woruber dieser Mandant ueberhaupt Auskunft gibt, in der Sprache des
+    # Mandanten. Erscheint in der Begruessung.
+    #
+    # Pflichtfeld ohne Standardwert, und das ist Absicht: Ein Standardwert waere
+    # entweder leer - dann stuende in der Begruessung eine Luecke - oder generisch,
+    # und dann behauptete er eine Abdeckung, die dieser Korpus vielleicht nicht
+    # hat. Ein Mandant ohne diese Angabe soll sich nicht laden lassen.
+    #
+    # Warum es das Feld gibt: Ein Interessent, der die Demo oeffnet, weiss nicht,
+    # was die Wissensbasis enthaelt. Er fragt dann, was ihm einfaellt, bekommt
+    # eine Eskalation und haelt das System fuer schwach - obwohl es korrekt
+    # gehandelt hat. Die Eskalation ist die richtige Antwort auf die falsche
+    # Frage; diese Angabe verhindert die falsche Frage.
+    topics: str
+
     system_prompt_extra: str = ""
     escalation_message: str
     model_override: str | None = None
@@ -106,30 +121,40 @@ class TenantConfig(BaseModel):
         return wert
 
     @model_validator(mode="after")
-    def _eskalationsnachricht_in_der_sprache_des_mandanten(self) -> TenantConfig:
-        """Weist eine Eskalationsnachricht ab, die offensichtlich in der
-        falschen Sprache verfasst ist.
+    def _mandantentexte_in_der_sprache_des_mandanten(self) -> TenantConfig:
+        """Weist Mandantentexte ab, die offensichtlich in der falschen Sprache sind.
 
-        Diese Nachricht ist der einzige Text eines Mandanten, den kein Katalog
-        traegt - sie nennt dessen Supportadresse. Damit ist sie auch der
-        einzige, den kein Katalogtest schuetzt. Ohne diese Pruefung besteht ein
-        Mandant mit language "en" und einer deutschen Nachricht jeden Test und
-        faellt erst vor einem Interessenten auf: bei der nicht gedeckten Frage,
-        also genau dort, wo das System sich von seiner guten Seite zeigen soll.
+        Geprueft werden die beiden Texte, die ein Mandant selbst mitbringt und die
+        einem Interessenten gezeigt werden: `escalation_message` und `topics`.
+        Beide traegt kein Katalog - die eine nennt die Supportadresse dieses
+        Mandanten, die andere seine Themen. Damit sind sie die einzigen, die kein
+        Katalogtest schuetzt.
 
-        Geprueft wird beim LADEN, nicht beim ersten Aufruf. Ein Mandant, der
-        sich nicht laden laesst, faellt sofort auf; einer, der erst in der
-        Demo auffaellt, hat den Termin schon gekostet.
+        Ohne diese Pruefung besteht ein Mandant mit language "en" und deutschen
+        Texten jeden Test und faellt erst vor einem Interessenten auf. Bei der
+        Eskalationsnachricht trifft es genau die nicht gedeckte Frage, also die
+        Stelle, an der das System sich von seiner guten Seite zeigen soll. Bei
+        `topics` trifft es den ersten Satz, den der Interessent ueberhaupt liest.
+
+        `system_prompt_extra` ist ABSICHTLICH nicht dabei. Er richtet sich an das
+        Modell und nicht an einen Menschen, und ein Mandant darf dort begruendet
+        zweisprachig formulieren.
+
+        Geprueft wird beim LADEN, nicht beim ersten Aufruf. Ein Mandant, der sich
+        nicht laden laesst, faellt sofort auf; einer, der erst in der Demo
+        auffaellt, hat den Termin schon gekostet.
 
         Die Pruefung ist eine Heuristik und bewusst konservativ - sie weist nur
-        ab, wenn die andere Sprache deutlich gewinnt. Sie ersetzt kein Lesen
-        der Datei.
+        ab, wenn die andere Sprache deutlich gewinnt. Sie ersetzt kein Lesen der
+        Datei.
         """
-        grund = passt_zur_sprache(self.escalation_message, self.language)
-        if grund is not None:
+        for feld in ("escalation_message", "topics"):
+            grund = passt_zur_sprache(getattr(self, feld), self.language)
+            if grund is None:
+                continue
             raise ValueError(
-                f"escalation_message von {self.slug!r} passt nicht zu language "
-                f"{self.language!r}: {grund}. Entweder die Nachricht uebersetzen "
+                f"{feld} von {self.slug!r} passt nicht zu language "
+                f"{self.language!r}: {grund}. Entweder den Text uebersetzen "
                 f"oder language korrigieren."
             )
         return self

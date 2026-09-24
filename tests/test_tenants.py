@@ -27,7 +27,7 @@ from app.tenants import (
     resolve_token,
     tenants_for_public_image,
 )
-from app.texts import VERFUEGBARE_SPRACHEN
+from app.texts import VERFUEGBARE_SPRACHEN, passt_zur_sprache
 from tests.conftest import lege_mandant_an
 
 # --- Die beiden Demo-Mandanten laden ---------------------------------------
@@ -155,6 +155,7 @@ def test_url_token_min_length() -> None:
         TenantConfig(
             slug="test-mandant",
             display_name="Test",
+            topics="Versand und Retouren",
             escalation_message="nichts gefunden",
             url_token=zu_kurz,
         )
@@ -183,6 +184,7 @@ def test_language_default_ist_de(tmp_path: Path) -> None:
         yaml.safe_dump(
             {
                 "display_name": "Ohne Sprache",
+                "topics": "Versand und Retouren",
                 "escalation_message": "Dazu finde ich nichts.",
                 "url_token": "ohne-sprache-token-1234",
             },
@@ -205,9 +207,10 @@ def test_dritte_sprache_scheitert_beim_laden(tmp_path: Path) -> None:
     Mandant in einer anderen - und aufgefallen waere es erst, wenn jemand die
     Seite aufruft.
     """
-    # Eigener Text statt des Fixture-Defaults: Den gibt es fuer "fr" bewusst
+    # Eigene Texte statt der Fixture-Defaults: Die gibt es fuer "fr" bewusst
     # nicht, und der Test will die Ablehnung beim LADEN pruefen, nicht ein
-    # Scheitern schon beim Anlegen der Datei.
+    # Scheitern schon beim Anlegen der Datei. Das gilt fuer escalation_message
+    # und seit dem 2026-09-24 genauso fuer topics.
     lege_mandant_an(
         tmp_path,
         "demo-franzoesisch",
@@ -215,6 +218,7 @@ def test_dritte_sprache_scheitert_beim_laden(tmp_path: Path) -> None:
         "franz-token-1234567890",
         escalation_message="Je ne trouve rien a ce sujet.",
         language="fr",
+        topics="expedition, retours et paiement",
     )
 
     with pytest.raises(ValidationError) as fehler:
@@ -233,12 +237,21 @@ def test_language_haelt_sich_an_den_textkatalog() -> None:
     zweitgefuehrt. Dieser Test haelt die Ableitung fest: Kaeme eine Sprache
     hinzu, ohne dass der Katalog sie kennt, faellt es hier auf.
     """
+    # Beide Mandantentexte muessen der geprueften Sprache folgen, sonst weist
+    # der Sprachvalidator sie ab - und dieser Test prueft die Ableitung der
+    # zulaessigen Sprachen, nicht den Sprachvalidator.
+    texte_je_sprache = {
+        "de": ("Versand und Retouren", "nichts gefunden"),
+        "en": ("shipping and returns", "nothing found"),
+    }
     for sprache in VERFUEGBARE_SPRACHEN:
+        themen, eskalation = texte_je_sprache[sprache]
         mandant = TenantConfig(
             slug="test-mandant",
             display_name="Test",
             language=sprache,
-            escalation_message="nichts gefunden",
+            topics=themen,
+            escalation_message=eskalation,
             url_token="test-token-1234567890",
         )
         assert mandant.language == sprache
@@ -331,3 +344,59 @@ def test_demo_tenants_in_public_list(demo_tenants_dir: Path) -> None:
         "demo-nordwind",
     ]
     assert tenants_for_public_image(demo_tenants_dir) == list_tenants(demo_tenants_dir)
+
+
+# --- topics ------------------------------------------------------------------
+
+
+def test_topics_ist_pflicht():
+    """Ein Mandant ohne Themenangabe soll sich nicht laden lassen.
+
+    Kein Standardwert, und das ist Absicht: Ein leerer Default liesse eine
+    Luecke in der Begruessung, ein generischer behauptete eine Abdeckung, die
+    dieser Korpus vielleicht nicht hat.
+    """
+    with pytest.raises(ValidationError) as fehler:
+        TenantConfig(
+            slug="ohne-themen",
+            display_name="Ohne Themen",
+            language="de",
+            escalation_message="nichts gefunden",
+            url_token="test-token-1234567890",
+        )
+    assert "topics" in str(fehler.value)
+
+
+def test_topics_in_falscher_sprache_scheitert_beim_laden(tmp_path: Path):
+    """Dieselbe Pruefung wie fuer die Eskalationsnachricht, und aus demselben Grund.
+
+    Der Unterschied: `topics` steht in der Begruessung, also im ERSTEN Satz, den
+    ein Interessent liest. Ein deutscher Themensatz bei einem englischen
+    Mandanten faellt damit sofort auf - aber erst vor dem Interessenten, wenn ihn
+    hier niemand abweist.
+    """
+    lege_mandant_an(
+        tmp_path,
+        "demo-englisch",
+        "Doc",
+        "englisch-token-1234567890",
+        language="en",
+        topics="Versand, Retouren und Zahlung sowie die Lieferung",
+    )
+    with pytest.raises(ValidationError) as fehler:
+        load_tenant("demo-englisch", tmp_path)
+    meldung = str(fehler.value)
+    assert "topics" in meldung
+    assert "en" in meldung
+
+
+def test_alle_demomandanten_tragen_themen_in_ihrer_sprache(demo_tenants_dir: Path):
+    """Gegenprobe am echten Verzeichnis: Die drei Mandanten laden.
+
+    Ohne diesen Test koennte der Sprachvalidator oben alles ablehnen und der
+    vorige Test waere trotzdem gruen.
+    """
+    for slug in ("demo-acme", "demo-nordwind", "demo-fellgate"):
+        mandant = load_tenant(slug, demo_tenants_dir)
+        assert mandant.topics.strip(), slug
+        assert passt_zur_sprache(mandant.topics, mandant.language) is None, slug

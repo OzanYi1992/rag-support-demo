@@ -23,6 +23,13 @@ display_name: "ACME Elektronikhandel"
 # sehen, auch wenn ein Dokument englisch ist.
 language: de
 
+# Woruber dieser Mandant Auskunft gibt. Abgeleitet aus den Dateien in docs/,
+# nicht aus dem Wunsch, moeglichst viel zu koennen: Was hier steht und im Korpus
+# fehlt, erzeugt genau die Frage, die eskalieren muss.
+topics: >
+  Bestellung und Versand, Retouren und Gewährleistung, Zahlungsarten und
+  Rechnungskauf, Großkundenkonditionen und technischem Support
+
 system_prompt_extra: >
   ACME beliefert Gewerbekunden mit Elektronikbauteilen. Antworte sachlich und
   knapp. Nenne bei Lieferzeiten und Mindestbestellmengen immer die Quelle aus der

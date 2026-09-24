@@ -24,6 +24,13 @@ display_name: "Fellgate Outdoor"
 # System-Prompt. Nicht die Antwortsprache.
 language: en
 
+# What this tenant answers about. Derived from the files in docs/, not from a
+# wish to look capable: anything named here but missing from the corpus produces
+# exactly the question that has to escalate.
+topics: >
+  orders and shipping, returns and exchanges, payment and refunds, gear care
+  and repairs, and Trail Club membership
+
 system_prompt_extra: >
   Fellgate Outdoor sells outdoor clothing and equipment by mail order to private
   customers. Answer plainly and in full sentences. Whenever a deadline, a price

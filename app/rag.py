@@ -37,7 +37,21 @@ class Answer(BaseModel):
     """Antwort auf eine Frage, mit allem, was Telemetrie und Eval brauchen."""
 
     text: str
+
+    # Eine Datei, ein Eintrag. Verdichtet in `_quellen_verdichten()`, nicht in
+    # der Oberflaeche: Jeder Verbraucher soll dasselbe sehen.
     sources: list[str]
+
+    # Der beste Score der Chunks JE QUELLDATEI, gleiche Reihenfolge wie
+    # `sources`. None, wenn das Modell eine Datei nennt, die im Kontext nicht
+    # vorkam - dann gibt es keinen Score, und es waere falsch, einen zu zeigen.
+    #
+    # Warum das Feld ueberhaupt existiert: Die Oberflaeche hat bis zum
+    # 2026-09-24 `sources[i]` mit `retrieval_scores[i]` gepaart. Die beiden
+    # Listen bedeuten Verschiedenes - die eine zaehlt Dateien, die das Modell
+    # zitiert, die andere Chunks in der Trefferreihenfolge. Die Zahl neben einem
+    # Dateinamen war damit der Score des i-ten CHUNKS, nicht der dieser Datei.
+    source_scores: list[float | None]
 
     escalated: bool
     escalation_reason: str | None
@@ -82,6 +96,7 @@ def _eskaliert(
     return Answer(
         text=tenant.escalation_message.strip(),
         sources=[],
+        source_scores=[],
         escalated=True,
         escalation_reason=reason,
         escalation_metric=metric,
@@ -93,6 +108,44 @@ def _eskaliert(
         model=model,
         lang=lang,
     )
+
+
+def _quellen_verdichten(
+    genannt: list[str], treffer: list[SearchHit]
+) -> tuple[list[str], list[float | None]]:
+    """Eine Datei, ein Eintrag - mit dem besten Score der Chunks dieser Datei.
+
+    Zwei Dinge auf einmal, weil sie zusammengehoeren:
+
+    1. **Entdoppeln.** Das Modell nennt eine Datei so oft, wie es Chunks daraus
+       benutzt hat. Fuenf Chunks aus derselben Datei ergaben fuenf Eintraege in
+       der Quellenliste, und die Oberflaeche zeigte sie fuenfmal.
+    2. **Den richtigen Score zuordnen.** Der Score gehoert zu einem Chunk, die
+       Anzeige zu einer Datei. Der beste Chunk einer Datei ist der, der sie in
+       die Trefferliste gebracht hat - also der richtige Wert fuer die Anzeige.
+
+    Die Reihenfolge der ersten Nennung bleibt erhalten. Sie ist die des Modells
+    und damit die seiner Begruendung; nach Score zu sortieren wuerde eine
+    Rangfolge behaupten, die das Modell nicht gemeint hat.
+
+    Nennt das Modell eine Datei, die im Kontext nicht vorkam, bleibt der Score
+    None. Der Eintrag wird NICHT entfernt: Eine erfundene Quelle ist ein Befund
+    und gehoert sichtbar, nicht stillschweigend weggeraeumt.
+    """
+    beste: dict[str, float] = {}
+    for hit in treffer:
+        if hit.source_file not in beste or hit.score > beste[hit.source_file]:
+            beste[hit.source_file] = hit.score
+
+    quellen: list[str] = []
+    scores: list[float | None] = []
+    for name in genannt:
+        saubere = name.strip()
+        if not saubere or saubere in quellen:
+            continue
+        quellen.append(saubere)
+        scores.append(beste.get(saubere))
+    return quellen, scores
 
 
 def answer(
@@ -166,7 +219,11 @@ def answer(
         )
     )
     system_prompt = build_system_prompt(tenant, response_language)
-    user_prompt = build_user_prompt(question, treffer, tenant.language)
+    # response_language geht auch hier hinein: Die Knappheitsforderung am Ende
+    # nennt die Sprache, und sie muss dasselbe sagen wie Regel 5 im
+    # System-Prompt. Zwei widerspruechliche Angaben in einem Prompt waeren
+    # schlimmer als keine.
+    user_prompt = build_user_prompt(question, treffer, tenant.language, response_language)
 
     start = time.perf_counter()
     ergebnis = aktives_llm.generate(system_prompt, user_prompt)
@@ -201,9 +258,11 @@ def answer(
             lang=ergebnis.parsed.language,
         )
 
+    quellen, quellscores = _quellen_verdichten(ergebnis.parsed.sources, treffer)
     return Answer(
         text=ergebnis.parsed.answer,
-        sources=ergebnis.parsed.sources,
+        sources=quellen,
+        source_scores=quellscores,
         escalated=False,
         escalation_reason=None,
         escalation_metric=entscheidung.metric_value,

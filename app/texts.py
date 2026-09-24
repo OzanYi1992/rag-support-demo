@@ -88,9 +88,9 @@ class Texte(BaseModel, frozen=True):
 _DE = Texte(
     titel="Support-Assistent",
     begruessung=(
-        "Guten Tag. Ich beantworte Fragen auf Grundlage der hinterlegten "
-        "Unterlagen von {display_name}. Wenn die Unterlagen eine Frage nicht "
-        "abdecken, sage ich das, statt zu raten."
+        "Guten Tag. Ich beantworte Fragen zu {topics} — auf Grundlage der "
+        "hinterlegten Unterlagen von {display_name}. Wenn die Unterlagen eine "
+        "Frage nicht abdecken, sage ich das, statt zu raten."
     ),
     frage_label="Ihre Frage",
     frage_platzhalter="Ihre Frage — Enter zum Senden, Umschalt+Enter für eine neue Zeile",
@@ -114,9 +114,9 @@ _DE = Texte(
 _EN = Texte(
     titel="Support Assistant",
     begruessung=(
-        "Hello. I answer questions based on the documents stored for "
-        "{display_name}. If those documents do not cover a question, I say so "
-        "instead of guessing."
+        "Hello. I answer questions about {topics} — based on the documents "
+        "stored for {display_name}. If those documents do not cover a question, "
+        "I say so instead of guessing."
     ),
     frage_label="Your question",
     frage_platzhalter="Your question — Enter to send, Shift+Enter for a new line",

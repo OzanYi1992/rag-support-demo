@@ -36,6 +36,7 @@ def _mandant(root: Path, slug: str, *, freigegeben: bool) -> None:
     daten: dict[str, object] = {
         "display_name": slug,
         "language": "de",
+        "topics": "Versand und Retouren",
         "escalation_message": "Dazu finde ich nichts.",
         "url_token": f"{slug}-token-1234567890",
     }

@@ -20,7 +20,7 @@ from app.escalation import (
     EscalationDecision,
 )
 from app.prompts import GroundedAnswer, build_system_prompt, build_user_prompt
-from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, answer
+from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, _quellen_verdichten, answer
 from app.search import SearchHit
 from app.tenants import TenantConfig, load_tenant
 from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, lege_mandant_an
@@ -321,6 +321,7 @@ def test_englischer_mandant_bekommt_ein_englisches_regelwerk(
         slug="demo-englisch",
         display_name="Northfield Outfitters",
         language="en",
+        topics="shipping, returns and payment",
         escalation_message="I cannot find that in the documents.",
         url_token="englisch-token-1234567890",
     )
@@ -358,6 +359,7 @@ def test_response_language_sticht_auch_bei_einem_englischen_mandanten() -> None:
         slug="demo-englisch",
         display_name="Northfield Outfitters",
         language="en",
+        topics="shipping, returns and payment",
         escalation_message="I cannot find that in the documents.",
         url_token="englisch-token-1234567890",
     )
@@ -375,6 +377,7 @@ def test_mandantenzusatz_wird_englisch_eingeleitet() -> None:
         display_name="Northfield Outfitters",
         language="en",
         system_prompt_extra="Answer briefly and name the delivery window.",
+        topics="shipping, returns and payment",
         escalation_message="I cannot find that in the documents.",
         url_token="englisch-token-1234567890",
     )
@@ -530,3 +533,152 @@ def test_strategie_wird_ohne_injektion_aus_settings_gebaut(
 
     assert isinstance(DegenerateOnly(), DegenerateOnly)
     assert a.escalated is False
+
+
+# =============================================================================
+# QUELLEN VERDICHTEN: eine Datei, ein Eintrag, der richtige Score
+#
+# Zwei Fehler in derselben Darstellung, beide bis zum 2026-09-24 vorhanden:
+# das Modell nennt eine Datei je benutztem Chunk, und die Oberflaeche paarte
+# sources[i] mit retrieval_scores[i] - zwei Listen, die Verschiedenes zaehlen.
+# =============================================================================
+
+
+def _hit(datei: str, score: float, index: int = 0) -> SearchHit:
+    return SearchHit(text="x", score=score, source_file=datei, chunk_index=index, tenant_slug="t")
+
+
+TREFFER = [_hit("a.md", 0.93), _hit("a.md", 0.91, 1), _hit("b.md", 0.90)]
+
+
+def test_mehrfach_genannte_datei_wird_ein_eintrag():
+    """Fuenf Chunks aus einer Datei sind eine Quelle, nicht fuenf."""
+    quellen, scores = _quellen_verdichten(["a.md", "a.md", "a.md", "b.md"], TREFFER)
+    assert quellen == ["a.md", "b.md"]
+    assert scores == [0.93, 0.90]
+
+
+def test_score_ist_der_beste_chunk_dieser_datei():
+    """Nicht der Score des i-ten Chunks der Trefferliste.
+
+    a.md hat Chunks mit 0.93 und 0.91. Angezeigt wird 0.93 - der Chunk, der die
+    Datei in die Trefferliste gebracht hat. Vor der Korrektur haette an zweiter
+    Position der Score des zweiten CHUNKS gestanden, also 0.91 fuer b.md.
+    """
+    quellen, scores = _quellen_verdichten(["a.md", "b.md"], TREFFER)
+    assert (quellen, scores) == (["a.md", "b.md"], [0.93, 0.90])
+
+
+def test_reihenfolge_des_modells_bleibt_erhalten():
+    """Nicht nach Score sortiert - das waere eine Rangfolge, die das Modell
+    nicht gemeint hat. Die erste Nennung gewinnt."""
+    quellen, scores = _quellen_verdichten(["b.md", "a.md"], TREFFER)
+    assert quellen == ["b.md", "a.md"]
+    assert scores == [0.90, 0.93]
+
+
+def test_erfundene_quelle_bleibt_sichtbar_und_ohne_score():
+    """Nennt das Modell eine Datei, die nicht im Kontext war, ist das ein Befund.
+
+    Der Eintrag wird NICHT entfernt - eine stillschweigend weggeraeumte
+    Falschangabe faellt niemandem auf. Er bekommt nur keinen Score, weil es
+    keinen gibt.
+    """
+    quellen, scores = _quellen_verdichten(["a.md", "erfunden.md"], TREFFER)
+    assert quellen == ["a.md", "erfunden.md"]
+    assert scores == [0.93, None]
+
+
+def test_leere_und_verunreinigte_eintraege():
+    """Leerzeichen erzeugen keine zweite Quelle, leere Namen keinen Eintrag."""
+    assert _quellen_verdichten([" a.md ", "a.md", ""], TREFFER) == (["a.md"], [0.93])
+    assert _quellen_verdichten([], TREFFER) == ([], [])
+
+
+def test_quellen_und_scores_sind_immer_gleich_lang():
+    """Die Oberflaeche paart sie nach Index. Ungleiche Laengen waeren genau der
+    Fehler, der vorher drin war."""
+    for genannt in (["a.md"], ["a.md", "a.md"], ["x.md"], [], ["b.md", "a.md", "b.md"]):
+        quellen, scores = _quellen_verdichten(genannt, TREFFER)
+        assert len(quellen) == len(scores)
+
+
+# --- Knappheit: nur die gestellte Frage, und kurz ---------------------------
+#
+# Sie steht am USERPROMPT. Im Regelwerk verdraengt sie die Sprachregel - gemessen
+# am 2026-09-24, verschraenkt, je 20 Laeufe gegen demo-fellgate:
+#   Regelwerk mit Knappheit   14 deutsch,  3 englisch
+#   Regelwerk ohne             1 deutsch, 19 englisch
+# Am Userprompt: 0 von 15 deutsch.
+
+
+def _mandant(sprache: str) -> TenantConfig:
+    return TenantConfig(
+        slug="t",
+        display_name="T",
+        language=sprache,
+        topics="Versand" if sprache == "de" else "shipping",
+        escalation_message="nichts gefunden" if sprache == "de" else "nothing found",
+        url_token="test-token-1234567890",
+    )
+
+
+def test_das_regelwerk_traegt_keine_knappheitsregel():
+    """Die Regression, die das Verfahren einmal gekostet hat.
+
+    Wer die Knappheit in das Regelwerk zurueckschiebt, weil es dort
+    hingehoerte, macht einen englischen Mandanten wieder deutsch antworten.
+    Dieser Test ist die Bremse davor - und der Kommentar in app/prompts.py
+    nennt die Zahlen.
+    """
+    for sprache, verraeter in (("de", "drei Saetzen"), ("en", "three sentences")):
+        prompt = build_system_prompt(_mandant(sprache))
+        assert verraeter not in prompt, sprache
+        # Gegenprobe: Das Regelwerk endet bei Regel 5.
+        assert "\n6." not in prompt, sprache
+
+
+def test_der_userprompt_verlangt_knappheit_in_beiden_sprachen():
+    """Geprueft an beiden Sprachen: Eine Forderung, die nur auf Deutsch
+    existiert, ist genau der Fehler aus P-024 und P-028."""
+    treffer = [_hit("a.md", 0.9)]
+    erwartet = {
+        "de": ("Beantworte nur diese Frage", "hoechstens drei Saetzen", "nicht gefragt war"),
+        "en": ("Answer only this question", "at most three sentences", "not asked"),
+    }
+    for sprache, teile in erwartet.items():
+        prompt = build_user_prompt("Frage?", treffer, sprache)
+        for teil in teile:
+            assert teil in prompt, f"{sprache}: {teil}"
+
+
+def test_die_knappheit_steht_hinter_der_frage():
+    """Nicht vor dem Kontext und nicht vor der Frage.
+
+    Die Reihenfolge ist Teil des gemessenen Ergebnisses: Kontext, Frage,
+    Forderung. Steht sie woanders, ist das eine andere Anordnung als die
+    gemessene, und die Messung traegt sie nicht mehr.
+    """
+    treffer = [_hit("a.md", 0.9)]
+    prompt = build_user_prompt("Wie lange?", treffer, "de")
+    assert prompt.index("Wie lange?") < prompt.index("Beantworte nur diese Frage")
+    assert prompt.rstrip().endswith("was nicht gefragt war.")
+
+
+def test_die_knappheit_nennt_dieselbe_sprache_wie_regel_fuenf():
+    """Zwei widerspruechliche Sprachangaben in einem Prompt waeren schlimmer als keine.
+
+    Ohne diese Kopplung stuende bei gesetztem response_language im Regelwerk
+    "antworte auf en" und am Userprompt "antworte in der Sprache der Frage".
+    """
+    treffer = [_hit("a.md", 0.9)]
+    # Ohne Vorgabe: beide sagen "Sprache der Frage".
+    ohne = build_user_prompt("Frage?", treffer, "en")
+    assert "in the language it is written in" in ohne
+    assert '"' not in ohne.splitlines()[-1]
+
+    # Mit Vorgabe: beide nennen dasselbe Kuerzel.
+    mit = build_user_prompt("Frage?", treffer, "en", "de")
+    assert 'code "de"' in mit
+    assert "in the language it is written in" not in mit
+    assert 'code "de"' in build_system_prompt(_mandant("en"), "de")

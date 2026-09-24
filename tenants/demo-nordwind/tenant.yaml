@@ -10,6 +10,13 @@ display_name: "Nordwind Möbelversand"
 # Sprache des Regelwerks im System-Prompt. NICHT die Antwortsprache.
 language: de
 
+# Woruber dieser Mandant Auskunft gibt. Abgeleitet aus den Dateien in docs/,
+# nicht aus dem Wunsch, moeglichst viel zu koennen: Was hier steht und im Korpus
+# fehlt, erzeugt genau die Frage, die eskalieren muss.
+topics: >
+  Maßanfertigung und Lieferzeiten, Lieferung und Montage, Pflege, Reklamation
+  und Transportschäden sowie Widerruf
+
 system_prompt_extra: >
   Nordwind versendet Wohnmoebel an Privatkunden. Antworte freundlich und in
   ganzen Saetzen. Bei Rueckgaben und Fristen immer die genaue Frist aus der
