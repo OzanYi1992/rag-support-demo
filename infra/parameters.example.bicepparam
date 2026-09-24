@@ -17,25 +17,33 @@ param praefix = 'priv-ragdemo'
 param appName = 'ca-ragdemo'
 // Digest, kein Tag. Ein Tag laesst sich verschieben, ein Digest nicht.
 //
-// Nachgezogen am 2026-09-24 auf Commit 20351c0. Vorher:
+// Nachgezogen am 2026-09-24 auf Commit 4120f54. Vorher:
+//   sha256:9fa76bc7... (Commit 20351c0, gleicher Tag, wenige Stunden vorher)
 //   sha256:25bc3bc7... (Commit bbe8b97, drei Mandanten, 2026-09-23)
 //   sha256:591fd63f... (zwei Mandanten, 2026-09-18)
 //
-// Was dieses Image gegenueber 25bc3bc7 traegt: das sprachabhaengige
-// Strukturschema (ADR-029), die gesetzte temperature (ADR-030), Quellen je
-// Datei mit dem richtigen Score, die Themen in der Begruessung, Cache-Busting
-// ueber einen Inhaltsschluessel und die Laengenbegrenzung in der Anzeige.
+// Was dieses Image gegenueber 9fa76bc7 traegt, beides reine Darstellung und
+// Route, kein Promptzuwachs:
+//   C1  Quelldateien sind klickbar. Neue Route GET /t/{url_token}/doc/{name}.
+//       Die Sicherheit steht in ADR-031: Der Mandant kommt aus dem TOKEN, und
+//       der Dateiname wird gegen die tatsaechliche Dateiliste aufgeloest, nie zu
+//       einem Pfad zusammengesetzt.
+//   C2  Der Eskalationskasten nennt die Themen des Mandanten, aus derselben
+//       Quelle wie die Begruessung.
 //
-// Was es ausdruecklich NICHT traegt: eine Knappheitsforderung im Prompt. Sie
-// hat zweimal eine Eigenschaft beschaedigt, mit der sie inhaltlich nichts zu
-// tun hat - erst die Antwortsprache, dann das Eskalationstor (pitfalls.md,
-// P-030).
+// Was es ausdruecklich NICHT traegt, unveraendert gegenueber 9fa76bc7: eine
+// Knappheitsforderung im Prompt. Sie hat zweimal eine Eigenschaft beschaedigt,
+// mit der sie inhaltlich nichts zu tun hat - erst die Antwortsprache, dann das
+// Eskalationstor (pitfalls.md, P-030).
 //
-// Geprueft vor dem Tag, beides mit Gegenprobe:
-//   Inhaltsvergleich gegen "git archive 20351c0"  Rueckgabewert 0
+// Geprueft vor dem Tag, alles mit Gegenprobe:
+//   Inhaltsvergleich gegen "git archive 4120f54"  Rueckgabewert 0, 20 Dateien
 //   Layer anonym abrufbar, Bereichsabfrage        HTTP 206
-//   Attestation vcs:revision                      20351c010bd059c8...
-param image = 'ghcr.io/ozanyi1992/rag-support-demo@sha256:9fa76bc7de3ed805907a71253141883fafbed99173128b98b111f2ad7ead7910'
+//   Attestation vcs:revision                      4120f54555a75b1667...
+//   Dokumentroute gegen das Image                 eigenes 200, fremdes 404,
+//                                                 jeder Mandant bekommt SEINES
+param image = 'ghcr.io/ozanyi1992/rag-support-demo@sha256:e5591132e273d9d67a5b17293a1b5878d76387f985b4483824a5796695725716'
+
 param openaiModel = 'gpt-5.4-mini-2026-03-17'
 
 // 1 fuer die Akquise-Phase. Gemessen wurden 46 s von der ersten Anfrage bis /health, wenn
