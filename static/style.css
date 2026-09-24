@@ -140,3 +140,29 @@ footer p { margin: 0; }
   overflow: hidden; clip: rect(0 0 0 0);
   white-space: nowrap; border: 0;
 }
+
+/* Aufklappen langer Antworten. Die Laenge wird in der ANZEIGE begrenzt und
+   nicht im Prompt - eine Knappheitsforderung im Prompt hat am 2026-09-24 das
+   Groundedness-Tor gelockert (knowledge/pitfalls.md, P-030).
+
+   Der Knopf ist bewusst gross genug fuer einen Daumen: Die Demo wird auf dem
+   Telefon vorgefuehrt, und ein Aufklappen, das dort nicht zu treffen ist, macht
+   die ganze Kuerzung zum Nachteil. */
+.nachricht .text button.mehr {
+  display: block;
+  margin: .5rem 0 0;
+  padding: .5rem .75rem;
+  min-height: 2.75rem;
+  width: auto;
+  font-size: .9rem;
+  font-weight: 500;
+  color: var(--akzent);
+  background: transparent;
+  border: 1px solid var(--linie);
+  border-radius: .4rem;
+  cursor: pointer;
+}
+
+.nachricht .text button.mehr:hover {
+  border-color: var(--akzent);
+}

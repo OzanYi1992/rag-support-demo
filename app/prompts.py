@@ -144,55 +144,42 @@ _SPRACHE_VORGEGEBEN_EN = """\
    "{response_language}" in language.
 """
 
-# Die Knappheitsforderung. Sie steht am USERPROMPT bei der Frage und NICHT als
-# Regel 6 und 7 im Regelwerk - und das ist gemessen, nicht gewaehlt.
+# =============================================================================
+# HIER STAND EINE KNAPPHEITSFORDERUNG, UND SIE IST AM 2026-09-24 WIEDER
+# AUSGEBAUT WORDEN. Wer sie erneut einbaut, liest zuerst das Folgende.
 #
-# Der Anlass war eine gemessene Antwort auf die Ja-Nein-Frage "Can I Return my
-# boots": Sie mischte vier Chunks aus returns-and-exchanges.md und zwei aus
-# gear-care-and-repairs.md und trug Sohlenabnutzung, Trail-Club-Fristen und
-# Zonenpreise zusammen. Alles korrekt, alles ungefragt. Laengen auf dieselbe
-# Frage: 153 bis 921 Zeichen.
+# Das Ziel war berechtigt: Eine Antwort auf die Ja-Nein-Frage "Can I Return my
+# boots" trug Sohlenabnutzung, Trail-Club-Fristen und Zonenpreise zusammen,
+# 153 bis 921 Zeichen, alles korrekt und alles ungefragt.
 #
-# WARUM NICHT ALS REGEL 6 UND 7 IM REGELWERK, obwohl das der naheliegende Ort
-# waere: Dort bricht sie die Antwortsprache. Gemessen am 2026-09-24, verschraenkt
-# und mit je 20 Laeufen gegen demo-fellgate, englische Frage, englischer Korpus,
-# englisches Regelwerk:
+# ERSTER VERSUCH, als Regel 6 und 7 im Regelwerk: Sie hat die ANTWORTSPRACHE
+# gekippt. Verschraenkt gemessen, je 20 Laeufe gegen demo-fellgate, englische
+# Frage, englischer Korpus, englisches Regelwerk:
+#     mit Regel 6 und 7   14 deutsch,  3 englisch
+#     ohne                 1 deutsch, 19 englisch
+# Auch mit der Sprachregel am Ende (9 von 12 deutsch) und mit in Regel 6 und 7
+# wiederholter Sprachforderung (8 von 15 deutsch). Siehe P-030.
 #
-#   Regelwerk mit Regel 6 und 7   14 deutsch,  3 englisch,  3 eskaliert
-#   Regelwerk ohne                 1 deutsch, 19 englisch,  0 eskaliert
+# ZWEITER VERSUCH, am Userprompt hinter der Frage: Die Sprache hielt (0 von 15
+# deutsch), aber das GROUNDEDNESS-TOR wurde locker. Verschraenkt, je 12 Laeufe
+# gegen zwei Fragen, die eskalieren muessen:
+#                                        fell-12        fell-05
+#     ohne Knappheit                     11-12 von 12   11-12 von 12
+#     "Answer only this question, ..."    1 von 12       7 von 12
+#     "Answer only IF the context ..."    7 von 12      11 von 12
 #
-# Zwei Gegenentwuerfe wurden geprueft und verworfen:
-#   * Regel 5 (Sprache) an das Ende verschieben, Knappheit davor: 9 von 12
-#     deutsch. Es ist also nicht die Position.
-#   * Die Sprachforderung in Regel 6 und 7 wiederholen: 8 von 15 deutsch.
+# Ein Wort Unterschied - "this question" gegen "if the context" - liegt zwischen
+# 1 von 12 und 7 von 12. Die bedingte Fassung holte fell-05 vollstaendig zurueck
+# und fell-12 nur zur Haelfte.
 #
-# Am Userprompt traegt dieselbe Forderung: 0 von 15 deutsch bei einem Median von
-# 309 statt 445 Zeichen. Warum das so ist, ist nicht geklaert - erklaerbar ist nur,
-# dass zwei zusaetzliche Regeln im Regelwerk die Sprachregel verdraengen. Der Ort
-# der Forderung ist damit eine Messgroesse und keine Geschmacksfrage. Wer sie
-# zurueck in das Regelwerk schiebt, misst vorher.
+# ENTSCHEIDUNG: Die Laenge wird in der ANZEIGE begrenzt, nicht im Prompt. Eine
+# Kuerzung im Browser kann das Tor nicht beruehren, weil sie den Prompt nicht
+# anfasst. Der Preis sind Tokens fuer Text, den zunaechst niemand liest - und
+# das ist der guenstigere Preis als eine Eskalationsquote von 3 von 5 bei einer
+# nicht gedeckten Frage.
 #
-# DIE SPRACHNENNUNG IST PFLICHT und gehoert zur Wirkung: Ohne sie waren es 2 von
-# 15 deutsch statt 0 von 15. Deshalb gibt es zwei Fassungen, genau parallel zu
-# Regel 5 - eine fuer "Sprache der Frage" und eine fuer ein gesetztes
-# response_language. Eine feste Fassung wuerde einem gesetzten response_language
-# widersprechen, und der Widerspruch stuende im selben Prompt.
-_KNAPPHEIT_FOLGT_FRAGE_DE = (
-    "Beantworte nur diese Frage, in der Sprache, in der sie gestellt ist, und in "
-    "hoechstens drei Saetzen. Ergaenze nichts, was nicht gefragt war."
-)
-_KNAPPHEIT_VORGEGEBEN_DE = (
-    'Beantworte nur diese Frage, in der Sprache mit dem Kuerzel "{response_language}", '
-    "und in hoechstens drei Saetzen. Ergaenze nichts, was nicht gefragt war."
-)
-_KNAPPHEIT_FOLGT_FRAGE_EN = (
-    "Answer only this question, in the language it is written in, and in at most "
-    "three sentences. Do not add what was not asked."
-)
-_KNAPPHEIT_VORGEGEBEN_EN = (
-    'Answer only this question, in the language with the code "{response_language}", '
-    "and in at most three sentences. Do not add what was not asked."
-)
+# Ausfuehrlich und zuverlaessig ist besser als knapp und wackelig.
+# =============================================================================
 
 _ZUSATZ_DE = "\nZusaetzlich fuer diesen Mandanten:\n"
 _ZUSATZ_EN = "\nAdditionally for this tenant:\n"
@@ -220,10 +207,6 @@ class _Regelwerk(NamedTuple):
     sprache_folgt_frage: str
     sprache_vorgegeben: str
     zusatz: str
-    # Die Knappheitsforderung fuer den Userprompt, in zwei Fassungen - parallel
-    # zu sprache_folgt_frage und sprache_vorgegeben.
-    knappheit_folgt_frage: str
-    knappheit_vorgegeben: str
     # (Kontext, Quelle, Frage, kein-Kontext) - der Rahmen des Userprompts.
     rahmen: tuple[str, str, str, str]
 
@@ -238,8 +221,6 @@ _REGELWERK: dict[str, _Regelwerk] = {
         sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_DE,
         sprache_vorgegeben=_SPRACHE_VORGEGEBEN_DE,
         zusatz=_ZUSATZ_DE,
-        knappheit_folgt_frage=_KNAPPHEIT_FOLGT_FRAGE_DE,
-        knappheit_vorgegeben=_KNAPPHEIT_VORGEGEBEN_DE,
         rahmen=_RAHMEN_DE,
     ),
     "en": _Regelwerk(
@@ -247,8 +228,6 @@ _REGELWERK: dict[str, _Regelwerk] = {
         sprache_folgt_frage=_SPRACHE_FOLGT_FRAGE_EN,
         sprache_vorgegeben=_SPRACHE_VORGEGEBEN_EN,
         zusatz=_ZUSATZ_EN,
-        knappheit_folgt_frage=_KNAPPHEIT_FOLGT_FRAGE_EN,
-        knappheit_vorgegeben=_KNAPPHEIT_VORGEGEBEN_EN,
         rahmen=_RAHMEN_EN,
     ),
 }
@@ -290,12 +269,7 @@ def build_system_prompt(tenant: TenantConfig, response_language: str | None = No
     return "\n".join(teile)
 
 
-def build_user_prompt(
-    question: str,
-    hits: list[SearchHit],
-    language: str = "de",
-    response_language: str | None = None,
-) -> str:
+def build_user_prompt(question: str, hits: list[SearchHit], language: str = "de") -> str:
     """Baut den Kontextblock und die Frage, im Rahmen der Mandantensprache.
 
     Der Score steht bewusst NICHT im Kontext. Er ist eine interne Kennzahl; dem
@@ -311,24 +285,14 @@ def build_user_prompt(
 
     Default "de", damit ein Aufruf ohne Angabe sich verhaelt wie bisher.
 
-    `response_language` steuert nur, wie die Knappheitsforderung am Ende die
-    Sprache benennt. Sie muss dasselbe sagen wie Regel 5 im System-Prompt -
-    zwei widerspruechliche Sprachangaben in einem Prompt waeren schlimmer als
-    keine.
-
-    Die Knappheitsforderung steht hier und nicht im Regelwerk. Der Grund ist
-    gemessen und steht bei den Bausteinen oben: Im Regelwerk verdraengt sie die
-    Sprachregel.
+    DER PROMPT ENDET MIT DER FRAGE. Es folgt bewusst keine weitere Anweisung.
+    Eine Knappheitsforderung an dieser Stelle hat am 2026-09-24 das
+    Groundedness-Tor gelockert - bei einer nicht gedeckten Frage von 11 auf 1
+    von 12 Eskalationen. Der Block oben nennt alle Zahlen.
     """
-    regeln = _REGELWERK[language]
-    kontext_wort, quelle_wort, frage_wort, leer = regeln.rahmen
+    kontext_wort, quelle_wort, frage_wort, leer = _REGELWERK[language].rahmen
 
     abschnitte = [f"[{quelle_wort}: {hit.source_file}]\n{hit.text}" for hit in hits]
     kontext = "\n\n---\n\n".join(abschnitte) if abschnitte else leer
 
-    if response_language:
-        knappheit = regeln.knappheit_vorgegeben.format(response_language=response_language)
-    else:
-        knappheit = regeln.knappheit_folgt_frage
-
-    return f"{kontext_wort}:\n\n{kontext}\n\n---\n\n{frage_wort}: {question}\n\n{knappheit}"
+    return f"{kontext_wort}:\n\n{kontext}\n\n---\n\n{frage_wort}: {question}"

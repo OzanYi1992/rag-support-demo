@@ -603,13 +603,17 @@ def test_quellen_und_scores_sind_immer_gleich_lang():
         assert len(quellen) == len(scores)
 
 
-# --- Knappheit: nur die gestellte Frage, und kurz ---------------------------
+# =============================================================================
+# KEINE KNAPPHEITSFORDERUNG IM PROMPT
 #
-# Sie steht am USERPROMPT. Im Regelwerk verdraengt sie die Sprachregel - gemessen
-# am 2026-09-24, verschraenkt, je 20 Laeufe gegen demo-fellgate:
-#   Regelwerk mit Knappheit   14 deutsch,  3 englisch
-#   Regelwerk ohne             1 deutsch, 19 englisch
-# Am Userprompt: 0 von 15 deutsch.
+# Sie war am 2026-09-24 zweimal drin und ist zweimal wieder ausgebaut worden:
+#   im Regelwerk    kippte die ANTWORTSPRACHE   14 von 20 deutsch statt 1 von 20
+#   am Userprompt   lockerte das TOR            fell-12 1 von 12 statt 11 von 12
+# Die Laenge wird in der Anzeige begrenzt (static/app.js), nicht im Prompt.
+#
+# Diese Tests bewachen das Fehlen. Ein Test, der ein Fehlen prueft, ist leicht
+# als Formalismus zu lesen - deshalb steht die Zahl in jedem Docstring.
+# =============================================================================
 
 
 def _mandant(sprache: str) -> TenantConfig:
@@ -623,62 +627,51 @@ def _mandant(sprache: str) -> TenantConfig:
     )
 
 
-def test_das_regelwerk_traegt_keine_knappheitsregel():
-    """Die Regression, die das Verfahren einmal gekostet hat.
+KNAPPHEITSSPUREN = (
+    "drei Saetzen",
+    "three sentences",
+    "Beantworte nur diese Frage",
+    "Answer only this question",
+    "Antworte nur, wenn der Kontext",
+    "Answer only if the context",
+)
 
-    Wer die Knappheit in das Regelwerk zurueckschiebt, weil es dort
-    hingehoerte, macht einen englischen Mandanten wieder deutsch antworten.
-    Dieser Test ist die Bremse davor - und der Kommentar in app/prompts.py
-    nennt die Zahlen.
-    """
-    for sprache, verraeter in (("de", "drei Saetzen"), ("en", "three sentences")):
+
+def test_das_regelwerk_traegt_keine_knappheitsregel():
+    """Dort kippte sie die Antwortsprache: 14 von 20 Antworten deutsch bei einem
+    englischen Mandanten, gegen 1 von 20 ohne sie. Siehe P-030."""
+    for sprache in ("de", "en"):
         prompt = build_system_prompt(_mandant(sprache))
-        assert verraeter not in prompt, sprache
+        for spur in KNAPPHEITSSPUREN:
+            assert spur not in prompt, f"{sprache}: {spur}"
         # Gegenprobe: Das Regelwerk endet bei Regel 5.
         assert "\n6." not in prompt, sprache
 
 
-def test_der_userprompt_verlangt_knappheit_in_beiden_sprachen():
-    """Geprueft an beiden Sprachen: Eine Forderung, die nur auf Deutsch
-    existiert, ist genau der Fehler aus P-024 und P-028."""
-    treffer = [_hit("a.md", 0.9)]
-    erwartet = {
-        "de": ("Beantworte nur diese Frage", "hoechstens drei Saetzen", "nicht gefragt war"),
-        "en": ("Answer only this question", "at most three sentences", "not asked"),
-    }
-    for sprache, teile in erwartet.items():
-        prompt = build_user_prompt("Frage?", treffer, sprache)
-        for teil in teile:
-            assert teil in prompt, f"{sprache}: {teil}"
+def test_der_userprompt_endet_mit_der_frage():
+    """Dort lockerte die Knappheit das Groundedness-Tor.
 
-
-def test_die_knappheit_steht_hinter_der_frage():
-    """Nicht vor dem Kontext und nicht vor der Frage.
-
-    Die Reihenfolge ist Teil des gemessenen Ergebnisses: Kontext, Frage,
-    Forderung. Steht sie woanders, ist das eine andere Anordnung als die
-    gemessene, und die Messung traegt sie nicht mehr.
+    fell-12 eskalierte mit ihr 1 von 12 Laeufen statt 11 von 12, fell-05 7 statt
+    11. Die bedingte Fassung holte fell-05 zurueck und fell-12 nur zur Haelfte.
+    Deshalb steht am Userprompt nach der Frage nichts mehr.
     """
     treffer = [_hit("a.md", 0.9)]
-    prompt = build_user_prompt("Wie lange?", treffer, "de")
-    assert prompt.index("Wie lange?") < prompt.index("Beantworte nur diese Frage")
-    assert prompt.rstrip().endswith("was nicht gefragt war.")
+    for sprache, frage_wort in (("de", "Frage:"), ("en", "Question:")):
+        prompt = build_user_prompt("Wie lange gilt das?", treffer, sprache)
+        assert prompt.rstrip().endswith("Wie lange gilt das?"), sprache
+        assert frage_wort in prompt, sprache
+        for spur in KNAPPHEITSSPUREN:
+            assert spur not in prompt, f"{sprache}: {spur}"
 
 
-def test_die_knappheit_nennt_dieselbe_sprache_wie_regel_fuenf():
-    """Zwei widerspruechliche Sprachangaben in einem Prompt waeren schlimmer als keine.
+def test_build_user_prompt_nimmt_keine_antwortsprache():
+    """Der Parameter existierte nur fuer die Knappheitsforderung.
 
-    Ohne diese Kopplung stuende bei gesetztem response_language im Regelwerk
-    "antworte auf en" und am Userprompt "antworte in der Sprache der Frage".
+    Er ist mit ihr ausgebaut. Bliebe er stehen, waere er ein Einstiegspunkt fuer
+    genau den Zusatz, den dieser Abschnitt verhindert - und ein unbenutzter
+    Parameter liest sich wie eine Einladung.
     """
-    treffer = [_hit("a.md", 0.9)]
-    # Ohne Vorgabe: beide sagen "Sprache der Frage".
-    ohne = build_user_prompt("Frage?", treffer, "en")
-    assert "in the language it is written in" in ohne
-    assert '"' not in ohne.splitlines()[-1]
+    import inspect
 
-    # Mit Vorgabe: beide nennen dasselbe Kuerzel.
-    mit = build_user_prompt("Frage?", treffer, "en", "de")
-    assert 'code "de"' in mit
-    assert "in the language it is written in" not in mit
-    assert 'code "de"' in build_system_prompt(_mandant("en"), "de")
+    namen = list(inspect.signature(build_user_prompt).parameters)
+    assert namen == ["question", "hits", "language"], namen

@@ -43,6 +43,8 @@ JAVASCRIPT_SCHLUESSEL: tuple[str, ...] = (
     "ratenlimit_mit_zeit",
     "ratenlimit_ohne_zeit",
     "anfrage_fehlgeschlagen",
+    "mehr_anzeigen",
+    "weniger_anzeigen",
 )
 
 
@@ -71,6 +73,13 @@ class Texte(BaseModel, frozen=True):
     ratenlimit_mit_zeit: str
     ratenlimit_ohne_zeit: str
     anfrage_fehlgeschlagen: str
+
+    # Aufklappen langer Antworten. Die LAENGE wird in der Anzeige begrenzt und
+    # nicht im Prompt: Eine Knappheitsforderung im Prompt hat am 2026-09-24 das
+    # Groundedness-Tor gelockert (P-030). Eine Kuerzung im Browser kann das
+    # nicht, weil sie den Prompt nicht anfasst.
+    mehr_anzeigen: str
+    weniger_anzeigen: str
 
     # --- Serverseitige Meldungen -----------------------------------------
     ratenlimit_detail: str
@@ -107,6 +116,8 @@ _DE = Texte(
     ratenlimit_mit_zeit="Zu viele Anfragen. Bitte {sekunden} Sekunden warten.",
     ratenlimit_ohne_zeit="Zu viele Anfragen. Bitte einen Moment warten.",
     anfrage_fehlgeschlagen="Die Anfrage ist fehlgeschlagen.",
+    mehr_anzeigen="Ganze Antwort anzeigen",
+    weniger_anzeigen="Antwort einklappen",
     ratenlimit_detail="Zu viele Anfragen. Bitte kurz warten.",
     oberflaeche_fehlt="Oberflaeche fehlt.",
 )
@@ -133,6 +144,8 @@ _EN = Texte(
     ratenlimit_mit_zeit="Too many requests. Please wait {sekunden} seconds.",
     ratenlimit_ohne_zeit="Too many requests. Please wait a moment.",
     anfrage_fehlgeschlagen="The request failed.",
+    mehr_anzeigen="Show the full answer",
+    weniger_anzeigen="Collapse the answer",
     ratenlimit_detail="Too many requests. Please wait a moment.",
     oberflaeche_fehlt="User interface missing.",
 )

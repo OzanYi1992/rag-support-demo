@@ -45,6 +45,9 @@ def _kopf(**abweichend: object) -> dict[str, object]:
     basis = {
         "metrik": METRIK_DATEI_UND_CHUNK,
         "metrik_bedeutung": "rang = Datei, rang_chunk = Chunk",
+        # Seit dem 2026-09-24 Pflicht bei jedem Lauf mit LLM. Eine LLM-seitige
+        # Zahl ohne die Laufzahl ist nicht einzuordnen.
+        "laeufe_je_frage": 5,
     }
     basis.update(abweichend)
     return {"kopf": basis}
@@ -73,6 +76,30 @@ def test_kopf_ohne_erklaerung_wird_abgelehnt() -> None:
     """Ein Kuerzel ohne Erklaerung ist in vier Wochen so wenig wert wie nichts."""
     with pytest.raises(ValueError, match="metrik_bedeutung"):
         pruefe_kopf(_kopf(metrik_bedeutung=""))
+
+
+def test_kopf_ohne_laufzahl_wird_abgelehnt() -> None:
+    """Dieselbe Begruendung wie bei der Metrik, nur eine Ebene spaeter gelernt.
+
+    Die LLM-seitigen Zahlen aus EN-3 und EN-6 waren Stichproben von eins, und
+    niemand konnte es der Datei ansehen. Eine Datei ohne diese Angabe soll nicht
+    entstehen.
+    """
+    bericht = _kopf()
+    del bericht["kopf"]["laeufe_je_frage"]
+    with pytest.raises(ValueError, match="laeufe_je_frage"):
+        pruefe_kopf(bericht)
+
+
+def test_reiner_retrievallauf_braucht_keine_laufzahl() -> None:
+    """Gegenprobe: Retrieval ist deterministisch, n Laeufe davon sagen nichts.
+
+    Ohne sie wuerde die Pflicht auch dort gelten, wo sie keinen Sinn hat - und
+    eine Pflicht ohne Sinn wird als Schikane gelesen und irgendwann entfernt.
+    """
+    bericht = _kopf(modus="nur_retrieval")
+    del bericht["kopf"]["laeufe_je_frage"]
+    pruefe_kopf(bericht)
 
 
 # --- Abweichungsklasse ------------------------------------------------------

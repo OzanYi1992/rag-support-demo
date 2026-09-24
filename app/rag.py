@@ -219,11 +219,7 @@ def answer(
         )
     )
     system_prompt = build_system_prompt(tenant, response_language)
-    # response_language geht auch hier hinein: Die Knappheitsforderung am Ende
-    # nennt die Sprache, und sie muss dasselbe sagen wie Regel 5 im
-    # System-Prompt. Zwei widerspruechliche Angaben in einem Prompt waeren
-    # schlimmer als keine.
-    user_prompt = build_user_prompt(question, treffer, tenant.language, response_language)
+    user_prompt = build_user_prompt(question, treffer, tenant.language)
 
     start = time.perf_counter()
     ergebnis = aktives_llm.generate(system_prompt, user_prompt)

@@ -199,6 +199,35 @@ class Frageergebnis:
     sprache_der_antwort: str | None = None
     sprache_folgt_frage: bool | None = None
 
+    # --- Mehrfachlauf ------------------------------------------------------
+    # Seit dem 2026-09-24 faehrt jede Frage n-mal. Grund: Die LLM-seitigen Zahlen
+    # aus EN-3 und EN-6 waren Stichproben von eins, und bei einem Ausgang, der
+    # wuerfelt, ist eine Stichprobe von eins von einem Zufall nicht zu
+    # unterscheiden (P-028, P-030).
+    #
+    # Die retrievalseitigen Felder oben stammen aus dem ERSTEN Lauf. Dass das
+    # zulaessig ist, behauptet dieser Lauf nicht, sondern belegt es:
+    # retrieval_identisch vergleicht die Scorelisten aller Laeufe.
+    laeufe: int = 1
+    retrieval_identisch: bool | None = None
+    score_abweichung_intern: float | None = None
+
+    # LLM-Seite als Verteilung statt als Einzelwert. Die Skalarfelder oben
+    # tragen weiter den ersten Lauf - damit bleibt ein Bericht mit laeufe=1
+    # lesbar wie bisher.
+    eskaliert_anzahl: int | None = None
+    eskalation_wie_erwartet_anzahl: int | None = None
+    stabil: bool | None = None
+
+    # Antwortsprache als STANDARDGROESSE, nicht als Sonderpruefung. Seit dem
+    # 2026-09-24: Zwei englische Regeln ueber Laenge und Fokus haben die Sprache
+    # in 14 von 20 Faellen gekippt, ohne inhaltlich etwas mit Sprache zu tun zu
+    # haben (P-030). Eine Groesse, die so leicht kippt, gehoert in jede Messung.
+    sprachen_der_antworten: list[str] = field(default_factory=list)
+    sprache_folgt_frage_anzahl: int | None = None
+    sprache_bewertbar_anzahl: int | None = None
+    antwortlaengen: list[int] = field(default_factory=list)
+
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
     score_abweichung_max: float | None = None
@@ -434,6 +463,7 @@ def eine_frage(
     nur_retrieval: bool,
     cloud: CloudZiel | None = None,
     url_token: str | None = None,
+    laeufe: int = 1,
 ) -> Frageergebnis:
     erg = Frageergebnis(
         id=eintrag["id"],
@@ -478,34 +508,96 @@ def eine_frage(
         erg.abweichungsklasse = _abweichungsklasse(erg)
         return erg
 
-    if cloud is not None:
-        # Nur die Generierung laeuft gegen die deployte Instanz. Die Raenge oben
-        # bleiben lokal - die Schnittstelle liefert keine vollstaendige Rangliste.
-        if url_token is None:
-            raise ValueError("Cloud-Lauf ohne url_token.")
-        daten = cloud_antwort(cloud, url_token, erg.frage)
-        erg.eskaliert = daten["escalated"]
-        erg.grund = daten["escalation_reason"]
-        erg.latenz_retrieval_ms = daten["latency_ms_retrieval"]
-        erg.latenz_generierung_ms = daten["latency_ms_generation"]
-        erg.prompt_tokens = daten["prompt_tokens"]
-        erg.completion_tokens = daten["completion_tokens"]
-        erg.antworttext = daten["text"]
-        erg.modell = daten["model"]
-        erg.scores_wie_lokal, erg.score_abweichung_max = vergleiche_scores(
-            lokale_scores, daten["retrieval_scores"]
-        )
-    else:
-        antwort = answer(slug, erg.frage, settings=settings, embeddings=embedder)
-        erg.eskaliert = antwort.escalated
-        erg.grund = antwort.escalation_reason
-        erg.latenz_retrieval_ms = antwort.latency_ms_retrieval
-        erg.latenz_generierung_ms = antwort.latency_ms_generation
-        erg.prompt_tokens = antwort.prompt_tokens
-        erg.completion_tokens = antwort.completion_tokens
-        erg.antworttext = antwort.text
-        erg.modell = antwort.model
-        erg.lang = antwort.lang
+    # --- Die Generierung, n-mal --------------------------------------------
+    # Retrieval steht oben und ist deterministisch. Belegt wird das hier: Jeder
+    # Lauf vergleicht seine Top-k-Scores mit denen des ersten Laufs, und
+    # retrieval_identisch traegt das Ergebnis. Bei einem Cloudlauf liefert die
+    # Instanz ihre Scores mit, dann wird zusaetzlich gegen lokal verglichen.
+    erg.laeufe = laeufe
+    eskalationen: list[bool] = []
+    sprachen: list[str] = []
+    bewertbar = 0
+    folgt = 0
+    scorelisten: list[list[float]] = []
+
+    for lauf_nr in range(laeufe):
+        if cloud is not None:
+            # Nur die Generierung laeuft gegen die deployte Instanz. Die Raenge
+            # oben bleiben lokal - die Schnittstelle liefert keine vollstaendige
+            # Rangliste.
+            if url_token is None:
+                raise ValueError("Cloud-Lauf ohne url_token.")
+            daten = cloud_antwort(cloud, url_token, erg.frage)
+            eskaliert = daten["escalated"]
+            grund = daten["escalation_reason"]
+            antworttext = daten["text"]
+            lang = None
+            scorelisten.append(list(daten["retrieval_scores"]))
+            if lauf_nr == 0:
+                erg.latenz_retrieval_ms = daten["latency_ms_retrieval"]
+                erg.latenz_generierung_ms = daten["latency_ms_generation"]
+                erg.prompt_tokens = daten["prompt_tokens"]
+                erg.completion_tokens = daten["completion_tokens"]
+                erg.modell = daten["model"]
+                erg.scores_wie_lokal, erg.score_abweichung_max = vergleiche_scores(
+                    lokale_scores, daten["retrieval_scores"]
+                )
+        else:
+            antwort = answer(slug, erg.frage, settings=settings, embeddings=embedder)
+            eskaliert = antwort.escalated
+            grund = antwort.escalation_reason
+            antworttext = antwort.text
+            lang = antwort.lang
+            scorelisten.append(list(antwort.retrieval_scores))
+            if lauf_nr == 0:
+                erg.latenz_retrieval_ms = antwort.latency_ms_retrieval
+                erg.latenz_generierung_ms = antwort.latency_ms_generation
+                erg.prompt_tokens = antwort.prompt_tokens
+                erg.completion_tokens = antwort.completion_tokens
+                erg.modell = antwort.model
+
+        eskalationen.append(bool(eskaliert))
+
+        # Die Antwortsprache je Lauf. Eskalationstexte bleiben aussen vor: Sie
+        # sind der Text des Mandanten und folgen dessen Sprache, nicht der Frage.
+        if not eskaliert and antworttext:
+            erg.antwortlaengen.append(len(antworttext))
+            gesprochen = _rate_sprache(antworttext)
+            if gesprochen:
+                sprachen.append(gesprochen)
+            gefragt = _rate_sprache(erg.frage)
+            if gesprochen and gefragt:
+                bewertbar += 1
+                folgt += int(gesprochen == gefragt)
+
+        # Der ERSTE Lauf fuellt die Einzelfelder. Damit bleibt ein Bericht mit
+        # laeufe=1 genau der von vorher.
+        if lauf_nr == 0:
+            erg.eskaliert = eskaliert
+            erg.grund = grund
+            erg.antworttext = antworttext
+            erg.lang = lang
+
+    # --- Verteilungen ------------------------------------------------------
+    erg.eskaliert_anzahl = sum(eskalationen)
+    erg.eskalation_wie_erwartet_anzahl = sum(
+        1 for e in eskalationen if e == erg.erwartet_eskalation
+    )
+    erg.stabil = len(set(eskalationen)) == 1
+    erg.sprachen_der_antworten = sprachen
+    erg.sprache_bewertbar_anzahl = bewertbar
+    erg.sprache_folgt_frage_anzahl = folgt
+
+    # Retrieval ueber alle Laeufe: eine Scoreliste oder ein Befund.
+    erg.retrieval_identisch = all(liste == scorelisten[0] for liste in scorelisten)
+    erg.score_abweichung_intern = max(
+        (
+            abs(a - b)
+            for liste in scorelisten[1:]
+            for a, b in zip(liste, scorelisten[0], strict=False)
+        ),
+        default=0.0,
+    )
 
     erg.tor = _tor_von(erg.grund)
     erg.eskalation_wie_erwartet = erg.eskaliert == erg.erwartet_eskalation
@@ -605,10 +697,46 @@ def aggregiere(
                 and e.erwartete_quelle
                 and e.erwartete_quelle not in QUELLE_PLATZHALTER
             ),
-            "sprache_folgt_frage_nicht": sorted(
-                e.id for e in gruppe if e.sprache_folgt_frage is False
+            # --- Antwortsprache: Standardgroesse, nicht Sonderpruefung ------
+            # Gezaehlt werden LAEUFE, nicht Fragen. Bei n=5 und einer Frage, die
+            # in einem von fuenf Laeufen die Sprache wechselt, wuerde eine
+            # Fragenzaehlung entweder "eine Frage falsch" oder "eine Frage
+            # richtig" sagen - beides waere irrefuehrend.
+            "sprache_laeufe_bewertbar": sum(e.sprache_bewertbar_anzahl or 0 for e in gruppe),
+            "sprache_folgt_frage_laeufe": sum(e.sprache_folgt_frage_anzahl or 0 for e in gruppe),
+            "sprache_folgt_frage_rate": (
+                round(
+                    sum(e.sprache_folgt_frage_anzahl or 0 for e in gruppe)
+                    / sum(e.sprache_bewertbar_anzahl or 0 for e in gruppe),
+                    4,
+                )
+                if sum(e.sprache_bewertbar_anzahl or 0 for e in gruppe)
+                else None
             ),
+            "sprache_folgt_frage_nicht": sorted(
+                e.id
+                for e in gruppe
+                if (e.sprache_bewertbar_anzahl or 0) > (e.sprache_folgt_frage_anzahl or 0)
+            ),
+            # --- Stabilitaet ueber die Laeufe -------------------------------
+            # Eine Frage ist stabil, wenn alle ihre Laeufe dieselbe
+            # Eskalationsentscheidung hatten. Bei laeufe=1 ist das trivial wahr
+            # und sagt nichts - deshalb steht die Laufzahl im Kopf.
+            "instabile_fragen": sorted(e.id for e in gruppe if e.stabil is False),
+            "retrieval_nicht_identisch": sorted(
+                e.id for e in gruppe if e.retrieval_identisch is False
+            ),
+            # `eskaliert` zaehlt FRAGEN, deren erster Lauf eskalierte - so war es
+            # immer, und alte Berichte bleiben damit vergleichbar. Die drei
+            # Zeilen darunter zaehlen LAEUFE und sind das, was bei n>1 zaehlt:
+            # Eine Frage, die in drei von fuenf Laeufen eskaliert, ist in einer
+            # Fragenzaehlung entweder ganz drin oder ganz draussen.
             "eskaliert": len(eskaliert),
+            "laeufe_gesamt": sum(e.laeufe for e in gruppe),
+            "eskaliert_laeufe": sum(e.eskaliert_anzahl or 0 for e in gruppe),
+            "eskalation_wie_erwartet_laeufe": sum(
+                e.eskalation_wie_erwartet_anzahl or 0 for e in gruppe
+            ),
             "eskaliert_retrieval": sum(1 for e in eskaliert if e.tor == "retrieval"),
             "eskaliert_groundedness": sum(1 for e in eskaliert if e.tor == "groundedness"),
             "eskaliert_sonstiges": sum(1 for e in eskaliert if e.tor == "sonstiges"),
@@ -647,6 +775,7 @@ def fahre(
     lauf: str,
     baseline: bool,
     cloud: CloudZiel | None = None,
+    laeufe: int = 1,
 ) -> dict[str, Any]:
     settings = Settings()
     tenant = load_tenant(slug, settings.tenants_dir)
@@ -666,7 +795,7 @@ def fahre(
     # Es steht weder im Kopf noch in einem Frageergebnis.
     url_token = tenant.url_token if cloud is not None else None
     ergebnisse = [
-        eine_frage(slug, f, settings, top_k, gesamt, nur_retrieval, cloud, url_token)
+        eine_frage(slug, f, settings, top_k, gesamt, nur_retrieval, cloud, url_token, laeufe)
         for f in gold["fragen"]
     ]
 
@@ -717,6 +846,18 @@ def fahre(
             "zeitstempel": datetime.now(UTC).isoformat(timespec="seconds"),
             "lauf": lauf,
             "baseline": baseline,
+            # Die Anzahl Laeufe JE FRAGE. Ohne diese Zahl ist keine LLM-seitige
+            # Angabe in diesem Bericht einzuordnen: Bei n=1 ist jede davon eine
+            # Stichprobe von eins, und genau das hat die Zahlen aus EN-3 und
+            # EN-6 entwertet (P-028, P-030).
+            "laeufe_je_frage": laeufe,
+            "laeufe_begruendung": (
+                "n>1 seit 2026-09-24. Die Generierung wuerfelt: Dieselbe Frage "
+                "lieferte bei identischem Retrieval verschiedene Antwortsprachen "
+                "und verschiedene Eskalationsentscheidungen. Eine Stichprobe von "
+                "eins ist davon nicht zu unterscheiden."
+            ),
+            "sampling_temperature": settings.llm_temperature,
             "mandant": slug,
             "modus": "nur_retrieval" if nur_retrieval else "retrieval_und_llm",
             **zielfelder,
@@ -760,6 +901,16 @@ def pruefe_kopf(bericht: dict[str, Any]) -> None:
             "Ergebniskopf ohne metrik_bedeutung. Ein Kuerzel ohne Erklaerung "
             "ist in vier Wochen so wenig wert wie gar keine Angabe."
         )
+    # Dieselbe Begruendung wie fuer die Metrik, nur eine Ebene spaeter gelernt:
+    # Eine LLM-seitige Zahl ohne die Laufzahl ist nicht einzuordnen. Die Zahlen
+    # aus EN-3 und EN-6 waren Stichproben von eins, und niemand konnte es der
+    # Datei ansehen.
+    if kopf.get("modus") != "nur_retrieval" and not kopf.get("laeufe_je_frage"):
+        raise ValueError(
+            "Ergebniskopf ohne laeufe_je_frage. Eine LLM-seitige Zahl ohne die "
+            "Anzahl Laeufe ist nicht einzuordnen - und eine Stichprobe von eins "
+            "sieht genauso aus wie eine Eigenschaft. Datei wird nicht geschrieben."
+        )
 
 
 def _zielzeile(kopf: dict[str, Any]) -> str:
@@ -783,11 +934,14 @@ def tabelle(bericht: dict[str, Any]) -> str:
         f"chunks={kopf['chunks_im_index']}   strategie={kopf['eskalationsstrategie']}",
         f"embedding={kopf['embedding_modell']}   llm={kopf['llm_modell']}   "
         f"commit={kopf['git_commit']}",
+        f"LAEUFE JE FRAGE: {kopf.get('laeufe_je_frage')}   "
+        f"temperature={kopf.get('sampling_temperature')}",
         f"METRIK: {kopf['metrik']}",
         _zielzeile(kopf),
         f"{'=' * 78}",
         "",
-        f"{'Kategorie':<26}{'Hit@k':>8}{'MRR':>8}{'Eskal.':>8}{'  davon Tor':<18}{'p50 ms':>8}",
+        f"{'Kategorie':<24}{'Hit@k':>7}{'Kontext':>8}{'MRR':>7}"
+        f"{'Eskal.':>8}{' Tor':<10}{'Sprache':>9}{'p50':>6}",
         "-" * 78,
     ]
     for kategorie, a in bericht["aggregiert_je_kategorie"].items():
@@ -800,7 +954,20 @@ def tabelle(bericht: dict[str, Any]) -> str:
         )
         p50 = a["latenz_p50_ms"] if a["latenz_p50_ms"] is not None else "–"
         antw = a["antwort_im_kontext"] or "–"
-        z.append(f"{kategorie:<26}{hit:>9}{antw:>9}{mrr:>7}{a['eskaliert']:>8}  {tore:<10}{p50:>6}")
+        # Die Antwortsprache steht ab dem 2026-09-24 in der Tabelle, nicht in
+        # einer Sonderzeile darunter. Gezaehlt werden LAEUFE: "18/20" heisst
+        # achtzehn von zwanzig bewertbaren Laeufen dieser Kategorie folgten der
+        # Sprache der Frage.
+        if a.get("sprache_laeufe_bewertbar"):
+            sprache = f"{a['sprache_folgt_frage_laeufe']}/{a['sprache_laeufe_bewertbar']}"
+        else:
+            sprache = "–"
+        # Eskalation als LAEUFE, gleiche Zaehlweise wie die Sprachspalte. "3/10"
+        # heisst drei von zehn Laeufen dieser Kategorie eskalierten.
+        eskal = f"{a['eskaliert_laeufe']}/{a['laeufe_gesamt']}"
+        z.append(
+            f"{kategorie:<24}{hit:>7}{antw:>8}{mrr:>7}{eskal:>8} {tore:<9}{sprache:>9}{p50:>6}"
+        )
     fremd = sorted({t for f in bericht["fragen"] for t in f["fremde_chunks"]})
     z += ["", f"Fremde Mandanten in irgendeiner Trefferliste: {fremd or 'keine'}"]
 
@@ -830,10 +997,56 @@ def tabelle(bericht: dict[str, Any]) -> str:
         }
     )
     if falsche_sprache:
+        # Genannt wird jede Frage, bei der MINDESTENS EIN Lauf die Sprache
+        # gewechselt hat. Das ist strenger als "die Mehrheit war falsch", und
+        # zwar mit Absicht: Ein Interessent klickt einmal.
         z += [
             "",
             f"ACHTUNG: Antwortsprache folgt der Frage NICHT: {', '.join(falsche_sprache)}",
+            "  Genannt ist jede Frage mit mindestens einem abweichenden Lauf.",
             "  Vor einem Interessenten ist das der sichtbarste Fehler ueberhaupt.",
+        ]
+        for f in bericht["fragen"]:
+            if f["id"] in falsche_sprache:
+                z.append(
+                    f"  {f['id']}: {f.get('sprache_folgt_frage_anzahl')}/"
+                    f"{f.get('sprache_bewertbar_anzahl')} Laeufe folgten, "
+                    f"Sprachen {f.get('sprachen_der_antworten')}"
+                )
+
+    instabil = sorted(
+        {
+            fid
+            for a in bericht["aggregiert_je_kategorie"].values()
+            for fid in a.get("instabile_fragen", [])
+        }
+    )
+    if instabil:
+        # Kein ACHTUNG: Eine schwankende Eskalationsentscheidung ist ein Befund
+        # und nicht zwingend ein Mangel. Sie muss nur sichtbar sein, weil sie bei
+        # n=1 wie eine Eigenschaft aussieht.
+        z += ["", f"Uneinheitliche Eskalationsentscheidung ueber die Laeufe: {', '.join(instabil)}"]
+        for f in bericht["fragen"]:
+            if f["id"] in instabil:
+                z.append(
+                    f"  {f['id']}: {f.get('eskaliert_anzahl')} von {f.get('laeufe')} Laeufen "
+                    f"eskaliert, erwartet war {f.get('erwartet_eskalation')}"
+                )
+
+    retrieval_wackelt = sorted(
+        {
+            fid
+            for a in bericht["aggregiert_je_kategorie"].values()
+            for fid in a.get("retrieval_nicht_identisch", [])
+        }
+    )
+    if retrieval_wackelt:
+        # Das waere ein echter Befund: Retrieval ist deterministisch, und wenn
+        # es das nicht ist, taugt keine Zahl in diesem Bericht.
+        z += [
+            "",
+            f"ACHTUNG: Retrieval NICHT identisch ueber die Laeufe: {', '.join(retrieval_wackelt)}",
+            "  Das darf nicht vorkommen. Bis zur Klaerung traegt dieser Bericht nichts.",
         ]
 
     fehlt = sorted(
@@ -868,6 +1081,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--top-k", type=int, default=None, help="erzwingt k statt des Mandantenwerts")
     p.add_argument("--lauf", default="A", help="Kennzeichnung im Ergebniskopf")
     p.add_argument(
+        "--laeufe",
+        type=int,
+        default=5,
+        help=(
+            "Laeufe JE FRAGE, Standard 5. Die Generierung wuerfelt; eine "
+            "Stichprobe von eins ist von einer Eigenschaft nicht zu unterscheiden"
+        ),
+    )
+    p.add_argument(
         "--baseline",
         action="store_true",
         help="als Bezugspunkt kennzeichnen (nur solche committen)",
@@ -891,6 +1113,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = p.parse_args(argv)
+
+    if args.laeufe < 1:
+        p.error("--laeufe muss mindestens 1 sein.")
+    if args.laeufe == 1 and not args.retrieval_only:
+        # Kein Fehler, aber ein Hinweis: Ein LLM-Lauf mit n=1 ist zulaessig und
+        # manchmal gewollt. Er darf nur nicht unbemerkt als Basis dienen.
+        print(
+            "HINWEIS: --laeufe 1 bei einem LLM-Lauf. Jede LLM-seitige Zahl "
+            "dieses Berichts ist damit eine Stichprobe von eins.",
+            file=sys.stderr,
+        )
 
     if args.base_url and not args.revision:
         p.error(
@@ -927,7 +1160,17 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         for slug in slugs:
-            bericht = fahre(slug, args.top_k, args.retrieval_only, args.lauf, args.baseline, cloud)
+            bericht = fahre(
+                slug,
+                args.top_k,
+                args.retrieval_only,
+                args.lauf,
+                args.baseline,
+                cloud,
+                # Ohne LLM gibt es nichts zu wiederholen: Retrieval ist
+                # deterministisch, und n Laeufe davon kosten Zeit ohne Erkenntnis.
+                1 if args.retrieval_only else args.laeufe,
+            )
             pruefe_kopf(bericht)
             stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
             datei = ERGEBNIS_DIR / f"{stempel}-{slug}-lauf{args.lauf}.json"
