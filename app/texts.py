@@ -45,6 +45,7 @@ JAVASCRIPT_SCHLUESSEL: tuple[str, ...] = (
     "anfrage_fehlgeschlagen",
     "mehr_anzeigen",
     "weniger_anzeigen",
+    "eskalation_themen",
 )
 
 
@@ -80,6 +81,16 @@ class Texte(BaseModel, frozen=True):
     # nicht, weil sie den Prompt nicht anfasst.
     mehr_anzeigen: str
     weniger_anzeigen: str
+
+    # Der Satz im Eskalationskasten, der nennt, worueber Auskunft moeglich ist.
+    # Traegt den Platzhalter {topics} und bekommt denselben Text wie die
+    # Begruessung - nicht eine zweite, eigene Aufzaehlung, die auseinanderlaufen
+    # koennte.
+    #
+    # Warum es ihn gibt: Heute sieht jede Eskalation gleich aus, egal ob die
+    # Frage unbeantwortbar oder nur zu knapp war. Viermal derselbe Satz liest
+    # sich beim Interessenten wie eine statische Seite ohne KI.
+    eskalation_themen: str
 
     # --- Serverseitige Meldungen -----------------------------------------
     ratenlimit_detail: str
@@ -118,6 +129,7 @@ _DE = Texte(
     anfrage_fehlgeschlagen="Die Anfrage ist fehlgeschlagen.",
     mehr_anzeigen="Ganze Antwort anzeigen",
     weniger_anzeigen="Antwort einklappen",
+    eskalation_themen="Auskunft ist möglich zu {topics}.",
     ratenlimit_detail="Zu viele Anfragen. Bitte kurz warten.",
     oberflaeche_fehlt="Oberflaeche fehlt.",
 )
@@ -146,6 +158,7 @@ _EN = Texte(
     anfrage_fehlgeschlagen="The request failed.",
     mehr_anzeigen="Show the full answer",
     weniger_anzeigen="Collapse the answer",
+    eskalation_themen="I can answer about {topics}.",
     ratenlimit_detail="Too many requests. Please wait a moment.",
     oberflaeche_fehlt="User interface missing.",
 )

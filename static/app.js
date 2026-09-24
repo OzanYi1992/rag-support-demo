@@ -12,6 +12,7 @@
   var senden = document.getElementById("senden");
   var verlauf = document.getElementById("verlauf");
   var token = formular.dataset.token;
+  var themen = formular.dataset.themen || "";
 
   // Die Texte kommen serverseitig aus dem Katalog, ausgewaehlt ueber die
   // Sprache des Mandanten. Diese Datei wird unter /static/ fuer alle
@@ -117,7 +118,29 @@
     var liste = document.createElement("ul");
     quellen.forEach(function (quelle, i) {
       var zeile = document.createElement("li");
-      zeile.textContent = quelle;
+
+      // Der Dateiname wird ein Link auf das Dokument DIESES Mandanten. Der
+      // Interessent sieht damit, dass die Antwort aus einem Dokument kommt und
+      // nicht erfunden ist; beim Kunden zeigt derselbe Klick spaeter auf seine
+      // FAQ-Seite.
+      //
+      // Die Adresse wird aus dem TOKEN gebaut, das diese Seite ohnehin traegt,
+      // und aus dem Dateinamen - beide ueber encodeURIComponent. Der Server
+      // loest den Namen gegen die tatsaechliche Dateiliste des Mandanten auf
+      // (app/main.py, dokument_aufloesen). Hier wird nichts geprueft, weil hier
+      // nichts zu pruefen ist: Der Browser ist keine Sicherheitsgrenze.
+      //
+      // Nennt das Modell eine Quelle, die es nicht gibt, fuehrt der Link ins
+      // Leere. Das ist erwuenscht - eine erfundene Quellenangabe wird sichtbar,
+      // statt als Dateiname plausibel dazustehen.
+      var verweis = document.createElement("a");
+      verweis.textContent = quelle;
+      verweis.href =
+        "/t/" + encodeURIComponent(token) + "/doc/" + encodeURIComponent(quelle);
+      verweis.target = "_blank";
+      verweis.rel = "noopener noreferrer";
+      zeile.appendChild(verweis);
+
       if (scores && typeof scores[i] === "number") {
         var score = document.createElement("span");
         score.className = "score";
@@ -140,6 +163,20 @@
     stark.textContent = texte.eskalation_titel;
     hinweis.appendChild(stark);
     hinweis.appendChild(document.createTextNode(texte.eskalation_hinweis));
+
+    // Und die Themen, ueber die Auskunft moeglich ist. Ohne sie sieht jede
+    // Eskalation gleich aus, egal ob die Frage unbeantwortbar oder nur zu knapp
+    // war - viermal derselbe Satz liest sich wie eine statische Seite ohne KI.
+    //
+    // Dieselbe Quelle wie die Begruessung (tenant.yaml, Feld topics), damit
+    // nicht zwei Aufzaehlungen entstehen, die auseinanderlaufen.
+    if (themen) {
+      var zeile = document.createElement("div");
+      zeile.className = "themen";
+      zeile.textContent = texte.eskalation_themen.replace("{topics}", themen);
+      hinweis.appendChild(zeile);
+    }
+
     inhalt.appendChild(hinweis);
   }
 

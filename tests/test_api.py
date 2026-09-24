@@ -20,7 +20,12 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.embeddings import E5Embeddings
-from app.main import NICHT_GEFUNDEN, create_app, statische_fassung
+from app.main import (
+    NICHT_GEFUNDEN,
+    create_app,
+    dokument_aufloesen,
+    statische_fassung,
+)
 from app.prompts import GroundedAnswer
 from app.tenants import load_tenant
 from app.texts import JAVASCRIPT_SCHLUESSEL
@@ -799,3 +804,258 @@ def test_die_begruessung_nennt_die_themen_des_mandanten(
     mandant = load_tenant("demo-acme", settings.tenants_dir)
     for wort in mandant.topics.split():
         assert html.escape(wort) in seite, wort
+
+
+# =============================================================================
+# C1: QUELLDOKUMENTE, UND DIE EINZIGE SICHERHEITSGRENZE DIESES SYSTEMS
+#
+# Das ist die erste Stelle, an der ein Fehler nicht nur eine schlechte Antwort
+# erzeugt, sondern FREMDE INHALTE ausliefert. Entsprechend prueft dieser
+# Abschnitt zweigleisig:
+#
+#   dokument_aufloesen() direkt   - mit Zeichenketten, die httpx unterwegs
+#                                   normalisieren wuerde, bevor der Server sie
+#                                   sieht
+#   ueber HTTP                    - mit dem, was tatsaechlich ueber die Leitung
+#                                   geht, also kodiert
+#
+# Nur eines von beiden waere zu wenig. Ein Test, der ausschliesslich ueber httpx
+# geht, prueft teils die Normalisierung des Clients statt die Abwehr des Servers.
+# =============================================================================
+
+
+# Zeichenketten, die keinen Treffer ergeben DUERFEN. Jede steht fuer eine eigene
+# Klasse, nicht fuer eine Variante derselben.
+BOESE_NAMEN = [
+    # 1. Traversal, roh
+    "../../etc/passwd",
+    "../../../etc/passwd",
+    # 2. absoluter Pfad
+    "/etc/passwd",
+    "/app/tenants/demo-nordwind/docs/widerruf.md",
+    # 3. URL-kodierte Trennzeichen
+    "%2e%2e%2fwiderruf.md",
+    "..%2fwiderruf.md",
+    "%2e%2e/widerruf.md",
+    # 4. doppelt kodierte Trennzeichen
+    "%252e%252e%252fwiderruf.md",
+    "..%252fwiderruf.md",
+    # 5. eigener Dateiname mit vorangestelltem ../
+    "../docs/doku.md",
+    "../../demo-acme/docs/doku.md",
+    "./doku.md",
+    # 6. fremder Dateiname OHNE Pfadanteil - der Fall, der ohne die Dateiliste
+    #    durchginge, weil er wie ein gewoehnlicher Name aussieht
+    "widerruf.md",
+    "technischer-support.md",
+    # Rueckwaerts-Trennzeichen und Null-Byte, weil beide historisch getragen haben
+    "..\\\\widerruf.md",
+    "doku.md\x00.txt",
+    # Leer und nur Trennzeichen
+    "",
+    ".",
+    "..",
+    "/",
+]
+
+
+def _docs_ordner(tmp_path: Path) -> Path:
+    """Zwei Mandanten mit je einem Dokument, plus eine Datei ausserhalb."""
+    for slug, inhalt in (("mandant-a", "Inhalt A"), ("mandant-b", "Inhalt B")):
+        (tmp_path / slug / "docs").mkdir(parents=True)
+        (tmp_path / slug / "docs" / "doku.md").write_text(inhalt, encoding="utf-8")
+    (tmp_path / "geheim.md").write_text("darf nie ausgeliefert werden", encoding="utf-8")
+    (tmp_path / "mandant-b" / "docs" / "nur-b.md").write_text("nur B", encoding="utf-8")
+    return tmp_path
+
+
+def test_aufloesung_findet_die_eigene_datei(tmp_path: Path):
+    """Positivtest. Ohne ihn waere eine Abwehr, die ALLES ablehnt, von einer
+    richtigen nicht zu unterscheiden."""
+    wurzel = _docs_ordner(tmp_path)
+    treffer = dokument_aufloesen(wurzel / "mandant-a" / "docs", "doku.md")
+    assert treffer is not None
+    assert treffer.read_text(encoding="utf-8") == "Inhalt A"
+
+
+def test_aufloesung_lehnt_jede_boese_zeichenkette_ab(tmp_path: Path):
+    """Der Negativtest. Jeder Eintrag steht fuer eine eigene Angriffsklasse.
+
+    Entscheidend ist, WARUM das traegt: Nachgeschlagen wird in einer Menge
+    realer Dateinamen. `"../../etc/passwd"` ist kein Eintrag dieser Menge -
+    da gibt es nichts zu umgehen und nichts zu kodieren.
+    """
+    wurzel = _docs_ordner(tmp_path)
+    ordner = wurzel / "mandant-a" / "docs"
+    for name in BOESE_NAMEN:
+        assert dokument_aufloesen(ordner, name) is None, f"durchgelassen: {name!r}"
+
+
+def test_aufloesung_gibt_kein_verzeichnis_heraus(tmp_path: Path):
+    """Ein Verzeichnisname ist kein Dokument. FileResponse darauf waere ein Fehler
+    zur Laufzeit, und zwar einer mit Stacktrace vor einem Interessenten."""
+    wurzel = _docs_ordner(tmp_path)
+    (wurzel / "mandant-a" / "docs" / "unterordner").mkdir()
+    assert dokument_aufloesen(wurzel / "mandant-a" / "docs", "unterordner") is None
+
+
+def test_aufloesung_ohne_ordner_ergibt_nichts(tmp_path: Path):
+    """Ein Mandant ohne docs/ liefert nichts, statt zu scheitern."""
+    assert dokument_aufloesen(tmp_path / "gibt-es-nicht", "doku.md") is None
+
+
+# --- dieselbe Grenze über HTTP ----------------------------------------------
+
+
+def test_dokument_der_eigene_mandant_bekommt_seine_datei(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    client, _ = _client(umgebung)
+    antwort = client.get(f"/t/{ACME_TOKEN}/doc/doku.md")
+    assert antwort.status_code == 200
+    assert antwort.headers["Cache-Control"] == "no-store"
+    # text/plain: wird angezeigt statt heruntergeladen und NICHT als Markup
+    # ausgewertet. Dokumentinhalt ist Fremdtext.
+    assert antwort.headers["content-type"].startswith("text/plain")
+
+
+def test_dokument_fremder_mandant_bekommt_nichts(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Der Fall, der ohne die Dateiliste durchginge: ein gewoehnlich aussehender
+    Name, der nur einem anderen Mandanten gehoert.
+
+    Die erste Fassung dieses Tests hat nach `doku.md` gefragt - und die gibt es
+    bei BEIDEN Testmandanten. Die 200 war deshalb richtig, und der Test war rot
+    aus dem falschen Grund. Er braucht einen Namen, den es nur beim anderen gibt.
+
+    Und er braucht die Gegenprobe darunter: Ohne sie koennte der 404 auch heissen,
+    dass die Route fuer niemanden funktioniert.
+    """
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+
+    nur_nordwind = settings.tenants_dir / "demo-nordwind" / "docs" / "nur-nordwind.md"
+    nur_nordwind.write_text("gehoert nordwind", encoding="utf-8")
+
+    # Ueber ACMES Token: darf nicht kommen.
+    antwort = client.get(f"/t/{ACME_TOKEN}/doc/nur-nordwind.md")
+    assert antwort.status_code == 404
+    assert antwort.json()["detail"] == NICHT_GEFUNDEN
+
+    # Gegenprobe: Ueber NORDWINDS Token kommt dieselbe Datei. Die 404 oben liegt
+    # also an der Mandantengrenze und nicht daran, dass die Route nichts liefert.
+    eigen = client.get(f"/t/{NORDWIND_TOKEN}/doc/nur-nordwind.md")
+    assert eigen.status_code == 200
+    assert eigen.text == "gehoert nordwind"
+
+
+def test_dokument_kodierte_trennzeichen_werden_abgewiesen(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Was tatsaechlich ueber die Leitung geht.
+
+    Roh geschriebene `../` normalisiert httpx, bevor der Server sie sieht -
+    deshalb stehen hier die kodierten Fassungen, und die ungekodierten prueft
+    `test_aufloesung_lehnt_jede_boese_zeichenkette_ab` direkt an der Funktion.
+
+    EHRLICH GESAGT, UND DAS IST GEMESSEN: Diese 404 kommen vom ROUTER, nicht von
+    unserer Aufloesung. Ein Adressglied kann nach dem Dekodieren kein "/"
+    enthalten, also trifft ein Traversal gar keine Route. Die Mutationsgegenprobe
+    hat das gezeigt - die angreifbare Fassung der Aufloesung faellt hier NICHT
+    auf, nur in den Tests an der Funktion.
+
+    Dieser Test belegt also das beobachtbare Verhalten und nicht die Abwehr. Die
+    Abwehr belegen `test_aufloesung_lehnt_jede_boese_zeichenkette_ab` und
+    `test_die_dokumentroute_nimmt_nur_ein_adressglied`.
+    """
+    client, _ = _client(umgebung)
+    for pfad in (
+        f"/t/{ACME_TOKEN}/doc/%2e%2e%2fdoku.md",
+        f"/t/{ACME_TOKEN}/doc/..%2fdoku.md",
+        f"/t/{ACME_TOKEN}/doc/%252e%252e%252fdoku.md",
+        f"/t/{ACME_TOKEN}/doc/%2fetc%2fpasswd",
+        f"/t/{ACME_TOKEN}/doc/%2e%2e%2f%2e%2e%2fdemo-nordwind%2fdocs%2fwiderruf.md",
+    ):
+        antwort = client.get(pfad)
+        assert antwort.status_code == 404, pfad
+
+
+def test_dokument_unbekanntes_token_verraet_nichts(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Derselbe Wortlaut wie bei jedem unbekannten Pfad.
+
+    Kein Unterschied zwischen "Token unbekannt" und "Datei unbekannt" - sonst
+    liesse sich aus den Antworten ableiten, welche Token gueltig sind.
+    """
+    client, _ = _client(umgebung)
+    unbekannt = client.get("/t/dieses-token-gibt-es-nicht-1234/doc/doku.md")
+    bekannt_ohne_datei = client.get(f"/t/{ACME_TOKEN}/doc/gibt-es-nicht.md")
+    assert unbekannt.status_code == bekannt_ohne_datei.status_code == 404
+    assert unbekannt.json() == bekannt_ohne_datei.json()
+
+
+def test_die_dokumentroute_nimmt_nur_ein_adressglied(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Der Test, der die eigentliche Gefahr bewacht.
+
+    Am 2026-09-24 hat die Mutationsgegenprobe etwas Unerwartetes gezeigt: Die
+    gefaehrliche Fassung von `dokument_aufloesen()` - Pfadzusammensetzung statt
+    Dateiliste - wird von den HTTP-Tests NICHT gefangen, nur von den Tests an der
+    Funktion selbst.
+
+    Der Grund ist, dass hier zwei unabhaengige Schichten liegen:
+
+      Router       Ein Adressglied kann nach dem Dekodieren kein "/" enthalten.
+                   Jedes Traversal trifft damit gar keine Route und ergibt 404,
+                   noch bevor unsere Aufloesung gefragt wird.
+      Aufloesung   Schlaegt in der realen Dateiliste nach.
+
+    Solange die Route EIN Adressglied nimmt, blockiert schon der Router das
+    Traversal. Das ist bequem und truegerisch: Ein `{dateiname:path}` waere eine
+    Zeile, sieht harmlos aus und wird gelegentlich ergaenzt, um Unterordner zu
+    erlauben. Danach waere Traversal erreichbar - und dann traegt allein die
+    Aufloesung.
+
+    Dieser Test haelt die Route flach. Er ist die Bremse vor genau dieser Zeile.
+    """
+    settings, embeddings = umgebung
+    app = create_app(settings, llm=FakeLlm(parsed=gute_antwort()), embeddings=embeddings)
+    dokumentrouten = [
+        getattr(route, "path", "") for route in app.routes if "/doc/" in getattr(route, "path", "")
+    ]
+    assert dokumentrouten == ["/t/{url_token}/doc/{dateiname}"], dokumentrouten
+    assert not any(":path" in pfad for pfad in dokumentrouten), (
+        "Ein :path-Konverter macht Traversal erreichbar. Dann traegt allein "
+        "dokument_aufloesen(), und dieser Test gehoert durch einen ersetzt, der "
+        "das ueber HTTP nachweist."
+    )
+
+
+def test_die_seite_traegt_die_themen_fuer_den_eskalationskasten(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """C2: Der Kasten nennt, worueber Auskunft moeglich ist.
+
+    Geprueft wird das Datenattribut und nicht der Kasten selbst - der entsteht
+    erst im Browser. Was hier nachweisbar ist: dass app.js die Angabe vorfindet
+    und dass sie aus derselben Quelle kommt wie die Begruessung.
+
+    Der Kasten ohne diese Angabe war der Befund aus dem Kundentest: Vier
+    Eskalationen sehen gleich aus, egal ob die Frage unbeantwortbar oder nur zu
+    knapp war, und das liest sich wie eine statische Seite ohne KI.
+    """
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    seite = client.get(f"/t/{ACME_TOKEN}/").text
+    mandant = load_tenant("demo-acme", settings.tenants_dir)
+
+    treffer = re.search(r'data-themen="([^"]*)"', seite)
+    assert treffer is not None, "kein data-themen in der Seite"
+    assert treffer.group(1), "data-themen ist leer"
+
+    # Dieselbe Quelle wie die Begruessung - nicht eine zweite Aufzaehlung.
+    for wort in mandant.topics.split():
+        assert html.escape(wort) in treffer.group(1), wort

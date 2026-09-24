@@ -19,7 +19,9 @@
   leitet nichts aus der Browsereinstellung ab.
 
   Das Token steht in data-token und wird nur fuer den Aufruf des eigenen
-  Chat-Endpunkts gebraucht.
+  Chat-Endpunkts gebraucht. In data-themen stehen die Themen des Mandanten -
+  app.js braucht sie fuer den Eskalationskasten, und sie kommen aus derselben
+  Quelle wie die Begruessung (tenant.yaml, Feld topics).
 
   Das ?v= an den beiden statischen Dateien ist der Inhaltsschluessel aus
   app/main.py, statische_fassung(). Aendert sich eine der Dateien, aendert sich
@@ -40,7 +42,7 @@
   </div>
 </main>
 
-<form id="formular" data-token="{{url_token}}" autocomplete="off">
+<form id="formular" data-token="{{url_token}}" data-themen="{{topics}}" autocomplete="off">
   <label class="versteckt" for="frage">{{frage_label}}</label>
   <textarea id="frage" name="frage" rows="2" maxlength="2000"
             placeholder="{{frage_platzhalter}}"

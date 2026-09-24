@@ -166,3 +166,23 @@ footer p { margin: 0; }
 .nachricht .text button.mehr:hover {
   border-color: var(--akzent);
 }
+
+/* Quelldateien sind Links auf das Dokument dieses Mandanten. Der Interessent
+   sieht damit, dass die Antwort aus einem Dokument kommt. */
+.quellen a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: .15em;
+}
+
+.quellen a:hover {
+  color: var(--akzent);
+}
+
+/* Die Themen im Eskalationskasten. Abgesetzt, damit der Kasten nicht wie ein
+   zweiter Absatz derselben Meldung wirkt. */
+.eskalation .themen {
+  margin-top: .4rem;
+  font-size: .9rem;
+  color: var(--text-leise);
+}

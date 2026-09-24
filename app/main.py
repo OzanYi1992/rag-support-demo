@@ -39,7 +39,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.responses import Response
@@ -71,6 +71,45 @@ VERSIONIERTE_DATEIEN: tuple[str, ...] = ("app.js", "style.css")
 # "immutable", weil sich unter einer gegebenen Adresse nichts mehr aendern KANN:
 # Aendert sich der Inhalt, aendert sich der Schluessel und damit die Adresse.
 _CACHE_VERSIONIERT = "public, max-age=31536000, immutable"
+
+
+def dokument_aufloesen(dokumentordner: Path, angefragt: str) -> Path | None:
+    """Loest einen angefragten Dateinamen gegen die TATSAECHLICHE Dateiliste auf.
+
+    Diese Funktion ist die einzige Sicherheitsgrenze der Dokumentroute, und sie
+    ist absichtlich langweilig: Sie setzt **keinen Pfad zusammen**. Sie liest die
+    Namen, die im Ordner des Mandanten wirklich liegen, und schlaegt den
+    angefragten Namen darin nach.
+
+    Der Unterschied ist der ganze Punkt. Die naheliegende Fassung waere
+
+        datei = dokumentordner / angefragt
+
+    und die ist angreifbar: `angefragt` kommt aus der Adresse, also von aussen.
+    `Path("/app/tenants/demo-acme/docs") / "../../../etc/passwd"` ergibt einen
+    gueltigen Pfad ausserhalb des Ordners, und `/` als absoluter Anteil wirft den
+    linken Teil ganz weg. Jede Abwehr dagegen muesste Zeichenketten pruefen, und
+    Zeichenkettenpruefungen verlieren gegen Kodierung: `%2e%2e%2f`, doppelt
+    kodiert, andere Trennzeichen, Unicode-Varianten. P-021 sagt dasselbe an einer
+    anderen Stelle - ein Waechter, der Zeichenketten prueft, verliert.
+
+    Ein Nachschlagen in einer Menge realer Dateinamen hat dieses Problem nicht.
+    `"../../../etc/passwd"` ist kein Eintrag dieser Menge, und damit ist die
+    Antwort dieselbe wie bei jedem Tippfehler: nichts.
+
+    Gibt None zurueck, wenn der Name nicht in der Liste steht. Der Aufrufer macht
+    daraus denselben 404 wie bei jedem unbekannten Pfad - ohne Hinweis darauf, ob
+    die Datei anderswo existiert. Das ist ADR-007 sinngemaess: Ein Orakel, das
+    "existiert, aber nicht fuer dich" von "existiert nicht" unterscheidet, ist
+    eine Auskunft ueber fremde Mandanten.
+    """
+    if not dokumentordner.is_dir():
+        return None
+    # Nur Dateien, keine Verzeichnisse, und nur die unmittelbare Ebene. Ein
+    # Unterordner waere ein Name mit Trennzeichen und damit ohnehin kein
+    # gueltiges Adressglied.
+    vorhanden = {eintrag.name: eintrag for eintrag in dokumentordner.iterdir() if eintrag.is_file()}
+    return vorhanden.get(angefragt)
 
 
 def statische_fassung(verzeichnis: Path = STATIC_DIR) -> str:
@@ -374,6 +413,7 @@ def create_app(
             "{{senden}}": html.escape(texte.senden),
             "{{fusszeile}}": html.escape(texte.fusszeile),
             "{{url_token}}": html.escape(url_token),
+            "{{topics}}": html.escape(tenant.topics.strip()),
             # Steht im <script>-Element und wird deshalb anders maskiert.
             "{{texte_json}}": _texte_als_json(texte),
             # Inhaltsschluessel der eingebundenen Dateien. Nicht maskiert, weil
@@ -394,6 +434,53 @@ def create_app(
         # traegt ausserdem das url_token - eine Kopie davon im Browsercache ist
         # nichts, was ohne Not entstehen soll.
         return HTMLResponse(seite, headers={"Cache-Control": "no-store"})
+
+    @app.get("/t/{url_token}/doc/{dateiname}")
+    def dokument(url_token: str, dateiname: str) -> FileResponse:
+        """Liefert ein Quelldokument DIESES Mandanten.
+
+        Wofuer: Der Interessent klickt den Dateinamen unter der Antwort und sieht,
+        dass sie aus einem Dokument kommt und nicht erfunden ist. Beim Kunden
+        spaeter zeigt derselbe Klick auf seine FAQ-Seite.
+
+        DIE SICHERHEIT STEHT IN ZWEI SAETZEN:
+
+        1. Der Mandant kommt aus dem TOKEN, nie aus dem Dateinamen. `_mandant()`
+           ist die einzige Stelle, die aus einem Token einen Mandanten macht, und
+           `dateiname` geht dort nicht ein.
+        2. Der Dateiname wird gegen die tatsaechliche Dateiliste dieses Mandanten
+           aufgeloest, nie zu einem Pfad zusammengesetzt. Siehe
+           `dokument_aufloesen()`.
+
+        Ein unbekannter Name ergibt denselben 404 wie jeder unbekannte Pfad. Es
+        gibt keinen Unterschied zwischen "gibt es nicht" und "gibt es, aber bei
+        einem anderen Mandanten" - sonst waere die Route ein Orakel ueber fremde
+        Mandanten (ADR-007 sinngemaess).
+
+        Nebennutzen, und er ist echt: Nennt das Modell eine Quelle, die es nicht
+        gibt, fuehrt der Link ins Leere. Eine erfundene Quellenangabe wird damit
+        sichtbar, statt als Dateiname plausibel dazustehen.
+        """
+        tenant = _mandant(url_token)
+        ordner = aktive_settings.tenants_dir / tenant.slug / "docs"
+        datei = dokument_aufloesen(ordner, dateiname)
+        if datei is None:
+            _ereignis("dokument_abgelehnt", tenant.slug)
+            raise HTTPException(status_code=404, detail=NICHT_GEFUNDEN)
+
+        _ereignis("dokument", tenant.slug)
+        # text/plain und nicht text/markdown: Der Inhalt wird dann im Browser
+        # angezeigt statt heruntergeladen, und er wird NICHT als Markup
+        # ausgewertet. Dokumentinhalt ist fuer diese Anwendung Fremdtext.
+        #
+        # no-store aus demselben Grund wie bei der Seite: Die Adresse traegt das
+        # url_token, und eine Kopie im Browsercache ist unter dieser Adresse
+        # abgelegt.
+        return FileResponse(
+            datei,
+            media_type="text/plain; charset=utf-8",
+            headers={"Cache-Control": "no-store", "Content-Disposition": "inline"},
+        )
 
     @app.post("/t/{url_token}/chat")
     def chat(url_token: str, anfrage: ChatAnfrage) -> Answer:
