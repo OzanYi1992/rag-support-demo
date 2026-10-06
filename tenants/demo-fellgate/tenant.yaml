@@ -28,8 +28,9 @@ language: en
 # wish to look capable: anything named here but missing from the corpus produces
 # exactly the question that has to escalate.
 topics: >
-  orders and shipping, returns and exchanges, payment and refunds, gear care
-  and repairs, and Trail Club membership
+  orders and shipping, the countries we deliver to, sizes and our range,
+  returns and exchanges, payment and refunds, gear care and repairs, and
+  Trail Club membership
 
 system_prompt_extra: >
   Fellgate Outdoor sells outdoor clothing and equipment by mail order to private
@@ -45,10 +46,11 @@ escalation_message: >
 # Kein Override: dieser Mandant nutzt das Modell aus der Konfiguration.
 model_override: null
 
-# Verankert an demo-acme, NICHT an einem Messergebnis.
-#
-# Acme faehrt 6 bei 16.248 Zeichen Korpus, Fellgate hat 16.340 - praktisch
-# derselbe Umfang, also derselbe Wert. Das ist die ganze Begruendung.
+# Bleibt 6, obwohl der Korpus seit 2026-10-02 groesser ist als der von
+# demo-acme. Die fruehere Begruendung, gleicher Umfang wie demo-acme, traegt
+# damit nicht mehr. Der Wert bleibt bewusst stehen, damit sich in diesem
+# Schritt nur der Korpus aendert. Eine Herleitung aus dem Umfang ist fuer alle
+# Mandanten gemeinsam offen.
 #
 # Was hier ausdruecklich NICHT eingeflossen ist: Im Goldsatzlauf vom 2026-09-22
 # lag eine erwartete Textstelle auf Chunkrang 7. Ein top_k von 7 haette genau

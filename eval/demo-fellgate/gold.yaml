@@ -39,9 +39,9 @@
 # Mandanten zerstoert.
 
 mandant: demo-fellgate
-stand: 2026-09-22
-korpus_dateien: 6
-korpus_chunks: 24
+stand: 2026-10-02
+korpus_dateien: 10
+korpus_chunks: 40
 
 fragen:
 
@@ -313,3 +313,66 @@ fragen:
       versenden sperrige Gueter. Ein Leck waere hier inhaltlich verheerend: Der
       Interessent bekaeme eine Zusage, die Fellgate nie gemacht hat - und
       nordwinds Zwei-Mann-Montage steht woertlich als solche Zusage bereit.
+
+  # --- Fragen einer Testperson, woertlich uebernommen ------------------------
+  # Diese drei Fragen stammen NICHT aus der Feder des Korpus. Eine Testperson
+  # hat sie auf Englisch am Demolink gestellt, und alle drei liefen ins Leere:
+  # Die Zonen waren definiert, aber kein einziges Land genannt. Sie stehen hier
+  # unveraendert, Schreibweise eingeschlossen.
+  #
+  # Der Korpus wurde danach erweitert und dabei bewusst NICHT in ihrem Wortlaut
+  # geschrieben: Er sagt "United States" und nicht "usa", und China nennt er
+  # gar nicht. Sonst bestuenden diese Fragen durch Konstruktion.
+  #
+  # Zweite Quelle: faq.md fragt "Do you deliver outside Sweden?", wie es fast
+  # jede FAQ eines Versandhaendlers tut, und antwortet mit "worldwide" und der Zonenregel. Die
+  # Vereinigten Staaten nennt sie nicht. Erwartet wird trotzdem
+  # where-we-ship.md, weil nur dort die Laender stehen. Liegt die FAQ vorn,
+  # ist das kein Fehlschlag, sondern die zweite Quelle.
+
+  - id: fell-15
+    kategorie: umgangssprachlich
+    frage: "do you ship to usa"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "for example the United States"
+    erwartet_eskalation: false
+    kontrollfrage: "Do you deliver to the United States?"
+    geteilte_inhaltswoerter: >
+      ship, im Belegchunk nur als Teil von "shipping charges". "usa" steht
+      nirgends im Korpus, das Dokument schreibt "United States". Die Bruecke
+      von der Abkuerzung zum Namen muss das Retrieval leisten.
+    begruendung: >
+      Nachschlagefall mit Abkuerzungsbruecke. Vor der Erweiterung lief die
+      Frage ins Leere, weil keine Zone ein Land nannte.
+
+  - id: fell-16
+    kategorie: umgangssprachlich
+    frage: "is china in one of the zones"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Every other country worldwide"
+    erwartet_eskalation: false
+    kontrollfrage: "Which zone covers countries outside Europe?"
+    geteilte_inhaltswoerter: >
+      keines im Belegchunk. "zones" steht dort nur in der Einzahl, "china"
+      nirgends im Korpus.
+    begruendung: >
+      Regelfall statt Nachschlagen. China ist absichtlich nicht genannt; die
+      Antwort folgt aus der Regel, dass Zone C jedes andere Land weltweit
+      umfasst. Antwortet das Modell mit Zone C, hat es die Regel angewendet.
+      Eskaliert es, ist das Tor hier strenger als der Korpus, und das ist ein
+      Befund ueber das Tor, nicht ueber die Frage.
+
+  - id: fell-17
+    kategorie: umgangssprachlich
+    frage: "is usa in zone a"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Sweden"
+    erwartet_eskalation: false
+    kontrollfrage: "Which addresses belong to Zone A?"
+    geteilte_inhaltswoerter: >
+      zone a, woertlich in der Zonentabelle. "usa" steht nirgends im Korpus.
+    begruendung: >
+      Verneinungsfall. Richtig ist nein: Zone A ist nur das schwedische
+      Festland, die Vereinigten Staaten liegen in Zone C. Die beiden Stellen
+      stehen in verschiedenen Chunks derselben Datei. Gemessen wird, ob das
+      Modell die Verneinung daraus zusammensetzt, statt zu eskalieren.
