@@ -39,14 +39,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 from starlette.types import Scope
 
 from app.config import Settings
+from app.dokumentseite import INHALTSRICHTLINIE, dokumentseite_bauen
 from app.embeddings import E5Embeddings, get_embeddings
+from app.ingest import DOC_PATTERN
 from app.llm import LlmClient
 from app.rag import Answer, answer
 from app.ratelimit import RateLimiter
@@ -436,7 +438,7 @@ def create_app(
         return HTMLResponse(seite, headers={"Cache-Control": "no-store"})
 
     @app.get("/t/{url_token}/doc/{dateiname}")
-    def dokument(url_token: str, dateiname: str) -> FileResponse:
+    def dokument(url_token: str, dateiname: str) -> HTMLResponse:
         """Liefert ein Quelldokument DIESES Mandanten.
 
         Wofuer: Der Interessent klickt den Dateinamen unter der Antwort und sieht,
@@ -457,29 +459,71 @@ def create_app(
         einem anderen Mandanten" - sonst waere die Route ein Orakel ueber fremde
         Mandanten (ADR-007 sinngemaess).
 
+        Ausgeliefert wird eine fertige HTML-Seite, auf dem Server aus dem
+        Markdown gerendert (app/dokumentseite.py). Dokumentinhalt ist Fremdtext,
+        und das Rendern macht ihn zu Markup. Deshalb zeigt die Chatseite das
+        Dokument nur in einem Rahmen mit leerem sandbox-Attribut, und sein HTML
+        wird nie Teil der Chatseite, die das Token traegt. Die Kopfzeilen sichern
+        dasselbe auf dem Server ab: `sandbox` in der Content-Security-Policy gilt
+        auch, wenn jemand die Adresse direkt oeffnet statt im Rahmen, und
+        `default-src 'none'` laesst nichts nachladen.
+
         Nebennutzen, und er ist echt: Nennt das Modell eine Quelle, die es nicht
-        gibt, fuehrt der Link ins Leere. Eine erfundene Quellenangabe wird damit
-        sichtbar, statt als Dateiname plausibel dazustehen.
+        gibt, zeigt der aufgeklappte Rahmen die Meldung dieser Route. Eine
+        erfundene Quellenangabe wird damit sichtbar, statt als Dateiname
+        plausibel dazustehen.
         """
         tenant = _mandant(url_token)
         ordner = aktive_settings.tenants_dir / tenant.slug / "docs"
         datei = dokument_aufloesen(ordner, dateiname)
         if datei is None:
-            _ereignis("dokument_abgelehnt", tenant.slug)
+            _ereignis("dokument_abgelehnt", tenant.slug, grund="unbekannt")
             raise HTTPException(status_code=404, detail=NICHT_GEFUNDEN)
 
+        # Nur, was auch der Ingest liest. Eine andere Datei im Ordner ist kein
+        # Quelldokument, und ihr Inhalt war nie Teil einer Antwort. Nach aussen
+        # derselbe 404 wie jeder unbekannte Pfad, im Log unterscheidbar.
+        if not datei.match(DOC_PATTERN):
+            _ereignis("dokument_abgelehnt", tenant.slug, grund="kein_markdown")
+            raise HTTPException(status_code=404, detail=NICHT_GEFUNDEN)
+
+        # Im Image kann das nicht auftreten: Der Ingest liest dieselben Dateien
+        # streng als UTF-8 und braeche den Bau ab. Lokal nach einer Aenderung
+        # schon, und dann soll vor einem Interessenten kein Stacktrace stehen,
+        # sondern dieselbe Antwort wie bei jedem unbekannten Pfad.
+        try:
+            text = datei.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            _ereignis("dokument_abgelehnt", tenant.slug, grund="nicht_lesbar")
+            raise HTTPException(status_code=404, detail=NICHT_GEFUNDEN) from None
+
+        seite = dokumentseite_bauen(tenant.slug, datei.name, tenant.language, text)
         _ereignis("dokument", tenant.slug)
-        # text/plain und nicht text/markdown: Der Inhalt wird dann im Browser
-        # angezeigt statt heruntergeladen, und er wird NICHT als Markup
-        # ausgewertet. Dokumentinhalt ist fuer diese Anwendung Fremdtext.
+        # Die Kopfzeilen, je mit ihrem Grund:
         #
-        # no-store aus demselben Grund wie bei der Seite: Die Adresse traegt das
-        # url_token, und eine Kopie im Browsercache ist unter dieser Adresse
-        # abgelegt.
-        return FileResponse(
-            datei,
-            media_type="text/plain; charset=utf-8",
-            headers={"Cache-Control": "no-store", "Content-Disposition": "inline"},
+        # Content-Security-Policy  Die Begruendung je Direktive steht in
+        #                          app/dokumentseite.py. sandbox und
+        #                          frame-ancestors wirken nur als Kopfzeile,
+        #                          nicht als meta in der Seite.
+        # Cache-Control            no-store aus demselben Grund wie bei der
+        #                          Seite: Die Adresse traegt das url_token, und
+        #                          eine Kopie im Browsercache ist unter dieser
+        #                          Adresse abgelegt.
+        # X-Content-Type-Options   Der Browser nimmt den angegebenen Typ und raet
+        #                          nicht. Eine fremde Seite kann die Antwort
+        #                          nicht als Skript oder Stylesheet laden.
+        # Referrer-Policy          Die Adresse mit dem Token geht nie als Referer
+        #                          hinaus. Heute loest die Seite keine Anfrage
+        #                          aus; die Kopfzeile sichert den Tag ab, an dem
+        #                          sich das aendert.
+        return HTMLResponse(
+            seite,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": INHALTSRICHTLINIE,
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+            },
         )
 
     @app.post("/t/{url_token}/chat")

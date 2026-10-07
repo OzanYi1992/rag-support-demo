@@ -80,6 +80,10 @@ def test_platzhalter_bleiben_in_beiden_sprachen_erhalten() -> None:
         # korrekte Eskalation und haelt das System fuer schwach.
         assert "{topics}" in texte.begruessung, sprache
         assert "{sekunden}" in texte.ratenlimit_mit_zeit, sprache
+        # Der Rahmentitel nennt die Datei. Ohne den Platzhalter hiessen alle
+        # aufgeklappten Dokumente gleich, und ein Screenreader saehe nicht,
+        # welches offen ist.
+        assert "{datei}" in texte.dokument_rahmen_titel, sprache
         # Der Satz ohne Zeitangabe darf KEINEN Platzhalter tragen - er wird
         # genau dann benutzt, wenn es keine Zahl einzusetzen gibt.
         assert "{" not in texte.ratenlimit_ohne_zeit, sprache

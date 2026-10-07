@@ -20,6 +20,14 @@ dependencies = [
     "fastapi==0.141.1",
     "uvicorn==0.52.1",
 
+    # --- Dokumentseite ------------------------------------------------------
+    # Markdown nach HTML fuer die Quelldokumente. Die Bibliothek kommt heute
+    # schon mittelbar ueber transformers, typer und rich mit. Gepinnt wird sie
+    # trotzdem, und zwar exakt: Gibt eine dieser drei die Abhaengigkeit auf, ist
+    # der Renderer weg, und ohne Pin wechselte seine Fassung mit jedem Bau. Er
+    # verarbeitet Fremdtext, da soll jede neue Fassung eine Entscheidung sein.
+    "markdown-it-py==4.2.0",
+
     # --- LangChain ----------------------------------------------------------
     # langchain-community fehlt hier absichtlich: eingestellt am 2026-05-22,
     # Repo archiviert am 2026-06-19. FAISS wird direkt angebunden, siehe ADR-015.

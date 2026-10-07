@@ -11,9 +11,13 @@ geantwortet wird - das tut test_rag.py. Hier geht es um vier Fragen:
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
+import json
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -914,9 +918,10 @@ def test_dokument_der_eigene_mandant_bekommt_seine_datei(
     antwort = client.get(f"/t/{ACME_TOKEN}/doc/doku.md")
     assert antwort.status_code == 200
     assert antwort.headers["Cache-Control"] == "no-store"
-    # text/plain: wird angezeigt statt heruntergeladen und NICHT als Markup
-    # ausgewertet. Dokumentinhalt ist Fremdtext.
-    assert antwort.headers["content-type"].startswith("text/plain")
+    # text/html: auf dem Server aus dem Markdown gerendert. Dokumentinhalt ist
+    # Fremdtext; die Seite erscheint nur in einem Rahmen mit leerem sandbox, und
+    # ihre Richtlinie sperrt Skripte auch dann, wenn sie ohne Rahmen offen ist.
+    assert antwort.headers["content-type"].startswith("text/html")
 
 
 def test_dokument_fremder_mandant_bekommt_nichts(
@@ -947,7 +952,7 @@ def test_dokument_fremder_mandant_bekommt_nichts(
     # also an der Mandantengrenze und nicht daran, dass die Route nichts liefert.
     eigen = client.get(f"/t/{NORDWIND_TOKEN}/doc/nur-nordwind.md")
     assert eigen.status_code == 200
-    assert eigen.text == "gehoert nordwind"
+    assert "<p>gehoert nordwind</p>" in eigen.text
 
 
 def test_dokument_kodierte_trennzeichen_werden_abgewiesen(
@@ -1032,6 +1037,178 @@ def test_die_dokumentroute_nimmt_nur_ein_adressglied(
         "dokument_aufloesen(), und dieser Test gehoert durch einen ersetzt, der "
         "das ueber HTTP nachweist."
     )
+
+
+# --- die gerenderte Dokumentseite --------------------------------------------
+
+
+def _ereignisse(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    """Die Ereignisse aus rag.api, als Daten statt als Text."""
+    return [json.loads(eintrag.message) for eintrag in caplog.records if eintrag.name == "rag.api"]
+
+
+def test_dokument_kopfzeilen(umgebung: tuple[Settings, E5Embeddings]) -> None:
+    """Jede Kopfzeile woertlich, und keine mehr.
+
+    Der Hash in der Richtlinie wird aus dem ausgelieferten <style>-Block
+    gerechnet, also gegen das, was auch der Browser vergleicht. Eine Konstante,
+    die mit sich selbst verglichen wird, bliebe bei geaendertem CSS gruen, und
+    der Browser zeigte die Seite ohne Stil.
+    """
+    client, _ = _client(umgebung)
+    antwort = client.get(f"/t/{ACME_TOKEN}/doc/doku.md")
+    assert antwort.status_code == 200
+
+    stil = re.search(rb"<style>(.*?)</style>", antwort.content, re.S)
+    assert stil is not None, "kein <style>-Block in der Seite"
+    stil_hash = base64.b64encode(hashlib.sha256(stil.group(1)).digest()).decode("ascii")
+
+    assert dict(antwort.headers) == {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": str(len(antwort.content)),
+        "cache-control": "no-store",
+        "content-security-policy": (
+            f"sandbox; default-src 'none'; style-src 'sha256-{stil_hash}'; "
+            "frame-ancestors 'self'; base-uri 'none'"
+        ),
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+    }
+
+
+def test_dokument_404_ist_in_jedem_fall_dieselbe_antwort(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Jeder Ablehnungsweg ergibt dieselbe Antwort wie ein unbekannter Pfad.
+
+    Status, Rumpf und alle Kopfzeilen. Ein Weg mit eigenem 404 waere ein
+    Orakel: Er verriete, ob es eine Datei gibt, ob sie bei einem anderen
+    Mandanten liegt oder ob sie nur kein Markdown ist.
+    """
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    acme = settings.tenants_dir / "demo-acme" / "docs"
+    (acme / "notiz.txt").write_text("kein Markdown", encoding="utf-8")
+    (acme / "kaputt.md").write_bytes(b"# Titel\n\xff\xfe\n")
+    (settings.tenants_dir / "demo-nordwind" / "docs" / "nur-nordwind.md").write_text(
+        "gehoert nordwind", encoding="utf-8"
+    )
+
+    bezug = client.get("/beliebiger-unbekannter-pfad")
+    assert bezug.status_code == 404
+
+    for pfad in (
+        "/t/dieses-token-gibt-es-nicht-1234/doc/doku.md",
+        "/t/kurz/doc/doku.md",
+        f"/t/{ACME_TOKEN}/doc/gibt-es-nicht.md",
+        f"/t/{ACME_TOKEN}/doc/nur-nordwind.md",
+        f"/t/{ACME_TOKEN}/doc/notiz.txt",
+        f"/t/{ACME_TOKEN}/doc/kaputt.md",
+    ):
+        antwort = client.get(pfad)
+        assert antwort.status_code == 404, pfad
+        assert antwort.content == bezug.content, pfad
+        assert dict(antwort.headers) == dict(bezug.headers), pfad
+
+    # Gegenprobe: Die eigene Datei kommt. Sonst hiesse die Gleichheit oben nur,
+    # dass die Route fuer niemanden etwas liefert.
+    assert client.get(f"/t/{ACME_TOKEN}/doc/doku.md").status_code == 200
+
+
+def test_dateiname_mit_spitzer_klammer_und_ampersand_kommt_maskiert_an(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Der Dateiname ist Fremdtext wie der Inhalt. Er steht maskiert im <title>."""
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    (settings.tenants_dir / "demo-acme" / "docs" / "a<b&c.md").write_text(
+        "# Titel\n", encoding="utf-8"
+    )
+
+    antwort = client.get(f"/t/{ACME_TOKEN}/doc/{quote('a<b&c.md')}")
+    assert antwort.status_code == 200
+    assert "<title>a&lt;b&amp;c.md</title>" in antwort.text
+    assert "a<b&c.md" not in antwort.text
+
+
+def test_dokumentabruf_schreibt_das_token_in_kein_ereignis(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Weder beim eigenen noch beim fremden Dokument steht das Token im Log.
+
+    Die Ereignisse der Route tragen auch keinen Dateinamen. Das Ereignis des
+    404-Handlers traegt das Pfadmuster; es ist hier die Gegenprobe dafuer, dass
+    das Token maskiert ist und nicht nur fehlt, weil nichts geloggt wurde.
+    """
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    (settings.tenants_dir / "demo-nordwind" / "docs" / "nur-nordwind.md").write_text(
+        "gehoert nordwind", encoding="utf-8"
+    )
+
+    with caplog.at_level("INFO", logger="rag.api"):
+        assert client.get(f"/t/{ACME_TOKEN}/doc/doku.md").status_code == 200
+        assert client.get(f"/t/{ACME_TOKEN}/doc/nur-nordwind.md").status_code == 404
+
+    gesamtes_log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert gesamtes_log, "Kein Logeintrag - der Test waere sonst blind."
+    assert ACME_TOKEN not in gesamtes_log
+    assert "{token}" in gesamtes_log
+    assert "demo-acme" in gesamtes_log
+
+    ereignisse = _ereignisse(caplog)
+    namen = [ereignis["ereignis"] for ereignis in ereignisse]
+    assert "dokument" in namen
+    assert "dokument_abgelehnt" in namen
+    for ereignis in ereignisse:
+        if ereignis["ereignis"] in ("dokument", "dokument_abgelehnt"):
+            assert ereignis["tenant_id"] == "demo-acme", ereignis
+            als_text = json.dumps(ereignis)
+            assert "doku.md" not in als_text, ereignis
+            assert "nur-nordwind" not in als_text, ereignis
+
+
+def test_nur_markdown_wird_ausgeliefert(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Eine Datei, die der Ingest nie liest, kommt auch ueber die Route nicht.
+
+    Nach aussen derselbe 404 wie jeder andere, im Log mit eigenem Grund.
+    """
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    (settings.tenants_dir / "demo-acme" / "docs" / "notiz.txt").write_text(
+        "liegt daneben", encoding="utf-8"
+    )
+
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.get(f"/t/{ACME_TOKEN}/doc/notiz.txt")
+    assert antwort.status_code == 404
+    assert antwort.json() == {"detail": NICHT_GEFUNDEN}
+    gruende = [e.get("grund") for e in _ereignisse(caplog) if e["ereignis"] == "dokument_abgelehnt"]
+    assert gruende == ["kein_markdown"]
+
+    # Gegenprobe: Die .md daneben kommt.
+    assert client.get(f"/t/{ACME_TOKEN}/doc/doku.md").status_code == 200
+
+
+def test_dekodierfehler_wird_kein_500(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ungueltige Bytes in einer .md ergeben den 404 und keinen Stacktrace."""
+    settings, _ = umgebung
+    client, _ = _client(umgebung)
+    (settings.tenants_dir / "demo-acme" / "docs" / "kaputt.md").write_bytes(b"# Titel\n\xff\xfe\n")
+
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.get(f"/t/{ACME_TOKEN}/doc/kaputt.md")
+    assert antwort.status_code == 404
+    assert antwort.json() == {"detail": NICHT_GEFUNDEN}
+    gruende = [e.get("grund") for e in _ereignisse(caplog) if e["ereignis"] == "dokument_abgelehnt"]
+    assert gruende == ["nicht_lesbar"]
 
 
 def test_die_seite_traegt_die_themen_fuer_den_eskalationskasten(

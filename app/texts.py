@@ -46,6 +46,7 @@ JAVASCRIPT_SCHLUESSEL: tuple[str, ...] = (
     "mehr_anzeigen",
     "weniger_anzeigen",
     "eskalation_themen",
+    "dokument_rahmen_titel",
 )
 
 
@@ -92,6 +93,11 @@ class Texte(BaseModel, frozen=True):
     # sich beim Interessenten wie eine statische Seite ohne KI.
     eskalation_themen: str
 
+    # Der Titel des Rahmens, in dem ein Quelldokument aufklappt. Ein
+    # Screenreader liest ihn vor, wenn er den Rahmen erreicht. Traegt den
+    # Platzhalter {datei}, den die Oberflaeche mit dem Dateinamen fuellt.
+    dokument_rahmen_titel: str
+
     # --- Serverseitige Meldungen -----------------------------------------
     ratenlimit_detail: str
     oberflaeche_fehlt: str
@@ -130,6 +136,7 @@ _DE = Texte(
     mehr_anzeigen="Ganze Antwort anzeigen",
     weniger_anzeigen="Antwort einklappen",
     eskalation_themen="Auskunft ist möglich zu {topics}.",
+    dokument_rahmen_titel="Quelldokument {datei}",
     ratenlimit_detail="Zu viele Anfragen. Bitte kurz warten.",
     oberflaeche_fehlt="Oberflaeche fehlt.",
 )
@@ -159,6 +166,7 @@ _EN = Texte(
     mehr_anzeigen="Show the full answer",
     weniger_anzeigen="Collapse the answer",
     eskalation_themen="I can answer about {topics}.",
+    dokument_rahmen_titel="Source document {datei}",
     ratenlimit_detail="Too many requests. Please wait a moment.",
     oberflaeche_fehlt="User interface missing.",
 )

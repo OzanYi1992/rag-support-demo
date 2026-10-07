@@ -167,16 +167,61 @@ footer p { margin: 0; }
   border-color: var(--akzent);
 }
 
-/* Quelldateien sind Links auf das Dokument dieses Mandanten. Der Interessent
-   sieht damit, dass die Antwort aus einem Dokument kommt. */
-.quellen a {
+/* Quelldateien sind Knoepfe, die das Dokument dieses Mandanten unter der
+   Antwort aufklappen. Der Interessent sieht damit, dass die Antwort aus einem
+   Dokument kommt. Sie sehen aus wie ein Link, sind aber so hoch wie der Knopf
+   zum Aufklappen der Antwort, damit der Daumen sie trifft. Das Zeichen davor
+   zeigt den Zustand; es kommt aus dem CSS und nicht aus dem Markup. */
+.quellen button.quelle {
+  display: inline-block;
+  min-height: 2.75rem;
+  padding: .7rem .25rem .7rem 0;
+  border: 0;
+  border-radius: .25rem;
+  background: transparent;
   color: inherit;
+  font: inherit;
+  text-align: left;
   text-decoration: underline;
   text-underline-offset: .15em;
+  overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
-.quellen a:hover {
+.quellen button.quelle::before {
+  content: "\25B8";
+  display: inline-block;
+  width: 1.1em;
+}
+
+.quellen button.quelle[aria-expanded="true"]::before {
+  content: "\25BE";
+}
+
+.quellen button.quelle:hover {
   color: var(--akzent);
+}
+
+.quellen button.quelle:focus-visible {
+  outline: 2px solid var(--akzent);
+  outline-offset: 1px;
+}
+
+/* Das aufgeklappte Dokument, ein eigener Block unter der Antwortblase. Der
+   Rahmen hat dort die volle Breite. Seine Hoehe ist fest, und das Dokument
+   rollt in ihm: Eine Seite ohne Skript kann ihre Hoehe nicht melden.
+
+   Der Rahmen setzt bewusst kein color-scheme. Ohne Angabe richtet sich das
+   Dokument darin wie der Chat nach dem System, hell oder dunkel; geprueft am
+   2026-10-07 in Firefox 156 und Chromium 141. Ein festes light oder dark
+   hier ueberstimmte das System fuer das Dokument. */
+.dokument iframe {
+  display: block;
+  width: 100%;
+  height: min(70vh, 36rem);
+  border: 1px solid var(--linie);
+  border-radius: .5rem;
+  background: var(--grund);
 }
 
 /* Die Themen im Eskalationskasten. Abgesetzt, damit der Kasten nicht wie ein

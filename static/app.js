@@ -3,6 +3,9 @@
 // Alles, was aus der Antwort in die Seite geht, wird ueber textContent gesetzt,
 // nie ueber innerHTML. Der Antworttext stammt aus einem Sprachmodell und ist
 // damit nicht vertrauenswuerdiger als eine Nutzereingabe.
+//
+// Quelldokumente erscheinen nur in einem Rahmen mit leerem sandbox-Attribut.
+// Ihr HTML wird nie Teil dieser Seite.
 
 (function () {
   "use strict";
@@ -98,6 +101,28 @@
     return { huelle: huelle, inhalt: inhalt };
   }
 
+  // Der Rahmen fuer ein Quelldokument.
+  //
+  // Das sandbox-Attribut ist LEER: kein Skript, kein Formular, kein Popup und
+  // ein eigener, undurchsichtiger Ursprung. Diese Seite kann nicht in den
+  // Rahmen hineinsehen, und das Dokument nicht heraus.
+  //
+  // Die Reihenfolge ist Absicht: sandbox zuerst, die Adresse zuletzt. Die
+  // Flags des Attributs greifen erst, wenn der Rahmen navigiert; ein Rahmen,
+  // der vorher schon laedt, liefe ohne sie an.
+  function dokumentRahmen(quelle) {
+    var rahmen = document.createElement("iframe");
+    rahmen.setAttribute("sandbox", "");
+    // Als Funktion und nicht als Zeichenkette: Der Dateiname kommt vom Modell,
+    // und ein $& darin waere sonst ein Ersetzungsmuster.
+    rahmen.title = texte.dokument_rahmen_titel.replace("{datei}", function () {
+      return quelle;
+    });
+    rahmen.src =
+      "/t/" + encodeURIComponent(token) + "/doc/" + encodeURIComponent(quelle);
+    return rahmen;
+  }
+
   // quellen und scores kommen BEIDE aus daten.source_scores beziehungsweise
   // daten.sources und sind gleich lang - der Server hat sie in
   // app/rag.py, _quellen_verdichten() gemeinsam gebildet: eine Datei, ein
@@ -107,7 +132,7 @@
   // zwar unauffaellig falsch: Die Liste zaehlt CHUNKS in Trefferreihenfolge,
   // quellen zaehlt DATEIEN, die das Modell zitiert. Die Zahl neben einem
   // Dateinamen war damit der Score des i-ten Chunks und nicht der dieser Datei.
-  function quellenAnhaengen(inhalt, quellen, scores) {
+  function quellenAnhaengen(antwort, quellen, scores) {
     if (!quellen || quellen.length === 0) return;
     var block = document.createElement("div");
     block.className = "quellen";
@@ -115,14 +140,44 @@
     titel.textContent = quellen.length === 1 ? texte.quelle : texte.quellen;
     block.appendChild(titel);
 
+    // Je Antwort ist hoechstens ein Dokument offen. Es steht in einem eigenen
+    // Block direkt unter der Antwortblase und nicht in ihr: Dort hat der Rahmen
+    // die volle Breite, in der Blase blieben auf dem Telefon rund 260 Pixel.
+    // Der Block entsteht beim ersten Oeffnen.
+    var dokument = null;
+    var offen = null;
+
+    function schliessen() {
+      if (offen) offen.setAttribute("aria-expanded", "false");
+      offen = null;
+      if (dokument) {
+        dokument.textContent = "";
+        dokument.hidden = true;
+      }
+    }
+
+    function oeffnen(knopf, quelle) {
+      schliessen();
+      if (!dokument) {
+        dokument = document.createElement("div");
+        dokument.className = "dokument";
+        verlauf.insertBefore(dokument, antwort.huelle.nextSibling);
+      }
+      dokument.appendChild(dokumentRahmen(quelle));
+      dokument.hidden = false;
+      knopf.setAttribute("aria-expanded", "true");
+      offen = knopf;
+      dokument.scrollIntoView({ block: "nearest" });
+    }
+
     var liste = document.createElement("ul");
     quellen.forEach(function (quelle, i) {
       var zeile = document.createElement("li");
 
-      // Der Dateiname wird ein Link auf das Dokument DIESES Mandanten. Der
-      // Interessent sieht damit, dass die Antwort aus einem Dokument kommt und
-      // nicht erfunden ist; beim Kunden zeigt derselbe Klick spaeter auf seine
-      // FAQ-Seite.
+      // Der Dateiname wird ein Knopf, der das Dokument DIESES Mandanten unter
+      // der Antwort aufklappt. Der Interessent sieht damit, dass die Antwort
+      // aus einem Dokument kommt und nicht erfunden ist; beim Kunden zeigt
+      // derselbe Klick spaeter seine FAQ-Seite.
       //
       // Die Adresse wird aus dem TOKEN gebaut, das diese Seite ohnehin traegt,
       // und aus dem Dateinamen - beide ueber encodeURIComponent. Der Server
@@ -130,16 +185,22 @@
       // (app/main.py, dokument_aufloesen). Hier wird nichts geprueft, weil hier
       // nichts zu pruefen ist: Der Browser ist keine Sicherheitsgrenze.
       //
-      // Nennt das Modell eine Quelle, die es nicht gibt, fuehrt der Link ins
-      // Leere. Das ist erwuenscht - eine erfundene Quellenangabe wird sichtbar,
-      // statt als Dateiname plausibel dazustehen.
-      var verweis = document.createElement("a");
-      verweis.textContent = quelle;
-      verweis.href =
-        "/t/" + encodeURIComponent(token) + "/doc/" + encodeURIComponent(quelle);
-      verweis.target = "_blank";
-      verweis.rel = "noopener noreferrer";
-      zeile.appendChild(verweis);
+      // Nennt das Modell eine Quelle, die es nicht gibt, zeigt der Rahmen die
+      // Meldung der Route. Das ist erwuenscht - eine erfundene Quellenangabe
+      // wird sichtbar, statt als Dateiname plausibel dazustehen.
+      var knopf = document.createElement("button");
+      knopf.type = "button";
+      knopf.className = "quelle";
+      knopf.textContent = quelle;
+      knopf.setAttribute("aria-expanded", "false");
+      knopf.addEventListener("click", function () {
+        if (offen === knopf) {
+          schliessen();
+        } else {
+          oeffnen(knopf, quelle);
+        }
+      });
+      zeile.appendChild(knopf);
 
       if (scores && typeof scores[i] === "number") {
         var score = document.createElement("span");
@@ -150,7 +211,7 @@
       liste.appendChild(zeile);
     });
     block.appendChild(liste);
-    inhalt.appendChild(block);
+    antwort.inhalt.appendChild(block);
   }
 
   function eskalationAnhaengen(inhalt) {
@@ -214,7 +275,7 @@
         if (daten.escalated) {
           eskalationAnhaengen(wartet.inhalt);
         } else {
-          quellenAnhaengen(wartet.inhalt, daten.sources, daten.source_scores);
+          quellenAnhaengen(wartet, daten.sources, daten.source_scores);
         }
       })
       .catch(function (fehler) {
