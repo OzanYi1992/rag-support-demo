@@ -841,3 +841,199 @@ def test_erste_frage_ohne_verlauf_bleibt_zeichengleich(
     system_prompt, user_prompt = llm.calls[0]
     assert system_prompt == system_heute
     assert user_prompt == user_heute
+
+
+# =============================================================================
+# BEGRUESSUNG, DANK UND ABSCHIED OHNE RETRIEVAL UND OHNE MODELL
+# =============================================================================
+
+
+class _Verboten:
+    """Ersatz fuer Embedder und Modell, der jeden Zugriff als Fehler meldet.
+
+    Schon das Lesen eines Attributs wirft. So faellt auch ein Zugriff auf, der
+    vor dem eigentlichen Aufruf passiert.
+    """
+
+    def __init__(self, rolle: str) -> None:
+        self._rolle = rolle
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"{self._rolle} wurde benutzt: {name}")
+
+
+@pytest.mark.parametrize(
+    ("slug", "eingabe", "art", "erwartet"),
+    [
+        (
+            "demo-englisch",
+            "Hi",
+            "greeting",
+            "Hello. I answer questions about shipping, returns and payment. "
+            "What would you like to know?",
+        ),
+        (
+            "demo-acme",
+            "Hallo!",
+            "greeting",
+            "Guten Tag. Ich beantworte Fragen zu Versand, Retouren und Zahlung. "
+            "Was möchten Sie wissen?",
+        ),
+        # Geantwortet wird in der Sprache des Mandanten, nicht des Grusses.
+        (
+            "demo-englisch",
+            "Guten Tag",
+            "greeting",
+            "Hello. I answer questions about shipping, returns and payment. "
+            "What would you like to know?",
+        ),
+    ],
+)
+def test_begruessung_ohne_retrieval_und_ohne_modell(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    slug: str,
+    eingabe: str,
+    art: str,
+    erwartet: str,
+) -> None:
+    """Eine Begruessung kostet weder Retrieval noch einen Modellaufruf.
+
+    Embedder und Modell sind Ersatzobjekte, die bei jedem Zugriff werfen.
+    Gegenprobe im selben Test: "Hi, do you ship to Norway?" ist eine Frage mit
+    Gruss davor und laeuft den normalen Weg, mit genau einem Modellaufruf.
+    """
+    settings, embeddings = umgebung_zweisprachig
+
+    a = answer(
+        slug,
+        eingabe,
+        settings=settings,
+        embeddings=_Verboten("Embedder"),
+        llm=_Verboten("Modell"),
+    )
+
+    assert a.kind == art
+    assert a.text == erwartet
+    assert a.sources == [] and a.source_scores == []
+    assert a.escalated is False
+    assert a.retrieval_scores == []
+    assert a.latency_ms_generation is None
+    assert a.model is None and a.prompt_tokens is None and a.completion_tokens is None
+    assert a.lang == ("en" if slug == "demo-englisch" else "de")
+
+    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    normal = answer(
+        slug,
+        "Hi, do you ship to Norway?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+    )
+    assert normal.kind == "rag"
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("eingabe", "slug", "art", "erwartet"),
+    [
+        (
+            "Thanks!",
+            "demo-englisch",
+            "thanks",
+            "You're welcome. Is there anything else you would like to know?",
+        ),
+        (
+            "thank you very much",
+            "demo-englisch",
+            "thanks",
+            "You're welcome. Is there anything else you would like to know?",
+        ),
+        ("Danke schön", "demo-acme", "thanks", "Gern geschehen. Haben Sie noch eine Frage?"),
+        ("Vielen Dank.", "demo-acme", "thanks", "Gern geschehen. Haben Sie noch eine Frage?"),
+    ],
+)
+def test_dank_ohne_retrieval_und_ohne_modell(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    eingabe: str,
+    slug: str,
+    art: str,
+    erwartet: str,
+) -> None:
+    """Ein Dank nach einer guten Antwort eskaliert nicht mehr.
+
+    Vorher kam darauf der Satz, die Unterlagen deckten das nicht, und das sah
+    vor einem Interessenten aus wie ein Fehler. Gegenprobe im selben Test:
+    "thanks, and do you ship to Norway?" laeuft den normalen Weg.
+    """
+    settings, embeddings = umgebung_zweisprachig
+
+    a = answer(
+        slug, eingabe, settings=settings, embeddings=_Verboten("Embedder"), llm=_Verboten("Modell")
+    )
+    assert (a.kind, a.text, a.sources, a.escalated) == (art, erwartet, [], False)
+
+    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    normal = answer(
+        slug,
+        "thanks, and do you ship to Norway?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+    )
+    assert normal.kind == "rag"
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("eingabe", "slug", "art", "erwartet"),
+    [
+        ("Bye!", "demo-englisch", "goodbye", "Goodbye, and thank you for your questions."),
+        ("see you", "demo-englisch", "goodbye", "Goodbye, and thank you for your questions."),
+        (
+            "Auf Wiedersehen",
+            "demo-acme",
+            "goodbye",
+            "Auf Wiedersehen und vielen Dank für Ihre Fragen.",
+        ),
+        ("Tschüss!", "demo-acme", "goodbye", "Auf Wiedersehen und vielen Dank für Ihre Fragen."),
+    ],
+)
+def test_abschied_ohne_retrieval_und_ohne_modell(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    eingabe: str,
+    slug: str,
+    art: str,
+    erwartet: str,
+) -> None:
+    """Wie beim Dank. Gegenprobe: "bye, and do you ship to Norway?" laeuft den
+    normalen Weg."""
+    settings, embeddings = umgebung_zweisprachig
+
+    a = answer(
+        slug, eingabe, settings=settings, embeddings=_Verboten("Embedder"), llm=_Verboten("Modell")
+    )
+    assert (a.kind, a.text, a.sources, a.escalated) == (art, erwartet, [], False)
+
+    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    normal = answer(
+        slug,
+        "bye, and do you ship to Norway?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+    )
+    assert normal.kind == "rag"
+    assert len(llm.calls) == 1
+
+
+def test_die_antwort_auf_eine_kurzformel_prueft_den_mandanten(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Themen eines Mandanten gehen nie unter der tenant_id eines anderen hinaus."""
+    from app.rag import kurzformel_beantworten
+
+    settings, _ = umgebung_zweisprachig
+    acme = load_tenant("demo-acme", settings.tenants_dir)
+    with pytest.raises(ValueError):
+        kurzformel_beantworten("demo-englisch", acme, "greeting")
+    assert kurzformel_beantworten("demo-acme", acme, "greeting").kind == "greeting"

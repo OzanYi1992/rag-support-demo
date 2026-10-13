@@ -1363,3 +1363,76 @@ def test_ein_anderer_fehler_wird_nicht_umgedeutet(
     )
     with pytest.raises(RuntimeError):
         client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Lieferung?"})
+
+
+# =============================================================================
+# BEGRUESSUNG OHNE MODELL UND DER SATZ, DASS EIN KI-SYSTEM ANTWORTET
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    ("token", "satz", "fremd"),
+    [
+        (
+            ACME_TOKEN,
+            "Hier antwortet ein KI-System, kein Mensch.",
+            "You are chatting with an AI system",
+        ),
+        (
+            ENGLISCH_TOKEN,
+            "You are chatting with an AI system, not a person.",
+            "Hier antwortet ein KI-System",
+        ),
+    ],
+)
+def test_ki_satz_steht_in_der_ausgelieferten_seite(
+    umgebung: tuple[Settings, E5Embeddings], token: str, satz: str, fremd: str
+) -> None:
+    """Der Satz kommt in der Seite an, in der Sprache des Mandanten, und nur in ihr."""
+    client, _ = _client(umgebung)
+    seite = _seite(client, token)
+    assert satz in seite
+    assert fremd not in seite
+
+
+def test_begruessung_ueber_die_route(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ein "Hi" ergibt 200 ohne Modellaufruf, und das Ereignis traegt die Art.
+
+    Kein Text im Ereignis: weder die Eingabe noch die Antwort.
+    """
+    client, llm = _client(umgebung)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": "Hi!"})
+
+    assert antwort.status_code == 200
+    daten = antwort.json()
+    assert daten["kind"] == "greeting"
+    assert daten["sources"] == []
+    assert daten["escalated"] is False
+    assert llm.calls == []
+    chats = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
+    assert len(chats) == 1
+    assert chats[0]["art"] == "greeting"
+    assert chats[0]["tenant_id"] == "demo-englisch"
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert daten["text"] not in log
+    assert "Hi!" not in log
+
+    # Gegenprobe: eine Frage traegt die Art rag.
+    caplog.clear()
+    with caplog.at_level("INFO", logger="rag.api"):
+        client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": "How long is delivery?"})
+    assert [e["art"] for e in _ereignisse(caplog) if e["ereignis"] == "chat"] == ["rag"]
+
+
+def test_begruessung_zaehlt_im_limit(umgebung: tuple[Settings, E5Embeddings]) -> None:
+    """Auch eine Begruessung verbraucht einen Platz: Das Limit greift vor answer()."""
+    client, llm = _client(umgebung, rate_limit=2)
+
+    for _ in range(2):
+        assert client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Hallo"}).status_code == 200
+    assert client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Hallo"}).status_code == 429
+    assert llm.calls == []

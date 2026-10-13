@@ -17,11 +17,14 @@ from app.texts import (
     _DEUTSCHE_ZEICHEN,
     _MARKER,
     JAVASCRIPT_SCHLUESSEL,
+    KURZFORMELN,
     SCHEMABESCHREIBUNGEN,
     TEXTE,
     VERFUEGBARE_SPRACHEN,
     Schemabeschreibungen,
     Texte,
+    kurzformel_erkennen,
+    normalisieren,
     passt_zur_sprache,
     schemabeschreibungen_fuer,
     texte_fuer,
@@ -79,6 +82,8 @@ def test_platzhalter_bleiben_in_beiden_sprachen_erhalten() -> None:
         # Wissensbasis abdeckt - er fragt dann etwas Ungedecktes, bekommt eine
         # korrekte Eskalation und haelt das System fuer schwach.
         assert "{topics}" in texte.begruessung, sprache
+        # Die Antwort auf einen Gruss nennt dieselben Themen.
+        assert "{topics}" in texte.begruessung_antwort, sprache
         assert "{sekunden}" in texte.ratenlimit_mit_zeit, sprache
         # Der Rahmentitel nennt die Datei. Ohne den Platzhalter hiessen alle
         # aufgeklappten Dokumente gleich, und ein Screenreader saehe nicht,
@@ -393,3 +398,154 @@ def test_anbieter_nicht_erreichbar_steht_im_browserkatalog() -> None:
         js = texte.fuer_javascript()
         assert js["anbieter_nicht_erreichbar"] == texte.anbieter_nicht_erreichbar, sprache
         assert texte.anbieter_nicht_erreichbar != texte.anfrage_fehlgeschlagen, sprache
+
+
+# --- Begruessung, Dank und Abschied ohne Modell -------------------------------
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        "Hi!",
+        "  hello ",
+        "Guten Tag.",
+        "HALLO",
+        "Grüß Gott",
+        "grüss gott!",
+        "Good   Morning",
+        "hi\tthere",
+    ],
+)
+def test_begruessung_normalisierung_trifft(eingabe: str) -> None:
+    """Satzzeichen, Gross- und Kleinschreibung, Leerraum und ß.
+
+    "Grüß Gott" trifft nur, weil dieselbe Normalisierung ueber die Liste
+    laeuft: casefold macht aus ß ein ss, in der Eingabe wie in der Formel.
+    """
+    assert kurzformel_erkennen(eingabe) == "greeting"
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        "Hi, do you ship to Norway?",
+        "Hallo, wo ist meine Bestellung?",
+        "hi hi",
+        "hello world",
+        "",
+        "   ",
+        "?!",
+        "thanks, and do you ship to Norway?",
+    ],
+)
+def test_ein_satz_mit_gruss_ist_keine_kurzformel(eingabe: str) -> None:
+    """Nur die ganze Eingabe zaehlt. Ein Gruss am Anfang einer Frage trifft nicht."""
+    assert kurzformel_erkennen(eingabe) is None
+
+
+def test_normalisieren() -> None:
+    assert normalisieren("  Grüß   Gott!! ") == "grüss gott"
+    assert normalisieren("Hallå.") == "hallå"
+    assert normalisieren("thank-you") == "thank you"
+
+
+@pytest.mark.parametrize("eingabe", ["hej", "Hei!", "moi", "Hallå", "HALLÅ!"])
+def test_nordische_gruesse(eingabe: str) -> None:
+    """hej, hei, moi und das schwedische hallå stehen in der englischen Liste."""
+    assert kurzformel_erkennen(eingabe) == "greeting"
+    assert "hallå" in KURZFORMELN["en"].begruessung
+    # Gegenprobe: ohne den Ring ist es ein anderes Wort und trifft nicht.
+    assert kurzformel_erkennen("halla") is None
+
+
+def test_der_ring_steht_als_echtes_zeichen_in_der_liste() -> None:
+    """U+00E5 als ein Zeichen, nicht als a mit kombinierendem Ring."""
+    assert "hallå" in KURZFORMELN["en"].begruessung
+    assert "hallå" not in KURZFORMELN["en"].begruessung
+
+
+def test_kurzformellisten_decken_die_katalogsprachen_ab() -> None:
+    """Dieselben Sprachschluessel wie der Textkatalog, keine Liste leer."""
+    assert set(KURZFORMELN) == set(TEXTE)
+    for sprache, formeln in KURZFORMELN.items():
+        for art in ("begruessung", "dank", "abschied"):
+            assert getattr(formeln, art), f"{sprache}.{art} ist leer"
+
+
+def test_jede_formel_gehoert_zu_genau_einer_art() -> None:
+    """Ueber alle Sprachen: Keine Formel ist zugleich Gruss und Dank oder Abschied.
+
+    Sonst entschiede die Reihenfolge der Pruefung, was geantwortet wird.
+    """
+    arten: dict[str, set[str]] = {}
+    for formeln in KURZFORMELN.values():
+        for art in ("begruessung", "dank", "abschied"):
+            for formel in getattr(formeln, art):
+                arten.setdefault(normalisieren(formel), set()).add(art)
+                # Jede Formel ist schon in Normalform geschrieben, bis auf ß.
+                assert normalisieren(formel) == formel.replace("ß", "ss"), formel
+    mehrdeutig = {formel: a for formel, a in arten.items() if len(a) > 1}
+    assert mehrdeutig == {}
+
+
+@pytest.mark.parametrize(
+    ("eingabe", "art"),
+    [("Thanks!", "thanks"), ("Danke schön", "thanks"), ("Bye!", "goodbye"), ("Tschüss", "goodbye")],
+)
+def test_dank_und_abschied_werden_erkannt(eingabe: str, art: str) -> None:
+    assert kurzformel_erkennen(eingabe) == art
+
+
+# Der Satz, der sagt, dass ein KI-System antwortet. Er steht als zweiter Satz
+# in der Begruessung der Seite und ist damit das Erste, was vor der ersten
+# Eingabe zu lesen ist.
+KI_SATZ = {
+    "de": "Hier antwortet ein KI-System, kein Mensch.",
+    "en": "You are chatting with an AI system, not a person.",
+}
+
+BEGRUESSUNG = {
+    "de": (
+        "Guten Tag. Hier antwortet ein KI-System, kein Mensch. Ich beantworte Fragen zu "
+        "{topics} — auf Grundlage der hinterlegten Unterlagen von {display_name}. Wenn die "
+        "Unterlagen eine Frage nicht abdecken, sage ich das, statt zu raten."
+    ),
+    "en": (
+        "Hello. You are chatting with an AI system, not a person. I answer questions about "
+        "{topics} — based on the documents stored for {display_name}. If those documents do "
+        "not cover a question, I say so instead of guessing."
+    ),
+}
+
+
+def test_ki_satz_in_beiden_katalogen() -> None:
+    """Der Satz steht woertlich als zweiter Satz der Begruessung, in beiden Sprachen.
+
+    Der uebrige Text ist der von vorher, Zeichen fuer Zeichen, auch mit dem
+    Gedankenstrich.
+    """
+    for sprache, satz in KI_SATZ.items():
+        begruessung = TEXTE[sprache].begruessung
+        assert begruessung == BEGRUESSUNG[sprache], sprache
+        anrede, rest = begruessung.split(". ", 1)
+        assert rest.startswith(satz), sprache
+        assert "—" in begruessung, sprache
+
+
+def test_antworten_ohne_modell_im_katalog() -> None:
+    """Die drei Texte, woertlich, mit echten Umlauten im deutschen Katalog."""
+    assert TEXTE["de"].begruessung_antwort == (
+        "Guten Tag. Ich beantworte Fragen zu {topics}. Was möchten Sie wissen?"
+    )
+    assert TEXTE["en"].begruessung_antwort == (
+        "Hello. I answer questions about {topics}. What would you like to know?"
+    )
+    assert TEXTE["de"].dank_antwort == "Gern geschehen. Haben Sie noch eine Frage?"
+    assert TEXTE["en"].dank_antwort == (
+        "You're welcome. Is there anything else you would like to know?"
+    )
+    assert TEXTE["de"].abschied_antwort == "Auf Wiedersehen und vielen Dank für Ihre Fragen."
+    assert TEXTE["en"].abschied_antwort == "Goodbye, and thank you for your questions."
+    # Serverseitig, nicht in der Seite.
+    for name in ("begruessung_antwort", "dank_antwort", "abschied_antwort"):
+        assert name not in JAVASCRIPT_SCHLUESSEL

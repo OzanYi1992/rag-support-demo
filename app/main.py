@@ -581,6 +581,7 @@ def create_app(
         _ereignis(
             "chat",
             tenant.slug,
+            art=ergebnis.kind,
             escalated=ergebnis.escalated,
             escalation_reason=ergebnis.escalation_reason,
             treffer=len(ergebnis.sources),

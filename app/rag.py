@@ -28,9 +28,20 @@ from app.llm import LlmClient, build_llm
 from app.prompts import antwortmodell_fuer, build_system_prompt, build_user_prompt
 from app.search import SearchHit, search_tenant
 from app.tenants import TenantConfig, load_tenant
+from app.texts import (
+    ART_ABSCHIED,
+    ART_BEGRUESSUNG,
+    ART_DANK,
+    kurzformel_erkennen,
+    texte_fuer,
+)
 
 REASON_NOT_GROUNDED = "not_grounded"
 REASON_UNPARSEABLE = "generation_unparseable"
+
+# Die Art der Antwort. "rag" ist der Weg ueber Retrieval und Modell, auch wenn
+# er eskaliert. Die drei anderen kommen ohne beides aus dem Katalog.
+ART_RAG = "rag"
 
 
 class Answer(BaseModel):
@@ -73,6 +84,11 @@ class Answer(BaseModel):
     # Tatsaechliche Antwortsprache, nicht der Eingabewert von response_language.
     # Phase 6 will das als Dimension.
     lang: str
+
+    # "rag", oder "greeting", "thanks" und "goodbye" fuer eine Antwort ohne
+    # Retrieval und ohne Modell. Die Oberflaeche braucht das Feld nicht: Ohne
+    # Quellen haengt sie nichts an, ohne Eskalation zeigt sie keinen Kasten.
+    kind: str = ART_RAG
 
 
 def _eskaliert(
@@ -148,6 +164,47 @@ def _quellen_verdichten(
     return quellen, scores
 
 
+def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> Answer:
+    """Antwort auf eine Begruessung, einen Dank oder einen Abschied, aus dem
+    Katalog in der Sprache des Mandanten.
+
+    Kein Retrieval, kein Modell: keine Scores, keine Tokens,
+    `latency_ms_generation` und `model` None. `sources` ist leer.
+
+    `tenant_id` an erster Stelle, obwohl `tenant` schon aufgeloest ist: Die
+    Begruessung setzt die Themen dieses Mandanten ein, also Mandanteninhalt.
+    Passen beide nicht zusammen, ist das ein Fehler im Aufrufer und kein Fall
+    fuer eine Antwort.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    texte = texte_fuer(tenant.language)
+    if art == ART_BEGRUESSUNG:
+        text = texte.begruessung_antwort.format(topics=tenant.topics.strip())
+    elif art == ART_DANK:
+        text = texte.dank_antwort
+    elif art == ART_ABSCHIED:
+        text = texte.abschied_antwort
+    else:
+        raise ValueError(f"Unbekannte Art: {art!r}")
+    return Answer(
+        text=text,
+        sources=[],
+        source_scores=[],
+        escalated=False,
+        escalation_reason=None,
+        escalation_metric=None,
+        retrieval_scores=[],
+        latency_ms_retrieval=0,
+        latency_ms_generation=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        model=None,
+        lang=tenant.language,
+        kind=art,
+    )
+
+
 def answer(
     tenant_id: str,
     question: str,
@@ -175,6 +232,13 @@ def answer(
     """
     aktive_settings = settings if settings is not None else get_settings()
     tenant = load_tenant(tenant_id, aktive_settings.tenants_dir)
+
+    # --- Begruessung, Dank, Abschied: ohne Retrieval und ohne Modell -------
+    # Nur, wenn die GANZE Eingabe einer Formel entspricht. Jede andere Eingabe
+    # laeuft unveraendert den Weg darunter.
+    art = kurzformel_erkennen(question)
+    if art is not None:
+        return kurzformel_beantworten(tenant_id, tenant, art)
 
     # --- Retrieval ---------------------------------------------------------
     start = time.perf_counter()

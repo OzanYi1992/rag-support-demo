@@ -109,6 +109,19 @@ class Texte(BaseModel, frozen=True):
     ratenlimit_detail: str
     oberflaeche_fehlt: str
 
+    # --- Antworten ohne Modell ---------------------------------------------
+    # Auf eine Begruessung, einen Dank oder einen Abschied antwortet der
+    # Assistent aus diesem Katalog, ohne Retrieval und ohne Modellaufruf. Die
+    # Eingabe muss dafuer genau einer Formel aus KURZFORMELN entsprechen.
+    # Vorher eskalierte ein "Hi" mit dem Satz, die Unterlagen deckten das
+    # nicht, und kostete einen Modellaufruf.
+    #
+    # Die Begruessungsantwort traegt {topics} und bekommt denselben Text wie
+    # die Begruessung der Seite.
+    begruessung_antwort: str
+    dank_antwort: str
+    abschied_antwort: str
+
     def fuer_javascript(self) -> dict[str, str]:
         """Die Teilmenge, die im Browser gebraucht wird.
 
@@ -121,9 +134,10 @@ class Texte(BaseModel, frozen=True):
 _DE = Texte(
     titel="Support-Assistent",
     begruessung=(
-        "Guten Tag. Ich beantworte Fragen zu {topics} — auf Grundlage der "
-        "hinterlegten Unterlagen von {display_name}. Wenn die Unterlagen eine "
-        "Frage nicht abdecken, sage ich das, statt zu raten."
+        "Guten Tag. Hier antwortet ein KI-System, kein Mensch. Ich beantworte "
+        "Fragen zu {topics} — auf Grundlage der hinterlegten Unterlagen von "
+        "{display_name}. Wenn die Unterlagen eine Frage nicht abdecken, sage ich "
+        "das, statt zu raten."
     ),
     frage_label="Ihre Frage",
     frage_platzhalter="Ihre Frage — Enter zum Senden, Umschalt+Enter für eine neue Zeile",
@@ -150,14 +164,18 @@ _DE = Texte(
     ),
     ratenlimit_detail="Zu viele Anfragen. Bitte kurz warten.",
     oberflaeche_fehlt="Oberflaeche fehlt.",
+    begruessung_antwort="Guten Tag. Ich beantworte Fragen zu {topics}. Was möchten Sie wissen?",
+    dank_antwort="Gern geschehen. Haben Sie noch eine Frage?",
+    abschied_antwort="Auf Wiedersehen und vielen Dank für Ihre Fragen.",
 )
 
 _EN = Texte(
     titel="Support Assistant",
     begruessung=(
-        "Hello. I answer questions about {topics} — based on the documents "
-        "stored for {display_name}. If those documents do not cover a question, "
-        "I say so instead of guessing."
+        "Hello. You are chatting with an AI system, not a person. I answer "
+        "questions about {topics} — based on the documents stored for "
+        "{display_name}. If those documents do not cover a question, I say so "
+        "instead of guessing."
     ),
     frage_label="Your question",
     frage_platzhalter="Your question — Enter to send, Shift+Enter for a new line",
@@ -183,6 +201,9 @@ _EN = Texte(
     ),
     ratenlimit_detail="Too many requests. Please wait a moment.",
     oberflaeche_fehlt="User interface missing.",
+    begruessung_antwort="Hello. I answer questions about {topics}. What would you like to know?",
+    dank_antwort="You're welcome. Is there anything else you would like to know?",
+    abschied_antwort="Goodbye, and thank you for your questions.",
 )
 
 TEXTE: dict[str, Texte] = {"de": _DE, "en": _EN}
@@ -190,6 +211,111 @@ TEXTE: dict[str, Texte] = {"de": _DE, "en": _EN}
 # Die zulaessigen Werte fuer das Feld `language` eines Mandanten. Abgeleitet,
 # nicht zweitgefuehrt.
 VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
+
+
+# =============================================================================
+# BEGRUESSUNG, DANK UND ABSCHIED OHNE MODELL
+#
+# Erkannt wird nur die GANZE Eingabe, nach der Normalisierung genau gleich
+# einer Formel. "Hi, do you ship to Norway?" ist keine Begruessung, sondern
+# eine Frage mit Gruss davor, und laeuft den normalen Weg. Eine Erkennung, die
+# weiter greift, beantwortete echte Fragen mit einem Gruss.
+#
+# Geprueft wird gegen die Formeln ALLER Sprachen, geantwortet in der Sprache des
+# Mandanten. Ein "Hallo" beim englischen Mandanten bekommt die englische
+# Antwort: Sie nennt die Themen des Mandanten, und die stehen in der
+# tenant.yaml nur in seiner Sprache.
+#
+# Die englische Liste traegt dazu nordische Gruesse, weil die Empfaenger der
+# Demo nordisch sind und die Antwort ohnehin englisch ist: hej, hei, moi und
+# das schwedische hallå. Gruesse anderer Sprachen erkennt die Liste nicht; sie
+# laufen den normalen Weg.
+# =============================================================================
+
+
+class Kurzformeln(BaseModel, frozen=True):
+    """Die Formeln einer Sprache, je Art. Ungeordnet, verglichen nach
+    `normalisieren`."""
+
+    begruessung: tuple[str, ...]
+    dank: tuple[str, ...]
+    abschied: tuple[str, ...]
+
+
+KURZFORMELN: dict[str, Kurzformeln] = {
+    "de": Kurzformeln(
+        begruessung=(
+            "hallo",
+            "hi",
+            "hey",
+            "moin",
+            "servus",
+            "guten tag",
+            "guten morgen",
+            "guten abend",
+            "grüß gott",
+        ),
+        dank=("danke", "danke schön", "danke sehr", "vielen dank"),
+        abschied=("tschüss", "auf wiedersehen", "bis bald", "ciao"),
+    ),
+    "en": Kurzformeln(
+        begruessung=(
+            "hi",
+            "hello",
+            "hey",
+            "hi there",
+            "hello there",
+            "hey there",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "hej",
+            "hei",
+            "moi",
+            "hallå",
+        ),
+        dank=("thanks", "thank you", "thanks a lot", "thank you very much", "cheers"),
+        abschied=("bye", "goodbye", "bye bye", "see you"),
+    ),
+}
+
+# Die Arten, wie sie in `Answer.kind` und im Ereignis stehen. Englisch wie die
+# uebrigen Felder der Antwort.
+ART_BEGRUESSUNG = "greeting"
+ART_DANK = "thanks"
+ART_ABSCHIED = "goodbye"
+
+
+def normalisieren(text: str) -> str:
+    """Kleinschreibung, jedes Zeichen ausser Buchstabe und Ziffer ein Leerzeichen,
+    Leerraum zusammengefasst und am Rand entfernt.
+
+    `casefold` statt `lower`, damit "GRÜSS" und "grüß" gleich werden. Dieselbe
+    Funktion laeuft ueber die Formeln, sonst traefe "Grüß Gott" nie: casefold
+    macht aus ß ein ss, in der Eingabe wie in der Liste.
+    """
+    zeichen = (z if z.isalnum() else " " for z in text.casefold())
+    return " ".join("".join(zeichen).split())
+
+
+def kurzformel_erkennen(eingabe: str) -> str | None:
+    """Die Art der Eingabe, wenn sie genau einer Formel entspricht, sonst None.
+
+    Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
+    deshalb keine tenant_id.
+    """
+    normal = normalisieren(eingabe)
+    if not normal:
+        return None
+    for formeln in KURZFORMELN.values():
+        for art, liste in (
+            (ART_BEGRUESSUNG, formeln.begruessung),
+            (ART_DANK, formeln.dank),
+            (ART_ABSCHIED, formeln.abschied),
+        ):
+            if normal in {normalisieren(formel) for formel in liste}:
+                return art
+    return None
 
 
 # Kurze Markerlisten fuer die Sprachpruefung unten. Bewusst Funktionswoerter:
