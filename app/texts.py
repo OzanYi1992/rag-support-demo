@@ -122,6 +122,12 @@ class Texte(BaseModel, frozen=True):
     dank_antwort: str
     abschied_antwort: str
 
+    # Auf eine Frage nach dem Assistenten selbst, was er kann und wozu er da ist
+    # oder ob ein Mensch antwortet, ebenfalls aus diesem Katalog. Beide tragen
+    # {topics} und {display_name}, wie die Begruessung der Seite.
+    faehigkeiten_antwort: str
+    identitaet_antwort: str
+
     # Der Titel des Dokuments ueber den Assistenten. Er ersetzt dessen
     # Dateinamen, wo das Modell ihn im Fliesstext nennt ("according to
     # about-this-assistant.md"). Steht in der Sprache der Antwort, mit den
@@ -173,6 +179,14 @@ _DE = Texte(
     begruessung_antwort="Guten Tag. Ich beantworte Fragen zu {topics}. Was möchten Sie wissen?",
     dank_antwort="Gern geschehen. Haben Sie noch eine Frage?",
     abschied_antwort="Auf Wiedersehen und vielen Dank für Ihre Fragen.",
+    faehigkeiten_antwort=(
+        "Ich beantworte Fragen zu {topics}, auf Grundlage der hinterlegten Unterlagen von "
+        "{display_name}. Was möchten Sie wissen?"
+    ),
+    identitaet_antwort=(
+        "Hier antwortet ein KI-System, kein Mensch. Ich beantworte Fragen zu {topics}, auf "
+        "Grundlage der hinterlegten Unterlagen von {display_name}."
+    ),
     assistentendokument_titel="„Über den Assistenten“",
 )
 
@@ -211,6 +225,14 @@ _EN = Texte(
     begruessung_antwort="Hello. I answer questions about {topics}. What would you like to know?",
     dank_antwort="You're welcome. Is there anything else you would like to know?",
     abschied_antwort="Goodbye, and thank you for your questions.",
+    faehigkeiten_antwort=(
+        "I answer questions about {topics}, based on the documents stored for "
+        "{display_name}. What would you like to know?"
+    ),
+    identitaet_antwort=(
+        "You are chatting with an AI system, not a person. I answer questions about "
+        "{topics}, based on the documents stored for {display_name}."
+    ),
     assistentendokument_titel="“About This Assistant”",
 )
 
@@ -238,6 +260,18 @@ VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
 # Demo nordisch sind und die Antwort ohnehin englisch ist: hej, hei, moi und
 # das schwedische hallå. Gruesse anderer Sprachen erkennt die Liste nicht; sie
 # laufen den normalen Weg.
+#
+# FRAGEN NACH DEM ASSISTENTEN SELBST, auf demselben Weg und ebenfalls ohne
+# Modell: was er kann und wozu er da ist ("capabilities"), und ob ein Mensch,
+# ein Bot oder eine KI antwortet ("identity"). Das Dokument ueber den
+# Assistenten im Korpus beantwortet solche Fragen nicht verlaesslich: Gemessen
+# eskalierte "Are you a bot?" bei Fellgate in 18 von 20 Laeufen, obwohl das
+# Dokument auf Rang 1 im Kontext lag.
+#
+# Nur fuer diese beiden Arten gilt eine Toleranz fuer Tippfehler, weil genau
+# solche Fragen schnell und ungenau getippt werden ("How do ou help?"). Fuer
+# Gruss, Dank und Abschied gilt sie nicht: Die Formeln sind kurz, und ein
+# Abstand von 1 machte aus "hi" jedes Wort mit zwei Buchstaben.
 # =============================================================================
 
 
@@ -248,6 +282,8 @@ class Kurzformeln(BaseModel, frozen=True):
     begruessung: tuple[str, ...]
     dank: tuple[str, ...]
     abschied: tuple[str, ...]
+    faehigkeiten: tuple[str, ...]
+    identitaet: tuple[str, ...]
 
 
 KURZFORMELN: dict[str, Kurzformeln] = {
@@ -265,6 +301,42 @@ KURZFORMELN: dict[str, Kurzformeln] = {
         ),
         dank=("danke", "danke schön", "danke sehr", "vielen dank"),
         abschied=("tschüss", "auf wiedersehen", "bis bald", "ciao"),
+        faehigkeiten=(
+            "was kannst du",
+            "was können sie",
+            "wobei können sie mir helfen",
+            "wobei kannst du mir helfen",
+            "wobei können sie helfen",
+            "wie können sie mir helfen",
+            "wie kannst du mir helfen",
+            "wie helfen sie",
+            "wofür bist du da",
+            "wofür sind sie da",
+            "was ist ihr zweck",
+            "was ist dein zweck",
+            "was machst du",
+            "was machen sie",
+            "was kann ich fragen",
+            "was kann ich sie fragen",
+            "hilfe",
+        ),
+        identitaet=(
+            "bist du ein bot",
+            "sind sie ein bot",
+            "bist du ein roboter",
+            "sind sie ein roboter",
+            "bist du ein mensch",
+            "sind sie ein mensch",
+            "bist du eine ki",
+            "sind sie eine ki",
+            "ist das ein bot",
+            "ist das eine ki",
+            "spreche ich mit einem menschen",
+            "spreche ich mit einem bot",
+            "rede ich mit einem menschen",
+            "wer bist du",
+            "wer sind sie",
+        ),
     ),
     "en": Kurzformeln(
         begruessung=(
@@ -284,6 +356,48 @@ KURZFORMELN: dict[str, Kurzformeln] = {
         ),
         dank=("thanks", "thank you", "thanks a lot", "thank you very much", "cheers"),
         abschied=("bye", "goodbye", "bye bye", "see you"),
+        faehigkeiten=(
+            "what can you do",
+            "what can you help with",
+            "what can you help me with",
+            "how can you help",
+            "how can you help me",
+            "how do you help",
+            "how do you help me",
+            "what do you do",
+            "what are you for",
+            "what is your purpose",
+            "what is your main purpose",
+            "what s your purpose",
+            "whats your purpose",
+            "what can i ask",
+            "what can i ask you",
+            "what questions can you answer",
+            "what do you know",
+            "what is this",
+            "help",
+        ),
+        identitaet=(
+            "are you a bot",
+            "are you a robot",
+            "are you a chatbot",
+            "are you human",
+            "are you a human",
+            "are you a person",
+            "are you a real person",
+            "are you real",
+            "are you ai",
+            "are you an ai",
+            "is this a bot",
+            "is this ai",
+            "is this a real person",
+            "am i talking to a bot",
+            "am i talking to a human",
+            "am i talking to a person",
+            "am i talking to a real person",
+            "who are you",
+            "what are you",
+        ),
     ),
 }
 
@@ -292,6 +406,8 @@ KURZFORMELN: dict[str, Kurzformeln] = {
 ART_BEGRUESSUNG = "greeting"
 ART_DANK = "thanks"
 ART_ABSCHIED = "goodbye"
+ART_FAEHIGKEITEN = "capabilities"
+ART_IDENTITAET = "identity"
 
 
 def normalisieren(text: str) -> str:
@@ -306,8 +422,86 @@ def normalisieren(text: str) -> str:
     return " ".join("".join(zeichen).split())
 
 
+def levenshtein_abstand(a: str, b: str) -> int:
+    """Wie viele Zeichen eingefuegt, geloescht oder ersetzt werden muessen, damit
+    aus `a` `b` wird. Eine vertauschte Nachbarschaft ("mian" statt "main") zaehlt
+    zwei.
+
+    Eigene Funktion statt einer Abhaengigkeit: zwei Zeilen der Matrix, fuer
+    Eingaben von der Laenge einer Frage.
+    """
+    if len(a) < len(b):
+        a, b = b, a
+    vorher = list(range(len(b) + 1))
+    for i, zeichen_a in enumerate(a, 1):
+        jetzt = [i]
+        for j, zeichen_b in enumerate(b, 1):
+            jetzt.append(
+                min(vorher[j] + 1, jetzt[j - 1] + 1, vorher[j - 1] + (zeichen_a != zeichen_b))
+            )
+        vorher = jetzt
+    return vorher[-1]
+
+
+def tippfehler_toleranz(laenge: int) -> int:
+    """Der hoechste zulaessige Abstand bei dieser Laenge.
+
+    Unter 8 Zeichen nur genau, ab 8 Zeichen hoechstens 1, ab 16 hoechstens 2.
+    `laenge` ist die kuerzere von Eingabe und Formel: Die Toleranz waechst erst,
+    wenn beide lang genug sind.
+    """
+    if laenge >= 16:
+        return 2
+    if laenge >= 8:
+        return 1
+    return 0
+
+
+def _arten(formeln: Kurzformeln) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return (
+        (ART_BEGRUESSUNG, formeln.begruessung),
+        (ART_DANK, formeln.dank),
+        (ART_ABSCHIED, formeln.abschied),
+        (ART_FAEHIGKEITEN, formeln.faehigkeiten),
+        (ART_IDENTITAET, formeln.identitaet),
+    )
+
+
+def _nach_tippfehler(normal: str) -> str | None:
+    """Die Frage nach dem Assistenten, deren Formel der Eingabe am naechsten
+    liegt, innerhalb der Toleranz.
+
+    Treffen beide Arten mit demselben kleinsten Abstand, gilt keine: Dann ist
+    nicht zu entscheiden, was gemeint ist, und die Eingabe laeuft den normalen
+    Weg.
+    """
+    bester: dict[str, int] = {}
+    for formeln in KURZFORMELN.values():
+        for art, liste in (
+            (ART_FAEHIGKEITEN, formeln.faehigkeiten),
+            (ART_IDENTITAET, formeln.identitaet),
+        ):
+            for formel in liste:
+                eintrag = normalisieren(formel)
+                grenze = tippfehler_toleranz(min(len(normal), len(eintrag)))
+                if abs(len(normal) - len(eintrag)) > grenze:
+                    continue
+                abstand = levenshtein_abstand(normal, eintrag)
+                if abstand <= grenze and abstand < bester.get(art, grenze + 1):
+                    bester[art] = abstand
+    if not bester:
+        return None
+    kleinster = min(bester.values())
+    arten = [art for art, abstand in bester.items() if abstand == kleinster]
+    return arten[0] if len(arten) == 1 else None
+
+
 def kurzformel_erkennen(eingabe: str) -> str | None:
-    """Die Art der Eingabe, wenn sie genau einer Formel entspricht, sonst None.
+    """Die Art der Eingabe, wenn sie einer Formel entspricht, sonst None.
+
+    Zuerst genau, ueber alle Arten und alle Sprachen; ein genauer Treffer geht
+    vor. Danach, nur fuer die Fragen nach dem Assistenten, mit der Toleranz fuer
+    Tippfehler aus `_nach_tippfehler`.
 
     Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
     deshalb keine tenant_id.
@@ -316,14 +510,10 @@ def kurzformel_erkennen(eingabe: str) -> str | None:
     if not normal:
         return None
     for formeln in KURZFORMELN.values():
-        for art, liste in (
-            (ART_BEGRUESSUNG, formeln.begruessung),
-            (ART_DANK, formeln.dank),
-            (ART_ABSCHIED, formeln.abschied),
-        ):
+        for art, liste in _arten(formeln):
             if normal in {normalisieren(formel) for formel in liste}:
                 return art
-    return None
+    return _nach_tippfehler(normal)
 
 
 # Kurze Markerlisten fuer die Sprachpruefung unten. Bewusst Funktionswoerter:

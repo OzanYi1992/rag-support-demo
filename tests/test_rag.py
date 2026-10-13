@@ -1040,6 +1040,139 @@ def test_die_antwort_auf_eine_kurzformel_prueft_den_mandanten(
 
 
 # =============================================================================
+# FRAGEN NACH DEM ASSISTENTEN OHNE RETRIEVAL UND OHNE MODELL
+# =============================================================================
+
+_FAEHIGKEITEN = {
+    "demo-englisch": (
+        "I answer questions about shipping, returns and payment, based on the documents "
+        "stored for demo-englisch. What would you like to know?"
+    ),
+    "demo-acme": (
+        "Ich beantworte Fragen zu Versand, Retouren und Zahlung, auf Grundlage der "
+        "hinterlegten Unterlagen von demo-acme. Was möchten Sie wissen?"
+    ),
+}
+_IDENTITAET = {
+    "demo-englisch": (
+        "You are chatting with an AI system, not a person. I answer questions about "
+        "shipping, returns and payment, based on the documents stored for demo-englisch."
+    ),
+    "demo-acme": (
+        "Hier antwortet ein KI-System, kein Mensch. Ich beantworte Fragen zu Versand, "
+        "Retouren und Zahlung, auf Grundlage der hinterlegten Unterlagen von demo-acme."
+    ),
+}
+
+
+@pytest.mark.parametrize("slug", ["demo-englisch", "demo-acme"])
+@pytest.mark.parametrize(
+    ("eingabe", "art"),
+    [
+        # Der Pflichtfall, mit Tippfehlern.
+        ("How do ou help?", "capabilities"),
+        ("Are you a bott?", "identity"),
+        ("What is your mian purpose?", "capabilities"),
+        # Genau, in der jeweils anderen Sprache des Mandanten.
+        ("Wobei können Sie mir helfen?", "capabilities"),
+        ("Sind Sie ein Bot?", "identity"),
+    ],
+)
+def test_frage_nach_dem_assistenten_ohne_retrieval_und_ohne_modell(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    slug: str,
+    eingabe: str,
+    art: str,
+) -> None:
+    """Eine Frage nach dem Assistenten kostet weder Retrieval noch einen
+    Modellaufruf, und sie eskaliert nicht.
+
+    Embedder und Modell werfen bei jedem Zugriff. Geantwortet wird in der
+    Sprache des Mandanten, mit seinen Themen und seinem Namen.
+    """
+    settings, _ = umgebung_zweisprachig
+
+    a = answer(
+        slug,
+        eingabe,
+        settings=settings,
+        embeddings=_Verboten("Embedder"),
+        llm=_Verboten("Modell"),
+    )
+
+    assert a.kind == art
+    assert a.text == (_FAEHIGKEITEN if art == "capabilities" else _IDENTITAET)[slug]
+    assert a.sources == [] and a.source_scores == []
+    assert a.escalated is False and a.escalation_reason is None
+    assert a.retrieval_scores == []
+    assert a.latency_ms_generation is None
+    assert a.model is None and a.prompt_tokens is None and a.completion_tokens is None
+    assert a.lang == ("en" if slug == "demo-englisch" else "de")
+    assert a.removed_references == 0
+
+
+def test_ein_gleichstand_laeuft_den_normalen_weg(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treffen beide Arten mit demselben Abstand, laeuft die Eingabe ueber
+    Retrieval und Modell, mit genau einem Aufruf.
+
+    Mit eingespeisten Listen, weil die echten keinen Gleichstand haben.
+    """
+    from app import texts
+    from app.texts import Kurzformeln
+
+    leer: tuple[str, ...] = ()
+    monkeypatch.setattr(
+        texts,
+        "KURZFORMELN",
+        {
+            "en": Kurzformeln(
+                begruessung=leer,
+                dank=leer,
+                abschied=leer,
+                faehigkeiten=("abcdefgh x",),
+                identitaet=("abcdefgh y",),
+            )
+        },
+    )
+    settings, embeddings = umgebung_zweisprachig
+    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+
+    a = answer("demo-englisch", "abcdefgh z", settings=settings, embeddings=embeddings, llm=llm)
+
+    assert a.kind == "rag"
+    assert len(llm.calls) == 1
+    # Gegenprobe: Ein Abstand von 1 zu nur einer Art bleibt ohne Modell.
+    b = answer(
+        "demo-englisch",
+        "abcdefgh xx",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),
+        llm=_Verboten("Modell"),
+    )
+    assert b.kind == "capabilities"
+
+
+@pytest.mark.parametrize("art", ["capabilities", "identity"])
+def test_die_antwort_auf_eine_frage_nach_dem_assistenten_prueft_den_mandanten(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    art: str,
+) -> None:
+    """Themen und Name eines Mandanten gehen nie unter der tenant_id eines anderen hinaus."""
+    from app.rag import kurzformel_beantworten
+
+    settings, _ = umgebung_zweisprachig
+    acme = load_tenant("demo-acme", settings.tenants_dir)
+    with pytest.raises(ValueError):
+        kurzformel_beantworten("demo-englisch", acme, art)
+    a = kurzformel_beantworten("demo-acme", acme, art)
+    assert a.kind == art
+    assert "demo-acme" in a.text and "demo-englisch" not in a.text
+
+
+# =============================================================================
 # DAS DOKUMENT UEBER DEN ASSISTENTEN STEHT NIE IN SOURCES
 # =============================================================================
 

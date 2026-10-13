@@ -21,11 +21,18 @@ from app.embeddings import E5Embeddings
 from app.prompts import GroundedAnswer
 from app.rag import REASON_NOT_GROUNDED, answer
 from app.tenants import TenantConfig
+from app.texts import kurzformel_erkennen
 from app.verweis import assistentenverweise_entfernen, ist_assistentendokument
 from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm
 
 ABOUT = "about-this-assistant.md"
 ZWEITES = "how-this-assistant-works.md"
+
+# Eine Frage nach dem Assistenten, die ueber Retrieval und Modell laeuft. Eine
+# Frage aus den Listen der Kurzformeln, etwa "What can you help me with?",
+# bekaeme eine feste Antwort und erreichte das Modell nie; dann prueften die
+# Tests unten nichts.
+FRAGE = "Which topics does this assistant cover?"
 
 FACHTEXT = """# Shipping
 
@@ -93,6 +100,12 @@ def umgebung(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
     return settings, embeddings
 
 
+def test_die_frage_dieser_tests_ist_keine_kurzformel() -> None:
+    """Gegenprobe zu allen Tests ueber `_antwort`: Die Frage laeuft ueber das Modell."""
+    assert kurzformel_erkennen(FRAGE) is None
+    assert kurzformel_erkennen("What can you help me with?") == "capabilities"
+
+
 def _antwort(
     umgebung: tuple[Settings, E5Embeddings],
     text: str,
@@ -111,7 +124,7 @@ def _antwort(
     )
     return answer(
         "demo-assist",
-        "What can you help me with?",
+        FRAGE,
         settings=settings,
         embeddings=embeddings,
         llm=llm,

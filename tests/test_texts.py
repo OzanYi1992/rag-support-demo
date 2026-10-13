@@ -9,6 +9,7 @@ einem Interessenten.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -24,10 +25,12 @@ from app.texts import (
     Schemabeschreibungen,
     Texte,
     kurzformel_erkennen,
+    levenshtein_abstand,
     normalisieren,
     passt_zur_sprache,
     schemabeschreibungen_fuer,
     texte_fuer,
+    tippfehler_toleranz,
 )
 
 
@@ -468,18 +471,18 @@ def test_kurzformellisten_decken_die_katalogsprachen_ab() -> None:
     """Dieselben Sprachschluessel wie der Textkatalog, keine Liste leer."""
     assert set(KURZFORMELN) == set(TEXTE)
     for sprache, formeln in KURZFORMELN.items():
-        for art in ("begruessung", "dank", "abschied"):
+        for art in ("begruessung", "dank", "abschied", "faehigkeiten", "identitaet"):
             assert getattr(formeln, art), f"{sprache}.{art} ist leer"
 
 
 def test_jede_formel_gehoert_zu_genau_einer_art() -> None:
-    """Ueber alle Sprachen: Keine Formel ist zugleich Gruss und Dank oder Abschied.
+    """Ueber alle Sprachen: Keine Formel gehoert zu zwei Arten, etwa Gruss und Dank.
 
     Sonst entschiede die Reihenfolge der Pruefung, was geantwortet wird.
     """
     arten: dict[str, set[str]] = {}
     for formeln in KURZFORMELN.values():
-        for art in ("begruessung", "dank", "abschied"):
+        for art in ("begruessung", "dank", "abschied", "faehigkeiten", "identitaet"):
             for formel in getattr(formeln, art):
                 arten.setdefault(normalisieren(formel), set()).add(art)
                 # Jede Formel ist schon in Normalform geschrieben, bis auf ß.
@@ -549,3 +552,230 @@ def test_antworten_ohne_modell_im_katalog() -> None:
     # Serverseitig, nicht in der Seite.
     for name in ("begruessung_antwort", "dank_antwort", "abschied_antwort"):
         assert name not in JAVASCRIPT_SCHLUESSEL
+
+
+# --- Fragen nach dem Assistenten: was er kann und wer antwortet --------------
+
+# Woerter, die ein Mensch auf Deutsch gross schreibt, und die englischen
+# Ausnahmen. Nur fuer `_wie_getippt`: Die Listen stehen in Normalform.
+_GROSS = {
+    "de": {
+        "sie": "Sie",
+        "ihr": "Ihr",
+        "bot": "Bot",
+        "ki": "KI",
+        "mensch": "Mensch",
+        "menschen": "Menschen",
+        "roboter": "Roboter",
+        "zweck": "Zweck",
+    },
+    "en": {"i": "I", "ai": "AI"},
+}
+
+
+def _wie_getippt(formel: str, sprache: str) -> str:
+    """Die Formel so, wie ein Mensch sie tippt: Grossschreibung, Apostroph,
+    Satzzeichen am Ende."""
+    woerter = [_GROSS[sprache].get(wort, wort) for wort in formel.split()]
+    text = " ".join(woerter).replace("what s ", "what's ")
+    text = text[0].upper() + text[1:]
+    return text + ("!" if formel in ("help", "hilfe") else "?")
+
+
+_ASSISTENTENFRAGEN = [
+    (sprache, art, formel)
+    for sprache, formeln in KURZFORMELN.items()
+    for art, liste in (("capabilities", formeln.faehigkeiten), ("identity", formeln.identitaet))
+    for formel in liste
+]
+
+
+def test_die_listen_fuer_fragen_nach_dem_assistenten_sind_vollstaendig() -> None:
+    """36 Formeln fuer capabilities und 34 fuer identity, ueber beide Sprachen."""
+    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "capabilities") == 36
+    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "identity") == 34
+    # Echte Umlaute in den deutschen Listen, nicht die Umschreibung.
+    deutsch = " ".join(f for s, _, f in _ASSISTENTENFRAGEN if s == "de")
+    assert "können" in deutsch and "wofür" in deutsch
+    assert "koennen" not in deutsch and "wofuer" not in deutsch
+
+
+@pytest.mark.parametrize(("sprache", "art", "formel"), _ASSISTENTENFRAGEN)
+def test_jede_frage_nach_dem_assistenten_wird_genau_erkannt(
+    sprache: str, art: str, formel: str
+) -> None:
+    eingabe = _wie_getippt(formel, sprache)
+    assert eingabe != formel
+    assert kurzformel_erkennen(eingabe) == art, eingabe
+
+
+def test_wie_getippt_sieht_aus_wie_ein_mensch_tippt() -> None:
+    """Gegenprobe zur Hilfsfunktion des Tests oben."""
+    assert _wie_getippt("sind sie ein bot", "de") == "Sind Sie ein Bot?"
+    assert _wie_getippt("ist das eine ki", "de") == "Ist das eine KI?"
+    assert _wie_getippt("what s your purpose", "en") == "What's your purpose?"
+    assert _wie_getippt("am i talking to a bot", "en") == "Am I talking to a bot?"
+    assert _wie_getippt("help", "en") == "Help!"
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "abstand"),
+    [
+        ("", "", 0),
+        ("", "abc", 3),
+        ("bot", "bot", 0),
+        ("bot", "bott", 1),
+        ("how do you help", "how do ou help", 1),
+        ("main", "mian", 2),
+        ("kitten", "sitting", 3),
+        ("wofür", "wofuer", 2),
+    ],
+)
+def test_levenshtein_abstand(a: str, b: str, abstand: int) -> None:
+    assert levenshtein_abstand(a, b) == abstand
+    assert levenshtein_abstand(b, a) == abstand
+
+
+@pytest.mark.parametrize(
+    ("laenge", "toleranz"),
+    [(0, 0), (7, 0), (8, 1), (15, 1), (16, 2), (40, 2)],
+)
+def test_tippfehler_toleranz(laenge: int, toleranz: int) -> None:
+    """Unter 8 Zeichen nur genau, ab 8 hoechstens 1, ab 16 hoechstens 2."""
+    assert tippfehler_toleranz(laenge) == toleranz
+
+
+@pytest.mark.parametrize(
+    ("eingabe", "art"),
+    [
+        ("How do ou help?", "capabilities"),
+        ("Are you a bott?", "identity"),
+        ("What is your mian purpose?", "capabilities"),
+        ("Wobei konnen Sie mir helfen?", "capabilities"),
+        ("Bist du ein Robotr?", "identity"),
+    ],
+)
+def test_tippfehler_bei_fragen_nach_dem_assistenten(eingabe: str, art: str) -> None:
+    """Der Pflichtfall "How do ou help?" und weitere Tippfehler, je ein Zeichen
+    oder eine vertauschte Nachbarschaft."""
+    assert kurzformel_erkennen(eingabe) == art
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        # Unter 8 Zeichen nur genau.
+        "hepl",
+        "Hilfee",
+        # Gruss, Dank und Abschied haben keine Toleranz.
+        "Good mornin",
+        "thank yu",
+        "goodbey",
+        # Die kuerzere Laenge zaehlt: "help" hat 4 Zeichen.
+        "help me",
+        # Umschrift statt Umlaut bei einer kurzen Formel: Abstand 2 bei 14 Zeichen.
+        "was koennen sie",
+    ],
+)
+def test_ausserhalb_der_toleranz_trifft_nichts(eingabe: str) -> None:
+    assert kurzformel_erkennen(eingabe) is None
+
+
+def _gold_und_kontrollfragen() -> tuple[list[str], list[str]]:
+    import yaml
+
+    eval_dir = Path(__file__).resolve().parents[1] / "eval"
+    gold: list[str] = []
+    kontrolle: list[str] = []
+    for datei in sorted(eval_dir.glob("*/gold.yaml")):
+        for eintrag in yaml.safe_load(datei.read_text(encoding="utf-8"))["fragen"]:
+            gold.append(eintrag["frage"])
+            if eintrag.get("kontrollfrage"):
+                kontrolle.append(eintrag["kontrollfrage"])
+    return gold, kontrolle
+
+
+_GOLDFRAGEN, _KONTROLLFRAGEN = _gold_und_kontrollfragen()
+
+_ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT = [
+    "how do you ship",
+    "how can i help",
+    "what do you sell",
+    "are you open",
+    "what can i return",
+    "how do i pay",
+    "is this a bot question",
+]
+
+
+def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
+    """Gegenprobe gegen einen blinden Test unten: 45 Goldfragen, 11 Kontrollfragen."""
+    assert len(_GOLDFRAGEN) == 45
+    assert len(_KONTROLLFRAGEN) == 11
+
+
+@pytest.mark.parametrize(
+    "eingabe", _GOLDFRAGEN + _KONTROLLFRAGEN + _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT
+)
+def test_keine_echte_frage_wird_als_kurzformel_erkannt(eingabe: str) -> None:
+    """Der Pflichttest gegen Fehltreffer. Eine Fachfrage, die hier traefe,
+    bekaeme eine feste Antwort statt einer aus den Unterlagen."""
+    assert kurzformel_erkennen(eingabe) is None
+
+
+def test_ein_gleichstand_zwischen_beiden_arten_gilt_als_keine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treffen beide Arten mit demselben Abstand, gilt keine.
+
+    In den echten Listen gibt es keinen Gleichstand: Die naechsten Formeln der
+    beiden Arten, "what are you for" und "what are you", liegen 4 auseinander.
+    Deshalb mit eingespeisten Listen.
+    """
+    from app import texts
+    from app.texts import Kurzformeln
+
+    leer: tuple[str, ...] = ()
+    monkeypatch.setattr(
+        texts,
+        "KURZFORMELN",
+        {
+            "en": Kurzformeln(
+                begruessung=leer,
+                dank=leer,
+                abschied=leer,
+                faehigkeiten=("abcdefgh x",),
+                identitaet=("abcdefgh y",),
+            )
+        },
+    )
+    assert kurzformel_erkennen("abcdefgh z") is None
+    # Gegenprobe: Mit verschiedenem Abstand gewinnt der kleinere.
+    assert kurzformel_erkennen("abcdefgh xx") == "capabilities"
+    assert kurzformel_erkennen("abcdefgh y") == "identity"
+
+
+def test_die_antworten_auf_fragen_nach_dem_assistenten_im_katalog() -> None:
+    """Woertlich, mit echten Umlauten, ohne Gedankenstrich, nur serverseitig."""
+    assert TEXTE["de"].faehigkeiten_antwort == (
+        "Ich beantworte Fragen zu {topics}, auf Grundlage der hinterlegten Unterlagen von "
+        "{display_name}. Was möchten Sie wissen?"
+    )
+    assert TEXTE["en"].faehigkeiten_antwort == (
+        "I answer questions about {topics}, based on the documents stored for "
+        "{display_name}. What would you like to know?"
+    )
+    assert TEXTE["de"].identitaet_antwort == (
+        "Hier antwortet ein KI-System, kein Mensch. Ich beantworte Fragen zu {topics}, auf "
+        "Grundlage der hinterlegten Unterlagen von {display_name}."
+    )
+    assert TEXTE["en"].identitaet_antwort == (
+        "You are chatting with an AI system, not a person. I answer questions about "
+        "{topics}, based on the documents stored for {display_name}."
+    )
+    for sprache, texte in TEXTE.items():
+        for name in ("faehigkeiten_antwort", "identitaet_antwort"):
+            assert "—" not in getattr(texte, name), (sprache, name)
+            assert name not in JAVASCRIPT_SCHLUESSEL
+        # Die Identitaetsantwort beginnt mit dem KI-Satz der Begruessung.
+        assert texte.identitaet_antwort.startswith(KI_SATZ[sprache]), sprache

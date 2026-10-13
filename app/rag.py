@@ -32,6 +32,8 @@ from app.texts import (
     ART_ABSCHIED,
     ART_BEGRUESSUNG,
     ART_DANK,
+    ART_FAEHIGKEITEN,
+    ART_IDENTITAET,
     kurzformel_erkennen,
     texte_fuer,
 )
@@ -86,8 +88,8 @@ class Answer(BaseModel):
     # Phase 6 will das als Dimension.
     lang: str
 
-    # "rag", oder "greeting", "thanks" und "goodbye" fuer eine Antwort ohne
-    # Retrieval und ohne Modell. Die Oberflaeche braucht das Feld nicht: Ohne
+    # "rag", oder "greeting", "thanks", "goodbye", "capabilities" und "identity"
+    # fuer eine Antwort ohne Retrieval und ohne Modell. Die Oberflaeche braucht das Feld nicht: Ohne
     # Quellen haengt sie nichts an, ohne Eskalation zeigt sie keinen Kasten.
     kind: str = ART_RAG
 
@@ -180,14 +182,15 @@ def _quellen_verdichten(
 
 
 def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> Answer:
-    """Antwort auf eine Begruessung, einen Dank oder einen Abschied, aus dem
-    Katalog in der Sprache des Mandanten.
+    """Antwort auf eine Begruessung, einen Dank, einen Abschied oder eine Frage
+    nach dem Assistenten, aus dem Katalog in der Sprache des Mandanten.
 
     Kein Retrieval, kein Modell: keine Scores, keine Tokens,
     `latency_ms_generation` und `model` None. `sources` ist leer.
 
     `tenant_id` an erster Stelle, obwohl `tenant` schon aufgeloest ist: Die
-    Begruessung setzt die Themen dieses Mandanten ein, also Mandanteninhalt.
+    Begruessung und die Antworten auf Fragen nach dem Assistenten setzen die
+    Themen und den Namen dieses Mandanten ein, also Mandanteninhalt.
     Passen beide nicht zusammen, ist das ein Fehler im Aufrufer und kein Fall
     fuer eine Antwort.
     """
@@ -200,6 +203,14 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
         text = texte.dank_antwort
     elif art == ART_ABSCHIED:
         text = texte.abschied_antwort
+    elif art == ART_FAEHIGKEITEN:
+        text = texte.faehigkeiten_antwort.format(
+            topics=tenant.topics.strip(), display_name=tenant.display_name
+        )
+    elif art == ART_IDENTITAET:
+        text = texte.identitaet_antwort.format(
+            topics=tenant.topics.strip(), display_name=tenant.display_name
+        )
     else:
         raise ValueError(f"Unbekannte Art: {art!r}")
     return Answer(
@@ -248,9 +259,10 @@ def answer(
     aktive_settings = settings if settings is not None else get_settings()
     tenant = load_tenant(tenant_id, aktive_settings.tenants_dir)
 
-    # --- Begruessung, Dank, Abschied: ohne Retrieval und ohne Modell -------
-    # Nur, wenn die GANZE Eingabe einer Formel entspricht. Jede andere Eingabe
-    # laeuft unveraendert den Weg darunter.
+    # --- Begruessung, Dank, Abschied, Fragen nach dem Assistenten ----------
+    # Ohne Retrieval und ohne Modell. Nur, wenn die GANZE Eingabe einer Formel
+    # entspricht, bei den Fragen nach dem Assistenten mit Toleranz fuer
+    # Tippfehler. Jede andere Eingabe laeuft unveraendert den Weg darunter.
     art = kurzformel_erkennen(question)
     if art is not None:
         return kurzformel_beantworten(tenant_id, tenant, art)
