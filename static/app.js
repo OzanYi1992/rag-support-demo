@@ -264,6 +264,12 @@
               : texte.ratenlimit_ohne_zeit
           );
         }
+        // Der Modellanbieter antwortet nicht. Ein eigener Satz und nicht der
+        // Eskalationskasten: "nicht in den Unterlagen" waere hier falsch. Jeder
+        // andere Fehler, auch ein 502, bekommt anfrage_fehlgeschlagen.
+        if (antwort.status === 503) {
+          throw new Error(texte.anbieter_nicht_erreichbar);
+        }
         if (!antwort.ok) {
           throw new Error(texte.anfrage_fehlgeschlagen);
         }

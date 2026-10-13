@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.embeddings import E5Embeddings
+from app.llm import LlmAnfrageAbgelehnt, LlmAufrufFehler, LlmNichtErreichbar
 from app.main import (
     NICHT_GEFUNDEN,
     create_app,
@@ -32,7 +33,7 @@ from app.main import (
 )
 from app.prompts import GroundedAnswer
 from app.tenants import load_tenant
-from app.texts import JAVASCRIPT_SCHLUESSEL
+from app.texts import JAVASCRIPT_SCHLUESSEL, TEXTE
 from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, lege_mandant_an
 
 ACME_TOKEN = "acme-token-1234567890"
@@ -1236,3 +1237,129 @@ def test_die_seite_traegt_die_themen_fuer_den_eskalationskasten(
     # Dieselbe Quelle wie die Begruessung - nicht eine zweite Aufzaehlung.
     for wort in mandant.topics.split():
         assert html.escape(wort) in treffer.group(1), wort
+
+
+# =============================================================================
+# DER MODELLANBIETER FAELLT AUS ODER WEIST AB
+#
+# Zwei Ausgaenge, und keiner davon ist die Eskalation. Die Eskalationsmeldung
+# sagt, die Unterlagen deckten die Frage nicht. Bei einem Ausfall waere das
+# eine falsche Auskunft ueber die Wissensbasis, und ein Ausfall saehe aus wie
+# Normalbetrieb.
+# =============================================================================
+
+# Steht in jeder Frage dieser Tests und darf in keinem Ereignis auftauchen.
+MARKER_FRAGE = "MARKER-FRAGE-4Q7Z"
+
+
+class _WerfendesLlm:
+    """LLM-Ersatz, dessen Aufruf mit dem gegebenen Fehler endet."""
+
+    def __init__(self, fehler: Exception) -> None:
+        self._fehler = fehler
+        self.calls: list[tuple[str, str]] = []
+
+    def generate(self, system_prompt: str, user_prompt: str) -> object:
+        self.calls.append((system_prompt, user_prompt))
+        raise self._fehler
+
+
+def _abbruch(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    token: str,
+    fehler: LlmAufrufFehler,
+) -> tuple[int, str, list[dict[str, object]], str]:
+    """Eine Anfrage gegen einen werfenden Ersatz: Status, Meldung, Ereignisse, Log."""
+    settings, embeddings = umgebung
+    llm = _WerfendesLlm(fehler)
+    client = TestClient(create_app(settings, llm=llm, embeddings=embeddings))
+    caplog.clear()
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(f"/t/{token}/chat", json={"question": f"{MARKER_FRAGE} Lieferung?"})
+    assert len(llm.calls) == 1, "der Ersatz wurde nicht gerufen - der Test waere blind"
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    return antwort.status_code, antwort.json()["detail"], _ereignisse(caplog), log
+
+
+@pytest.mark.parametrize(
+    ("token", "slug", "sprache", "eskalation"),
+    [
+        (ACME_TOKEN, "demo-acme", "de", ACME_ESKALATION),
+        (ENGLISCH_TOKEN, "demo-englisch", "en", ENGLISCH_ESKALATION),
+    ],
+)
+def test_anbieterausfall_wird_503_mit_eigenem_text(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    token: str,
+    slug: str,
+    sprache: str,
+    eskalation: str,
+) -> None:
+    """Ein Ausfall ist 503 mit dem eigenen Katalogtext, kein 500 und keine Eskalation.
+
+    Das Ereignis chat_abgebrochen traegt tenant_id, grund und gesamt_ms und
+    keinen Text: Die Frage steht in keinem Ereignis. Gegenprobe im selben Test:
+    derselbe Aufbau ohne Ausfall gibt 200.
+    """
+    status, meldung, ereignisse, log = _abbruch(
+        umgebung, caplog, token, LlmNichtErreichbar("zeitlimit")
+    )
+
+    assert status == 503
+    assert meldung == TEXTE[sprache].anbieter_nicht_erreichbar
+    assert meldung != eskalation
+    abbrueche = [e for e in ereignisse if e["ereignis"] == "chat_abgebrochen"]
+    assert len(abbrueche) == 1
+    assert abbrueche[0]["tenant_id"] == slug
+    assert abbrueche[0]["grund"] == "zeitlimit"
+    assert isinstance(abbrueche[0]["gesamt_ms"], int)
+    assert set(abbrueche[0]) == {"ereignis", "tenant_id", "grund", "gesamt_ms"}
+    assert not [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert MARKER_FRAGE not in log
+    assert token not in log
+
+    client, _ = _client(umgebung)
+    assert client.post(f"/t/{token}/chat", json={"question": "Lieferung?"}).status_code == 200
+
+
+@pytest.mark.parametrize("grund", ["inhaltsfilter", "status_401"])
+def test_abgewiesene_anfrage_wird_502_mit_anfrage_fehlgeschlagen(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    grund: str,
+) -> None:
+    """Ein Inhaltsfilter oder ein falscher Schluessel ist kein Ausfall.
+
+    502 mit dem bestehenden Text anfrage_fehlgeschlagen, nicht "gerade nicht
+    erreichbar" - ein neuer Versuch aendert nichts - und nicht die
+    Eskalationsmeldung.
+    """
+    status, meldung, ereignisse, log = _abbruch(
+        umgebung, caplog, ACME_TOKEN, LlmAnfrageAbgelehnt(grund)
+    )
+
+    assert status == 502
+    assert meldung == TEXTE["de"].anfrage_fehlgeschlagen
+    assert meldung != TEXTE["de"].anbieter_nicht_erreichbar
+    assert meldung != ACME_ESKALATION
+    abbrueche = [e for e in ereignisse if e["ereignis"] == "chat_abgebrochen"]
+    assert [(e["tenant_id"], e["grund"]) for e in abbrueche] == [("demo-acme", grund)]
+    assert MARKER_FRAGE not in log
+
+
+def test_ein_anderer_fehler_wird_nicht_umgedeutet(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Was keine der beiden Ausnahmen ist, bleibt ein Fehler des Servers.
+
+    Ohne diese Gegenprobe liesse sich ein except, das alles faengt, nicht von
+    den beiden gezielten unterscheiden.
+    """
+    settings, embeddings = umgebung
+    client = TestClient(
+        create_app(settings, llm=_WerfendesLlm(RuntimeError("kaputt")), embeddings=embeddings)
+    )
+    with pytest.raises(RuntimeError):
+        client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Lieferung?"})

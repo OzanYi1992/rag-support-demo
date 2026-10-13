@@ -140,3 +140,37 @@ def test_temperatur_nimmt_den_zulaessigen_bereich_an() -> None:
     """Gegenprobe: Ein Validator, der alles ablehnt, prueft nichts."""
     for wert in (0.0, 0.5, 1.0):
         assert Settings(**PFLICHT, llm_temperature=wert).llm_temperature == wert
+
+
+# --- Zeitlimit und Wiederholungen des Modellaufrufs --------------------------
+
+
+def test_zeitlimit_hat_grenzen() -> None:
+    """Kein Zeitlimit von null und nicht mehr als drei Wiederholungen.
+
+    Null hiesse beim SDK "sofort abbrechen", und jede Anfrage scheiterte. Mehr
+    als drei Wiederholungen, je mit dem Warten, das der Anbieter verlangt,
+    ergaeben Anfragen von mehreren Minuten.
+    """
+    with pytest.raises(ValueError):
+        Settings(**PFLICHT, llm_timeout_s=0)
+    with pytest.raises(ValueError):
+        Settings(**PFLICHT, llm_timeout_s=-1)
+    with pytest.raises(ValueError):
+        Settings(**PFLICHT, llm_max_retries=4)
+    with pytest.raises(ValueError):
+        Settings(**PFLICHT, llm_max_retries=-1)
+
+
+def test_zeitlimit_und_wiederholungen_im_zulaessigen_bereich() -> None:
+    """Gegenprobe: Ein Validator, der alles ablehnt, prueft nichts.
+
+    Dazu die Voreinstellung, am Feld gelesen und nicht an einer Instanz, damit
+    ein Wert in .env den Test nicht verschiebt: 20 s und keine Wiederholung.
+    """
+    assert Settings.model_fields["llm_timeout_s"].default == 20.0
+    assert Settings.model_fields["llm_max_retries"].default == 0
+    for zeitlimit in (0.1, 20.0, 60.0):
+        assert Settings(**PFLICHT, llm_timeout_s=zeitlimit).llm_timeout_s == zeitlimit
+    for wiederholungen in (0, 1, 3):
+        assert Settings(**PFLICHT, llm_max_retries=wiederholungen).llm_max_retries == wiederholungen

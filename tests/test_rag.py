@@ -675,3 +675,169 @@ def test_build_user_prompt_nimmt_keine_antwortsprache():
 
     namen = list(inspect.signature(build_user_prompt).parameters)
     assert namen == ["question", "hits", "language"], namen
+
+
+# =============================================================================
+# DER HEUTIGE WEG BLEIBT ZEICHENGLEICH
+#
+# Begruessung ohne Modell, ein Dokument ueber den Assistenten und der Verlauf
+# kommen dazu. Keine dieser Aenderungen darf eine erste Frage, die keine
+# Begruessung ist, anders an das Modell schicken als heute. Gemessene Werte
+# bleiben nur dann vergleichbar, wenn System- und Userprompt Zeichen fuer
+# Zeichen dieselben sind. Die Literale unten sind der Stand vor diesen
+# Aenderungen. Sie werden nicht nachgezogen, wenn der Test rot wird: Dann hat
+# sich der Weg geaendert, und das ist eine Entscheidung mit eigener Messung.
+# =============================================================================
+
+ENGLISCH_TEXT = """# Shipping
+
+Standard delivery takes three working days. Express delivery arrives the next
+working day if the order is placed before noon.
+"""
+
+SYSTEMPROMPT_DE_HEUTE = (
+    "Du bist ein Support-Assistent fuer demo-acme.\n"
+    "\n"
+    "Regeln, die ausnahmslos gelten:\n"
+    "\n"
+    "1. Antworte AUSSCHLIESSLICH aus dem gelieferten Kontext. Dein eigenes Wissen ist\n"
+    "   hier unzulaessig, auch wenn du die Antwort sicher kennst. Steht eine Zahl,\n"
+    "   eine Frist oder eine Bedingung nicht im Kontext, dann existiert sie fuer\n"
+    "   diese Antwort nicht.\n"
+    "2. Nenne zu jeder Aussage die Quelldatei, aus der sie stammt.\n"
+    "3. Kannst du die Frage aus dem Kontext nicht vollstaendig beantworten, setze\n"
+    "   answerable auf false und lass answer leer. Rate nicht. Fuelle nicht auf.\n"
+    "   Formuliere keine Teilantwort, die vollstaendig aussieht.\n"
+    "4. Eine Frage, die der Kontext nur streift, ist NICHT beantwortbar. Beispiel:\n"
+    "   Wird eine Gebuehr erwaehnt, aber ihre Hoehe nicht genannt, ist die Frage nach\n"
+    "   der Hoehe nicht beantwortbar.\n"
+    "\n"
+    "5. Antworte in der Sprache der FRAGE, unabhaengig davon, in welcher Sprache die\n"
+    "   Quelldokumente verfasst sind. Eine deutsche Frage bekommt eine deutsche\n"
+    "   Antwort, auch wenn der Beleg englisch ist. Trage die verwendete Sprache in\n"
+    "   language ein.\n"
+)
+
+USERPROMPT_DE_HEUTE = (
+    "Kontext:\n"
+    "\n"
+    "[Quelle: doku.md]\n"
+    "# Retouren\n"
+    "\n"
+    "Jede Ruecksendung braucht eine RMA-Nummer. Sie ist 21 Kalendertage gueltig.\n"
+    "Verzugszinsen berechnen wir in gesetzlicher Hoehe.\n"
+    "\n"
+    "---\n"
+    "\n"
+    "Frage: Wie lange gilt die RMA-Nummer?"
+)
+
+SYSTEMPROMPT_EN_HEUTE = (
+    "You are a support assistant for demo-englisch.\n"
+    "\n"
+    "Rules that apply without exception:\n"
+    "\n"
+    "1. Answer EXCLUSIVELY from the context provided. Your own knowledge is not\n"
+    "   admissible here, even if you are certain of the answer. If a number, a\n"
+    "   deadline or a condition is not in the context, then for this answer it does\n"
+    "   not exist.\n"
+    "2. For every statement, name the source file it comes from.\n"
+    "3. If you cannot answer the question completely from the context, set\n"
+    "   answerable to false and leave answer empty. Do not guess. Do not fill gaps.\n"
+    "   Do not formulate a partial answer that looks complete.\n"
+    "4. A question the context merely touches on is NOT answerable. Example: if a\n"
+    "   fee is mentioned but its amount is not stated, the question about the amount\n"
+    "   is not answerable.\n"
+    "\n"
+    "5. Answer in the language of the QUESTION, regardless of the language the\n"
+    "   source documents are written in. A German question gets a German answer,\n"
+    "   even if the evidence is in English. Record the language you used in\n"
+    "   language.\n"
+)
+
+USERPROMPT_EN_HEUTE = (
+    "Context:\n"
+    "\n"
+    "[Source: doku.md]\n"
+    "# Shipping\n"
+    "\n"
+    "Standard delivery takes three working days. Express delivery arrives the next\n"
+    "working day if the order is placed before noon.\n"
+    "\n"
+    "---\n"
+    "\n"
+    "Question: How long does standard delivery take?"
+)
+
+
+@pytest.fixture
+def umgebung_zweisprachig(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
+    """Ein deutscher und ein englischer Mandant, je mit einem Dokument."""
+    from app.ingest import ingest_tenant
+
+    tenants_root = tmp_path / "tenants"
+    tenants_root.mkdir()
+    lege_mandant_an(tenants_root, "demo-acme", ACME_TEXT, "acme-token-1234567890", ESKALATIONSTEXT)
+    lege_mandant_an(
+        tenants_root, "demo-englisch", ENGLISCH_TEXT, "englisch-token-1234567890", language="en"
+    )
+    settings = Settings(
+        openai_api_key="platzhalter",
+        openai_model="platzhalter",
+        tenants_dir=tenants_root,
+        index_dir=tmp_path / "index",
+        embedding_dimension=FAKE_DIMENSION,
+        chunk_size=200,
+        chunk_overlap=20,
+    )
+    embeddings = E5Embeddings(FakeBackend(), expected_dimension=FAKE_DIMENSION)
+    for slug in ("demo-acme", "demo-englisch"):
+        ingest_tenant(slug, settings=settings, embeddings=embeddings)
+    return settings, embeddings
+
+
+@pytest.mark.parametrize(
+    ("slug", "frage", "sprache", "system_heute", "user_heute"),
+    [
+        (
+            "demo-acme",
+            "Wie lange gilt die RMA-Nummer?",
+            "de",
+            SYSTEMPROMPT_DE_HEUTE,
+            USERPROMPT_DE_HEUTE,
+        ),
+        (
+            "demo-englisch",
+            "How long does standard delivery take?",
+            "en",
+            SYSTEMPROMPT_EN_HEUTE,
+            USERPROMPT_EN_HEUTE,
+        ),
+    ],
+)
+def test_erste_frage_ohne_verlauf_bleibt_zeichengleich(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    slug: str,
+    frage: str,
+    sprache: str,
+    system_heute: str,
+    user_heute: str,
+) -> None:
+    """Eine erste Frage, die keine Begruessung ist: genau ein Modellaufruf, und
+    beide Prompts sind Zeichen fuer Zeichen die von heute.
+
+    Faengt jede stille Aenderung am heutigen Weg, ob am Regelwerk, am Rahmen des
+    Userprompts, an der Reihenfolge der Treffer oder durch einen zusaetzlichen
+    Aufruf vor der Antwort.
+    """
+    settings, embeddings = umgebung_zweisprachig
+    llm = FakeLlm(
+        parsed=GroundedAnswer(answerable=True, answer="x", sources=["doku.md"], language=sprache)
+    )
+
+    answer(slug, frage, settings=settings, embeddings=embeddings, llm=llm)
+
+    assert len(llm.calls) == 1
+    system_prompt, user_prompt = llm.calls[0]
+    assert system_prompt == system_heute
+    assert user_prompt == user_heute

@@ -372,3 +372,24 @@ def test_die_basisstruktur_traegt_ueberhaupt_keinen_text() -> None:
     assert "description" not in schema
     for name, feld in schema["properties"].items():
         assert "description" not in feld, f"{name} traegt eine Beschreibung"
+
+
+def test_anbieter_nicht_erreichbar_steht_im_browserkatalog() -> None:
+    """Der Text fuer einen Ausfall des Modellanbieters, in beiden Sprachen.
+
+    Er steht in der Seite, weil app.js ihn bei HTTP 503 zeigt. Und er ist ein
+    anderer als anfrage_fehlgeschlagen und als jeder Eskalationstext: Ein
+    Ausfall ist weder ein Fehler der Anfrage noch eine Luecke der Unterlagen.
+    """
+    assert "anbieter_nicht_erreichbar" in JAVASCRIPT_SCHLUESSEL
+    assert TEXTE["de"].anbieter_nicht_erreichbar == (
+        "Der Assistent ist gerade nicht erreichbar. "
+        "Bitte versuchen Sie es in einer Minute noch einmal."
+    )
+    assert TEXTE["en"].anbieter_nicht_erreichbar == (
+        "The assistant cannot be reached right now. Please try again in a minute."
+    )
+    for sprache, texte in TEXTE.items():
+        js = texte.fuer_javascript()
+        assert js["anbieter_nicht_erreichbar"] == texte.anbieter_nicht_erreichbar, sprache
+        assert texte.anbieter_nicht_erreichbar != texte.anfrage_fehlgeschlagen, sprache

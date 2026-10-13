@@ -122,6 +122,28 @@ class Settings(BaseSettings):
     # Austauschbarkeit zur Behauptung.
     llm_temperature: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    # --- Zeitlimit und Wiederholungen des Modellaufrufs ---------------------
+    # Ohne diese beiden Werte wartete jeder der drei Clients unbegrenzt auf
+    # einen Anbieter, der nicht antwortet: langchain reicht ein fehlendes
+    # Zeitlimit als None an das SDK durch, und dessen eigene Voreinstellung
+    # greift dann nicht. Die Oberflaeche zeigte so lange "Sucht in den
+    # Unterlagen ..." und sperrte die Eingabe, bis der Ingress abbrach.
+    #
+    # 20 s je Aufruf: das 2,3-Fache der hoechsten je gemessenen
+    # Generierungslatenz von 8,6 s. Der Faktor ist eine Setzung. Das Zeitlimit
+    # gilt je Netzoperation, beim Lesen je empfangenem Datenstueck, nicht als
+    # Gesamtzeit. Haengt schon der Verbindungsaufbau, sind es rund 40 s.
+    #
+    # Keine Wiederholung: Zwischen zwei Versuchen folgen die SDKs dem
+    # retry-after des Anbieters, bei OpenAI und Azure bis 120 s. Mit einer
+    # einzigen Wiederholung laege eine Anfrage damit ueber der Grenze des
+    # Ingress. Der Preis: Einen kurzen Aussetzer sieht der Nutzer als Meldung.
+    #
+    # Obergrenze 3 fuer die Wiederholungen, damit ein Tippfehler in der Umgebung
+    # keine Anfrage von mehreren Minuten erzeugt.
+    llm_timeout_s: float = Field(default=20.0, gt=0)
+    llm_max_retries: int = Field(default=0, ge=0, le=3)
+
     # --- Embeddings --------------------------------------------------------
     # ADR-016: e5-small, Indexdimension 384. Entschieden ueber das Verhaeltnis von
     # Nutzen zu Imagegroesse unter ADR-010, nicht weil large schlechter waere.

@@ -49,7 +49,7 @@ from app.config import Settings
 from app.dokumentseite import INHALTSRICHTLINIE, dokumentseite_bauen
 from app.embeddings import E5Embeddings, get_embeddings
 from app.ingest import DOC_PATTERN
-from app.llm import LlmClient
+from app.llm import LlmAnfrageAbgelehnt, LlmClient, LlmNichtErreichbar
 from app.rag import Answer, answer
 from app.ratelimit import RateLimiter
 from app.tenants import (
@@ -532,14 +532,49 @@ def create_app(
         _limit_pruefen(tenant, url_token)
 
         begonnen = time.monotonic()
-        ergebnis = answer(
-            tenant.slug,
-            anfrage.question,
-            response_language=anfrage.response_language,
-            settings=aktive_settings,
-            llm=app.state.llm,
-            embeddings=app.state.embeddings,
-        )
+        # Zwei Ausgaenge fuer einen Fehler des Modellanbieters, beide ohne
+        # Text im Ereignis und beide KEINE Eskalation: Die Eskalationsmeldung
+        # sagt, die Unterlagen deckten die Frage nicht, und das waere hier
+        # eine falsche Auskunft ueber die Wissensbasis.
+        #
+        #   503  nicht erreichbar oder ueberlastet, ein spaeterer Versuch kann
+        #        gelingen. Eigener Katalogtext.
+        #   502  die Anfrage wurde abgewiesen, etwa vom Inhaltsfilter oder
+        #        wegen eines falschen Schluessels. Ein neuer Versuch aendert
+        #        nichts, also nicht "gerade nicht erreichbar".
+        #
+        # Alles andere geht unveraendert durch und bleibt ein 500.
+        try:
+            ergebnis = answer(
+                tenant.slug,
+                anfrage.question,
+                response_language=anfrage.response_language,
+                settings=aktive_settings,
+                llm=app.state.llm,
+                embeddings=app.state.embeddings,
+            )
+        except LlmNichtErreichbar as fehler:
+            _ereignis(
+                "chat_abgebrochen",
+                tenant.slug,
+                grund=fehler.grund,
+                gesamt_ms=int((time.monotonic() - begonnen) * 1000),
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=texte_fuer(tenant.language).anbieter_nicht_erreichbar,
+            ) from None
+        except LlmAnfrageAbgelehnt as fehler:
+            _ereignis(
+                "chat_abgebrochen",
+                tenant.slug,
+                grund=fehler.grund,
+                gesamt_ms=int((time.monotonic() - begonnen) * 1000),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=texte_fuer(tenant.language).anfrage_fehlgeschlagen,
+            ) from None
         gesamt_ms = int((time.monotonic() - begonnen) * 1000)
 
         # Kein Fragetext, kein Antworttext, keine Quellnamen im Log.

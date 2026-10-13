@@ -79,3 +79,19 @@ def test_die_kommentarentfernung_hat_ihre_voraussetzung() -> None:
     assert zeichenketten, "keine Zeichenkette gefunden - die Suche waere blind"
     for kette in zeichenketten:
         assert "//" not in kette and "/*" not in kette, kette
+
+
+def test_app_js_zeigt_bei_503_den_eigenen_text() -> None:
+    """Bei 503 der Text fuer einen Ausfall, jeder andere Fehler wie bisher.
+
+    Die Pruefung auf 503 steht vor der allgemeinen auf antwort.ok. Stuende sie
+    dahinter, liefe ein 503 in anfrage_fehlgeschlagen und der eigene Text kaeme
+    nie an. Ein 502 hat keinen eigenen Zweig und landet bei
+    anfrage_fehlgeschlagen.
+    """
+    code = _ohne_kommentare(APP_JS.read_text(encoding="utf-8"))
+    assert "antwort.status === 503" in code
+    assert "texte.anbieter_nicht_erreichbar" in code
+    assert code.index("antwort.status === 503") < code.index("!antwort.ok")
+    assert "502" not in code
+    assert "throw new Error(texte.anfrage_fehlgeschlagen)" in code

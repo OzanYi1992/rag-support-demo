@@ -47,6 +47,7 @@ JAVASCRIPT_SCHLUESSEL: tuple[str, ...] = (
     "weniger_anzeigen",
     "eskalation_themen",
     "dokument_rahmen_titel",
+    "anbieter_nicht_erreichbar",
 )
 
 
@@ -98,6 +99,12 @@ class Texte(BaseModel, frozen=True):
     # Platzhalter {datei}, den die Oberflaeche mit dem Dateinamen fuellt.
     dokument_rahmen_titel: str
 
+    # Die Meldung, wenn der Modellanbieter nicht antwortet oder ueberlastet ist
+    # (HTTP 503). Bewusst NICHT die Eskalationsmeldung des Mandanten: Die sagt,
+    # die Unterlagen deckten die Frage nicht, und das waere bei einem Ausfall
+    # eine falsche Auskunft ueber die Wissensbasis.
+    anbieter_nicht_erreichbar: str
+
     # --- Serverseitige Meldungen -----------------------------------------
     ratenlimit_detail: str
     oberflaeche_fehlt: str
@@ -137,6 +144,10 @@ _DE = Texte(
     weniger_anzeigen="Antwort einklappen",
     eskalation_themen="Auskunft ist möglich zu {topics}.",
     dokument_rahmen_titel="Quelldokument {datei}",
+    anbieter_nicht_erreichbar=(
+        "Der Assistent ist gerade nicht erreichbar. "
+        "Bitte versuchen Sie es in einer Minute noch einmal."
+    ),
     ratenlimit_detail="Zu viele Anfragen. Bitte kurz warten.",
     oberflaeche_fehlt="Oberflaeche fehlt.",
 )
@@ -167,6 +178,9 @@ _EN = Texte(
     weniger_anzeigen="Collapse the answer",
     eskalation_themen="I can answer about {topics}.",
     dokument_rahmen_titel="Source document {datei}",
+    anbieter_nicht_erreichbar=(
+        "The assistant cannot be reached right now. Please try again in a minute."
+    ),
     ratenlimit_detail="Too many requests. Please wait a moment.",
     oberflaeche_fehlt="User interface missing.",
 )
