@@ -48,6 +48,7 @@ JAVASCRIPT_SCHLUESSEL: tuple[str, ...] = (
     "eskalation_themen",
     "dokument_rahmen_titel",
     "anbieter_nicht_erreichbar",
+    "verstanden_als",
 )
 
 
@@ -128,6 +129,16 @@ class Texte(BaseModel, frozen=True):
     faehigkeiten_antwort: str
     identitaet_antwort: str
 
+    # --- Gespraech ----------------------------------------------------------
+    # Eine Folgefrage wird vor der Suche zu einer eigenstaendigen Frage
+    # umgeformt. Weicht sie von der getippten ab, steht sie leise unter der
+    # Frage des Nutzers, mit dem Platzhalter {frage}: In einer Vorfuehrung sieht
+    # man, was gesucht wurde, und eine falsche Umformung wird deutbar.
+    verstanden_als: str
+    # Der Knopf, der den Verlauf im Browser leert. Serverseitig in die Seite
+    # gesetzt.
+    neues_gespraech: str
+
     # Der Titel des Dokuments ueber den Assistenten. Er ersetzt dessen
     # Dateinamen, wo das Modell ihn im Fliesstext nennt ("according to
     # about-this-assistant.md"). Steht in der Sprache der Antwort, mit den
@@ -188,6 +199,8 @@ _DE = Texte(
         "Grundlage der hinterlegten Unterlagen von {display_name}."
     ),
     assistentendokument_titel="„Über den Assistenten“",
+    verstanden_als="Verstanden als: {frage}",
+    neues_gespraech="Neues Gespräch",
 )
 
 _EN = Texte(
@@ -234,6 +247,8 @@ _EN = Texte(
         "{topics}, based on the documents stored for {display_name}."
     ),
     assistentendokument_titel="“About This Assistant”",
+    verstanden_als="Understood as: {frage}",
+    neues_gespraech="New conversation",
 )
 
 TEXTE: dict[str, Texte] = {"de": _DE, "en": _EN}
@@ -496,12 +511,13 @@ def _nach_tippfehler(normal: str) -> str | None:
     return arten[0] if len(arten) == 1 else None
 
 
-def kurzformel_erkennen(eingabe: str) -> str | None:
-    """Die Art der Eingabe, wenn sie einer Formel entspricht, sonst None.
+def kurzformel_genau(eingabe: str) -> str | None:
+    """Die Art der Eingabe, wenn sie GENAU einer Formel entspricht, sonst None.
 
-    Zuerst genau, ueber alle Arten und alle Sprachen; ein genauer Treffer geht
-    vor. Danach, nur fuer die Fragen nach dem Assistenten, mit der Toleranz fuer
-    Tippfehler aus `_nach_tippfehler`.
+    Ueber alle fuenf Arten und alle Sprachen, ohne Toleranz fuer Tippfehler. Im
+    Gespraech laeuft zuerst nur diese Pruefung auf die getippte Frage: Eine
+    kurze Folgefrage wie "How can you tell?" liegt innerhalb der Toleranz einer
+    Formel, meint aber die vorige Antwort und gehoert in die Umformung.
 
     Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
     deshalb keine tenant_id.
@@ -513,6 +529,25 @@ def kurzformel_erkennen(eingabe: str) -> str | None:
         for art, liste in _arten(formeln):
             if normal in {normalisieren(formel) for formel in liste}:
                 return art
+    return None
+
+
+def kurzformel_erkennen(eingabe: str) -> str | None:
+    """Die Art der Eingabe, wenn sie einer Formel entspricht, sonst None.
+
+    Zuerst genau, ueber alle Arten und alle Sprachen; ein genauer Treffer geht
+    vor. Danach, nur fuer die Fragen nach dem Assistenten, mit der Toleranz fuer
+    Tippfehler aus `_nach_tippfehler`.
+
+    Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
+    deshalb keine tenant_id.
+    """
+    genau = kurzformel_genau(eingabe)
+    if genau is not None:
+        return genau
+    normal = normalisieren(eingabe)
+    if not normal:
+        return None
     return _nach_tippfehler(normal)
 
 
@@ -762,3 +797,53 @@ def schemabeschreibungen_fuer(language: str) -> Schemabeschreibungen:
             f"Vorhanden: {', '.join(sorted(SCHEMABESCHREIBUNGEN))}."
         )
     return SCHEMABESCHREIBUNGEN[language]
+
+
+# =============================================================================
+# DIE FELDBESCHREIBUNG DER EIGENSTAENDIGEN FRAGE
+#
+# Die Umformung einer Folgefrage liefert eine Struktur mit genau einem Feld,
+# keinen Freitext: Freitext bringt Anfuehrungszeichen, Vorreden und Erklaerungen
+# mit, und ein Parsefehler waere still. Die Beschreibung erreicht das Modell wie
+# die der Antwortstruktur ueber das Schema, also an einer Stelle, die kein
+# Mensch liest - und steht deshalb aus demselben Grund je Sprache hier.
+# =============================================================================
+
+
+class Umformungsbeschreibungen(BaseModel, frozen=True):
+    """Die Beschreibungen der Umformungsstruktur in einer Sprache."""
+
+    struktur: str
+    question: str
+
+
+_UMFORMUNG_DE = Umformungsbeschreibungen(
+    struktur="Die letzte Frage, so umformuliert, dass sie ohne das Gespraech verstaendlich ist.",
+    question=(
+        "Die umformulierte Frage, in der Sprache der letzten Frage. Nur die Frage, "
+        "keine Antwort darauf."
+    ),
+)
+
+_UMFORMUNG_EN = Umformungsbeschreibungen(
+    struktur="The last question, rewritten so that it can be understood without the conversation.",
+    question=(
+        "The rewritten question, in the language of the last question. Only the "
+        "question, not an answer to it."
+    ),
+)
+
+UMFORMUNGSBESCHREIBUNGEN: dict[str, Umformungsbeschreibungen] = {
+    "de": _UMFORMUNG_DE,
+    "en": _UMFORMUNG_EN,
+}
+
+
+def umformungsbeschreibungen_fuer(language: str) -> Umformungsbeschreibungen:
+    """Liefert die Beschreibungen einer Sprache. Kein Rueckfall auf Deutsch."""
+    if language not in UMFORMUNGSBESCHREIBUNGEN:
+        raise KeyError(
+            f"Keine Umformungsbeschreibungen fuer die Sprache {language!r}. "
+            f"Vorhanden: {', '.join(sorted(UMFORMUNGSBESCHREIBUNGEN))}."
+        )
+    return UMFORMUNGSBESCHREIBUNGEN[language]

@@ -30,7 +30,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import Settings
-from app.prompts import GroundedAnswer
+from app.prompts import EigenstaendigeFrage, GroundedAnswer
 
 
 class LlmConfigError(ValueError):
@@ -52,6 +52,10 @@ class LlmAufrufFehler(Exception):
     def __init__(self, grund: str) -> None:
         super().__init__(grund)
         self.grund = grund
+        # Welcher Aufruf gescheitert ist: "antwort" oder, bei einer Folgefrage,
+        # "umformung". Setzt der Aufrufer, der die Umformung faehrt; das
+        # Ereignis traegt es als festen Code.
+        self.aufruf = "antwort"
 
 
 class LlmNichtErreichbar(LlmAufrufFehler):
@@ -166,15 +170,7 @@ class StructuredChatClient:
         self._configured_model = configured_model
 
     def generate(self, system_prompt: str, user_prompt: str) -> LlmResult:
-        try:
-            ergebnis: dict[str, Any] = self._runnable.invoke(
-                [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
-            )
-        except (openai.APIError, anthropic.APIError) as fehler:
-            uebersetzt = anbieterfehler_uebersetzen(fehler)
-            if uebersetzt is None:
-                raise
-            raise uebersetzt from fehler
+        ergebnis = _strukturiert_aufrufen(self._runnable, system_prompt, user_prompt)
 
         roh = ergebnis.get("raw")
         parsed = ergebnis.get("parsed")
@@ -203,21 +199,80 @@ def _require(settings: Settings, felder: dict[str, str | None], provider: str) -
         )
 
 
-def build_llm(
-    settings: Settings,
-    model_override: str | None = None,
-    *,
-    answer_model: type[GroundedAnswer],
-) -> LlmClient:
-    """Baut den Client fuer den konfigurierten Provider.
+def _strukturiert_aufrufen(
+    runnable: Any,  # noqa: ANN401
+    system_prompt: str,
+    user_prompt: str,
+) -> dict[str, Any]:
+    """Ruft ein strukturiertes Chatmodell auf und uebersetzt Anbieterfehler.
 
-    Bewusst eine Funktion und kein Modul-Level-Objekt (ADR-001). `model_override`
-    stammt aus der TenantConfig und sticht die globale Einstellung.
+    Gemeinsam fuer Antwort und Umformung, damit beide dieselben zwei Ausnahmen
+    kennen und nur diese Datei die Fehlerklassen der SDKs.
+    """
+    try:
+        ergebnis: dict[str, Any] = runnable.invoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+        )
+    except (openai.APIError, anthropic.APIError) as fehler:
+        uebersetzt = anbieterfehler_uebersetzen(fehler)
+        if uebersetzt is None:
+            raise
+        raise uebersetzt from fehler
+    return ergebnis
 
-    `answer_model` kommt aus `antwortmodell_fuer(tenant.language)` und traegt die
-    Feldbeschreibungen des Strukturschemas. Nur mit Schluesselwort und ohne
-    Standardwert, damit an keiner Aufrufstelle vergessen werden kann, in welcher
-    Sprache das Modell angesprochen wird.
+
+@dataclass(frozen=True)
+class UmformungsErgebnis:
+    """Ergebnis der Umformung einer Folgefrage."""
+
+    # None, wenn das Modell keine gueltige Struktur geliefert hat.
+    frage: str | None
+    parsing_error: str | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    model: str
+
+
+class Umformer(Protocol):
+    """Was der aufrufende Code fuer die Umformung braucht."""
+
+    def umformen(self, system_prompt: str, user_prompt: str) -> UmformungsErgebnis: ...
+
+
+class StructuredUmformer:
+    """Formt eine Folgefrage um und erzwingt eine Struktur mit genau einem Feld."""
+
+    def __init__(
+        self,
+        chat_model: BaseChatModel,
+        configured_model: str,
+        schema: type[EigenstaendigeFrage],
+    ) -> None:
+        self._runnable = chat_model.with_structured_output(schema, include_raw=True)
+        self._configured_model = configured_model
+
+    def umformen(self, system_prompt: str, user_prompt: str) -> UmformungsErgebnis:
+        ergebnis = _strukturiert_aufrufen(self._runnable, system_prompt, user_prompt)
+        roh = ergebnis.get("raw")
+        parsed = ergebnis.get("parsed")
+        fehler = ergebnis.get("parsing_error")
+        verbrauch = getattr(roh, "usage_metadata", None) or {}
+        metadaten = getattr(roh, "response_metadata", None) or {}
+        return UmformungsErgebnis(
+            frage=parsed.question if isinstance(parsed, EigenstaendigeFrage) else None,
+            parsing_error=str(fehler) if fehler is not None else None,
+            prompt_tokens=verbrauch.get("input_tokens"),
+            completion_tokens=verbrauch.get("output_tokens"),
+            model=metadaten.get("model_name") or self._configured_model,
+        )
+
+
+def _chatmodell(settings: Settings, model_override: str | None) -> tuple[BaseChatModel, str]:
+    """Baut das Chatmodell des konfigurierten Providers, samt Modellname.
+
+    Gemeinsam fuer `build_llm` und `build_umformer`: Beide Aufrufe einer
+    Folgefrage laufen mit demselben Modell, demselben Zeitlimit und denselben
+    Wiederholungen. Nach Provider verzweigt nur diese Funktion.
 
     Geprueft wird die VOLLSTAENDIGE Konfiguration des Providers, nicht nur der
     Schluessel. Bei Azure fehlten sonst Endpunkt und API-Version, und es
@@ -234,7 +289,7 @@ def build_llm(
         _require(settings, {"OPENAI_API_KEY": settings.openai_api_key}, provider)
         from langchain_openai import ChatOpenAI
 
-        return StructuredChatClient(
+        return (
             ChatOpenAI(
                 model=modell,
                 api_key=settings.openai_api_key,
@@ -243,7 +298,6 @@ def build_llm(
                 max_retries=settings.llm_max_retries,
             ),
             modell,
-            answer_model,
         )
 
     if provider == "azure":
@@ -258,7 +312,7 @@ def build_llm(
         )
         from langchain_openai import AzureChatOpenAI
 
-        return StructuredChatClient(
+        return (
             AzureChatOpenAI(
                 azure_deployment=modell,
                 api_key=settings.azure_openai_api_key,
@@ -269,14 +323,13 @@ def build_llm(
                 max_retries=settings.llm_max_retries,
             ),
             modell,
-            answer_model,
         )
 
     if provider == "anthropic":
         _require(settings, {"ANTHROPIC_API_KEY": settings.anthropic_api_key}, provider)
         from langchain_anthropic import ChatAnthropic
 
-        return StructuredChatClient(
+        return (
             ChatAnthropic(
                 model=modell,
                 api_key=settings.anthropic_api_key,
@@ -285,7 +338,45 @@ def build_llm(
                 max_retries=settings.llm_max_retries,
             ),
             modell,
-            answer_model,
         )
 
     raise LlmConfigError(f"Unbekannter LLM_PROVIDER: {provider!r}.")
+
+
+def build_llm(
+    settings: Settings,
+    model_override: str | None = None,
+    *,
+    answer_model: type[GroundedAnswer],
+) -> LlmClient:
+    """Baut den Client fuer den konfigurierten Provider.
+
+    Bewusst eine Funktion und kein Modul-Level-Objekt. `model_override`
+    stammt aus der TenantConfig und sticht die globale Einstellung.
+
+    `answer_model` kommt aus `antwortmodell_fuer(tenant.language)` und traegt die
+    Feldbeschreibungen des Strukturschemas. Nur mit Schluesselwort und ohne
+    Standardwert, damit an keiner Aufrufstelle vergessen werden kann, in welcher
+    Sprache das Modell angesprochen wird.
+
+    Provider, Pruefung der Konfiguration, Zeitlimit und Wiederholungen stehen in
+    `_chatmodell`.
+    """
+    chat_model, modell = _chatmodell(settings, model_override)
+    return StructuredChatClient(chat_model, modell, answer_model)
+
+
+def build_umformer(
+    settings: Settings,
+    model_override: str | None = None,
+    *,
+    schema: type[EigenstaendigeFrage],
+) -> Umformer:
+    """Baut den Client fuer die Umformung einer Folgefrage.
+
+    Dasselbe Modell wie fuer die Antwort, aus `_chatmodell`. `schema` kommt aus
+    `umformungsmodell_fuer(tenant.language)`, nur mit Schluesselwort und ohne
+    Standardwert, aus demselben Grund wie `answer_model` bei `build_llm`.
+    """
+    chat_model, modell = _chatmodell(settings, model_override)
+    return StructuredUmformer(chat_model, modell, schema)

@@ -18,14 +18,29 @@ Tor greift - nicht nur, DASS eskaliert wurde.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
 from app.embeddings import E5Embeddings
 from app.escalation import EscalationStrategy, build_escalation_strategy
-from app.llm import LlmClient, build_llm
-from app.prompts import antwortmodell_fuer, build_system_prompt, build_user_prompt
+from app.llm import (
+    LlmAnfrageAbgelehnt,
+    LlmClient,
+    LlmNichtErreichbar,
+    Umformer,
+    build_llm,
+    build_umformer,
+)
+from app.prompts import (
+    Runde,
+    antwortmodell_fuer,
+    build_system_prompt,
+    build_user_prompt,
+    umformungsmodell_fuer,
+    umformungsprompts_bauen,
+)
 from app.search import SearchHit, search_tenant
 from app.tenants import TenantConfig, load_tenant
 from app.texts import (
@@ -35,6 +50,7 @@ from app.texts import (
     ART_FAEHIGKEITEN,
     ART_IDENTITAET,
     kurzformel_erkennen,
+    kurzformel_genau,
     texte_fuer,
 )
 from app.verweis import assistentenverweise_entfernen, ist_assistentendokument
@@ -43,8 +59,23 @@ REASON_NOT_GROUNDED = "not_grounded"
 REASON_UNPARSEABLE = "generation_unparseable"
 
 # Die Art der Antwort. "rag" ist der Weg ueber Retrieval und Modell, auch wenn
-# er eskaliert. Die drei anderen kommen ohne beides aus dem Katalog.
+# er eskaliert. Die anderen kommen ohne beides aus dem Katalog.
 ART_RAG = "rag"
+
+# Was mit einer Folgefrage geschah, als fester Code fuer Antwort und Ereignis.
+UMFORMUNG_KEINE = "keine"  # kein Verlauf, oder eine genaue Formel im Gespraech
+UMFORMUNG_UMGEFORMT = "umgeformt"
+UMFORMUNG_VERWORFEN = "verworfen"  # zurueck auf die getippte Frage
+
+# Warum eine Umformung verworfen wurde.
+VERWORFEN_PARSEFEHLER = "parsefehler"
+VERWORFEN_LEER = "leer"
+VERWORFEN_ZU_LANG = "zu_lang"
+VERWORFEN_ABGELEHNT = "abgelehnt"
+
+# Laenger darf eine eigenstaendige Frage nicht sein; dieselbe Grenze wie fuer
+# die getippte Frage.
+UMFORMUNG_MAX_ZEICHEN = 2000
 
 
 class Answer(BaseModel):
@@ -88,15 +119,36 @@ class Answer(BaseModel):
     # Phase 6 will das als Dimension.
     lang: str
 
-    # "rag", oder "greeting", "thanks", "goodbye", "capabilities" und "identity"
-    # fuer eine Antwort ohne Retrieval und ohne Modell. Die Oberflaeche braucht das Feld nicht: Ohne
-    # Quellen haengt sie nichts an, ohne Eskalation zeigt sie keinen Kasten.
+    # "rag", oder "greeting", "thanks", "goodbye", "capabilities" und
+    # "identity" fuer eine Antwort ohne Retrieval und ohne Modell. Die
+    # Oberflaeche braucht das Feld fuer die Antwort selbst nicht: Ohne Quellen
+    # haengt sie nichts an, ohne Eskalation zeigt sie keinen Kasten. Sie
+    # nimmt aber nur Runden der Art "rag" in den Verlauf.
     kind: str = ART_RAG
 
     # Wie viele Verweise auf ein Dokument ueber den Assistenten aus dem
     # Antworttext genommen oder durch seinen Titel ersetzt wurden. Eine Zahl,
     # kein Text: Sie geht ins Ereignis.
     removed_references: int = 0
+
+    # --- Gespraech ---------------------------------------------------------
+    # Die Frage, mit der gesucht und geantwortet wurde, wenn eine Folgefrage
+    # umgeformt wurde. None ohne Verlauf und bei einer verworfenen Umformung.
+    # Die Oberflaeche zeigt sie als "Verstanden als", ins Ereignis geht sie
+    # nicht: Sie ist Text.
+    standalone_question: str | None = None
+    # Wie viele fruehere Runden die Anfrage mitbrachte.
+    history_turns: int = 0
+    # "keine", "umgeformt" oder "verworfen", und bei "verworfen" der Grund:
+    # "parsefehler", "leer", "zu_lang" oder "abgelehnt".
+    rewrite_status: str = UMFORMUNG_KEINE
+    rewrite_reason: str | None = None
+    # Der zweite Aufruf, getrennt von dem der Antwort. Alle None, wenn nicht
+    # umgeformt wurde.
+    latency_ms_rewrite: int | None = None
+    rewrite_prompt_tokens: int | None = None
+    rewrite_completion_tokens: int | None = None
+    rewrite_model: str | None = None
 
 
 def _eskaliert(
@@ -231,6 +283,101 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
     )
 
 
+@dataclass(frozen=True)
+class Umformung:
+    """Was die Umformung einer Folgefrage ergeben hat."""
+
+    # Die Frage, die in Suche und Antwortprompt geht: die eigenstaendige Frage,
+    # oder die getippte, wenn die Umformung verworfen wurde.
+    suchfrage: str
+    eigenstaendige_frage: str | None
+    status: str
+    grund: str | None
+    latenz_ms: int
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    modell: str | None
+
+    def als_felder(self, runden: int) -> dict[str, object]:
+        """Die Felder einer `Answer`, die diese Umformung beschreiben."""
+        return {
+            "standalone_question": self.eigenstaendige_frage,
+            "history_turns": runden,
+            "rewrite_status": self.status,
+            "rewrite_reason": self.grund,
+            "latency_ms_rewrite": self.latenz_ms,
+            "rewrite_prompt_tokens": self.prompt_tokens,
+            "rewrite_completion_tokens": self.completion_tokens,
+            "rewrite_model": self.modell,
+        }
+
+
+def eigenstaendige_frage(
+    tenant_id: str,
+    tenant: TenantConfig,
+    verlauf: list[Runde],
+    frage: str,
+    umformer: Umformer,
+) -> Umformung:
+    """Formt eine Folgefrage zu einer Frage um, die ohne den Verlauf verstaendlich ist.
+
+    `tenant_id` an erster Stelle, weil der Verlauf Mandanteninhalt ist. Passt
+    `tenant.slug` nicht, ist das ein Fehler im Aufrufer.
+
+    Ist die Umformung unbrauchbar, gilt die getippte Frage, und die Tore
+    entscheiden wie ohne Verlauf. Unbrauchbar heisst: keine lesbare Struktur,
+    eine leere Frage, mehr als 2 000 Zeichen, oder der Anbieter lehnt den
+    Aufruf ab, etwa sein Inhaltsfilter. Der Verlauf kann den Text enthalten,
+    den der Filter ablehnt, die getippte Frage nicht.
+
+    Ist der Anbieter nicht erreichbar, geht `LlmNichtErreichbar` weiter, mit
+    `aufruf="umformung"`: Er ist dann fuer die Antwort ebenso wenig erreichbar.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    system_prompt, user_prompt = umformungsprompts_bauen(tenant_id, tenant, verlauf, frage)
+
+    start = time.perf_counter()
+    try:
+        ergebnis = umformer.umformen(system_prompt, user_prompt)
+    except LlmNichtErreichbar as fehler:
+        fehler.aufruf = "umformung"
+        raise
+    except LlmAnfrageAbgelehnt:
+        return Umformung(
+            suchfrage=frage,
+            eigenstaendige_frage=None,
+            status=UMFORMUNG_VERWORFEN,
+            grund=VERWORFEN_ABGELEHNT,
+            latenz_ms=int((time.perf_counter() - start) * 1000),
+            prompt_tokens=None,
+            completion_tokens=None,
+            modell=None,
+        )
+    latenz = int((time.perf_counter() - start) * 1000)
+
+    neu = ergebnis.frage.strip() if ergebnis.frage is not None else None
+    if neu is None:
+        grund: str | None = VERWORFEN_PARSEFEHLER
+    elif not neu:
+        grund = VERWORFEN_LEER
+    elif len(neu) > UMFORMUNG_MAX_ZEICHEN:
+        grund = VERWORFEN_ZU_LANG
+    else:
+        grund = None
+
+    return Umformung(
+        suchfrage=frage if grund is not None or neu is None else neu,
+        eigenstaendige_frage=None if grund is not None else neu,
+        status=UMFORMUNG_VERWORFEN if grund is not None else UMFORMUNG_UMGEFORMT,
+        grund=grund,
+        latenz_ms=latenz,
+        prompt_tokens=ergebnis.prompt_tokens,
+        completion_tokens=ergebnis.completion_tokens,
+        modell=ergebnis.model,
+    )
+
+
 def answer(
     tenant_id: str,
     question: str,
@@ -239,6 +386,8 @@ def answer(
     strategy: EscalationStrategy | None = None,
     llm: LlmClient | None = None,
     embeddings: E5Embeddings | None = None,
+    history: list[Runde] | None = None,
+    umformer: Umformer | None = None,
 ) -> Answer:
     """Beantwortet eine Frage fuer genau einen Mandanten.
 
@@ -253,25 +402,114 @@ def answer(
                 deterministischen Test - haengt die Antwortsprache an der
                 Spracherkennung des Modells, ist der Test wackelig.
 
-    `strategy`, `llm` und `embeddings` sind injizierbar, damit Tests ohne Netz
-    und ohne Schluessel auskommen. Keines davon hat einen Mandantenbezug.
+    `history` sind die frueheren Runden des Gespraechs aus dem Browser. Der
+    Server haelt sie nicht ueber die Anfrage hinaus. Ohne Verlauf laeuft alles
+    Zeichen fuer Zeichen wie vorher. Mit Verlauf:
+
+      1. Entspricht die getippte Frage GENAU einer Formel, kommt die feste
+         Antwort, ohne Umformung und ohne Modell.
+      2. Sonst wird die Frage umgeformt, siehe `eigenstaendige_frage`.
+      3. Dann laeuft die Erkennung mit Toleranz auf die Frage, die sonst in die
+         Suche ginge. Trifft sie, kommt die feste Antwort ohne Suche und ohne
+         Antwortaufruf.
+      4. Sonst der Weg ueber Suche und Modell mit dieser Frage. Den Verlauf
+         sieht der Antwortprompt nie; er ist kein Beleg.
+
+    Die Reihenfolge hat einen Grund: Eine kurze Folgefrage wie "How can you
+    tell?" liegt innerhalb der Toleranz einer Formel, meint aber die vorige
+    Antwort. Nach der Umformung traegt sie ihren Bezug und trifft nicht mehr.
+
+    `strategy`, `llm`, `umformer` und `embeddings` sind injizierbar, damit Tests
+    ohne Netz und ohne Schluessel auskommen. Keines davon hat einen
+    Mandantenbezug.
     """
     aktive_settings = settings if settings is not None else get_settings()
     tenant = load_tenant(tenant_id, aktive_settings.tenants_dir)
+    verlauf = list(history or [])
 
-    # --- Begruessung, Dank, Abschied, Fragen nach dem Assistenten ----------
-    # Ohne Retrieval und ohne Modell. Nur, wenn die GANZE Eingabe einer Formel
-    # entspricht, bei den Fragen nach dem Assistenten mit Toleranz fuer
-    # Tippfehler. Jede andere Eingabe laeuft unveraendert den Weg darunter.
-    art = kurzformel_erkennen(question)
+    if not verlauf:
+        # --- Begruessung, Dank, Abschied, Fragen nach dem Assistenten ------
+        # Ohne Retrieval und ohne Modell. Nur, wenn die GANZE Eingabe einer
+        # Formel entspricht, bei den Fragen nach dem Assistenten mit Toleranz
+        # fuer Tippfehler. Jede andere Eingabe laeuft unveraendert den Weg
+        # darunter.
+        art = kurzformel_erkennen(question)
+        if art is not None:
+            return kurzformel_beantworten(tenant_id, tenant, art)
+        return _beantworten(
+            tenant_id,
+            tenant,
+            question,
+            response_language,
+            aktive_settings,
+            strategy,
+            llm,
+            embeddings,
+        )
+
+    # --- Mit Verlauf ---------------------------------------------------------
+    art = kurzformel_genau(question)
     if art is not None:
-        return kurzformel_beantworten(tenant_id, tenant, art)
+        return kurzformel_beantworten(tenant_id, tenant, art).model_copy(
+            update={"history_turns": len(verlauf)}
+        )
+
+    aktiver_umformer = (
+        umformer
+        if umformer is not None
+        else build_umformer(
+            aktive_settings,
+            tenant.model_override,
+            schema=umformungsmodell_fuer(tenant.language),
+        )
+    )
+    umformung = eigenstaendige_frage(tenant_id, tenant, verlauf, question, aktiver_umformer)
+    felder = umformung.als_felder(len(verlauf))
+
+    art = kurzformel_erkennen(umformung.suchfrage)
+    if art is not None:
+        return kurzformel_beantworten(tenant_id, tenant, art).model_copy(update=felder)
+    return _beantworten(
+        tenant_id,
+        tenant,
+        umformung.suchfrage,
+        response_language,
+        aktive_settings,
+        strategy,
+        llm,
+        embeddings,
+    ).model_copy(update=felder)
+
+
+def _beantworten(
+    tenant_id: str,
+    tenant: TenantConfig,
+    frage: str,
+    response_language: str | None,
+    aktive_settings: Settings,
+    strategy: EscalationStrategy | None,
+    llm: LlmClient | None,
+    embeddings: E5Embeddings | None,
+) -> Answer:
+    """Der Weg ueber Retrieval und Modell, mit beiden Toren.
+
+    `frage` ist die getippte Frage oder, bei einer Folgefrage, die
+    eigenstaendige. Suche und Antwortprompt bekommen dieselbe Frage, damit
+    beide Tore dieselbe Frage beurteilen.
+
+    `tenant_id` und `tenant` muessen zusammenpassen: Die Suche laeuft im Index
+    von `tenant_id`, die Prompts tragen Name, Zusatz und Sprache von `tenant`.
+    Passen beide nicht, ist das ein Fehler im Aufrufer, und er faellt hier auf,
+    vor der Suche, nicht erst nach der Antwort.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
 
     # --- Retrieval ---------------------------------------------------------
     start = time.perf_counter()
     treffer: list[SearchHit] = search_tenant(
         tenant_id,
-        question,
+        frage,
         k=tenant.retrieval_top_k or aktive_settings.retrieval_top_k,
         settings=aktive_settings,
         embeddings=embeddings,
@@ -310,7 +548,7 @@ def answer(
         )
     )
     system_prompt = build_system_prompt(tenant, response_language)
-    user_prompt = build_user_prompt(question, treffer, tenant.language)
+    user_prompt = build_user_prompt(frage, treffer, tenant.language)
 
     start = time.perf_counter()
     ergebnis = aktives_llm.generate(system_prompt, user_prompt)

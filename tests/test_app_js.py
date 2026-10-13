@@ -18,8 +18,20 @@ from tests.conftest import REPO_ROOT
 APP_JS = REPO_ROOT / "static" / "app.js"
 
 # Jede dieser Schnittstellen macht aus einer Zeichenkette Markup oder laedt
-# Markup in einen Rahmen.
-VERBOTEN = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "srcdoc")
+# Markup in einen Rahmen. Dazu jeder Speicher im Browser: Der Verlauf eines
+# Gespraechs liegt nur in einer Variablen der Seite und darf das Neuladen nicht
+# ueberleben.
+VERBOTEN = (
+    "innerHTML",
+    "outerHTML",
+    "insertAdjacentHTML",
+    "document.write",
+    "srcdoc",
+    "localStorage",
+    "sessionStorage",
+    "indexedDB",
+    "document.cookie",
+)
 
 
 def _ohne_kommentare(quelle: str) -> str:
@@ -50,6 +62,9 @@ def test_app_js_nutzt_keine_verbotene_schnittstelle() -> None:
     assert _verbotene("x.innerHTML = y;") == ["innerHTML"]
     assert _verbotene("// innerHTML") == []
     assert _verbotene("/* innerHTML */") == []
+    assert _verbotene('x = localStorage.getItem("v");') == ["localStorage"]
+    assert _verbotene("// localStorage") == []
+    assert _verbotene("document.cookie = 'a=b';") == ["document.cookie"]
 
     assert _verbotene(roh) == []
 
@@ -95,3 +110,40 @@ def test_app_js_zeigt_bei_503_den_eigenen_text() -> None:
     assert code.index("antwort.status === 503") < code.index("!antwort.ok")
     assert "502" not in code
     assert "throw new Error(texte.anfrage_fehlgeschlagen)" in code
+
+
+def test_app_js_schickt_hoechstens_drei_runden_und_nur_runden_ueber_die_unterlagen() -> None:
+    """Der Verlauf geht mit der Frage hinaus, hoechstens drei Runden. Hinein
+    kommt nur eine Antwort der Art "rag", und eine eskalierte mit leerer
+    Antwort. Die Antwort ist der ganze Text, nicht die gekuerzte Anzeige, auf
+    2 000 Zeichen begrenzt. Statisch geprueft; das Verhalten zeigt der Browser.
+    """
+    code = _ohne_kommentare(APP_JS.read_text(encoding="utf-8"))
+    assert "var MAX_RUNDEN = 3;" in code
+    assert "var MAX_ANTWORT = 2000;" in code
+    assert "gespraech.slice(-MAX_RUNDEN)" in code
+    assert "body: JSON.stringify({ question: frage, history: runden })" in code
+    assert 'if (daten.kind === "rag")' in code
+    assert 'answer: daten.escalated ? "" : fuerDenVerlauf(daten.text)' in code
+    # Die Runde kommt erst nach der Antwort hinein, im Zweig fuer Status 200.
+    assert code.index("return antwort.json()") < code.index("gespraech.push(")
+    assert code.index("gespraech.push(") < code.index(".catch(")
+
+
+def test_app_js_zeigt_verstanden_als_ueber_textcontent() -> None:
+    """Die eigenstaendige Frage kommt vom Modell und geht nur ueber textContent
+    in die Seite, mit einer Ersetzungsfunktion statt einer Zeichenkette."""
+    code = _ohne_kommentare(APP_JS.read_text(encoding="utf-8"))
+    assert 'texte.verstanden_als.replace("{frage}", function () {' in code
+    assert "zeile.textContent = texte.verstanden_als" in code
+
+
+def test_neues_gespraech_leert_ohne_netz() -> None:
+    """Der Knopf leert den Verlauf und entfernt alle Blasen bis auf die erste,
+    die Begruessung. Im Zweig steht kein Netzaufruf und kein Neuladen."""
+    code = _ohne_kommentare(APP_JS.read_text(encoding="utf-8"))
+    anfang = code.index('neu.addEventListener("click"')
+    zweig = code[anfang : code.index("});", anfang)]
+    assert "gespraech = [];" in zweig
+    assert "verlauf.children.length > 1" in zweig
+    assert "fetch(" not in zweig and "location" not in zweig

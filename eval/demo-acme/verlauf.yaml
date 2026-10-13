@@ -1,0 +1,30 @@
+# Verlaufsfaelle demo-acme
+#
+# Wie eval/demo-fellgate/verlauf.yaml, dort steht, was die Felder bedeuten und
+# warum die Antworten im Verlauf eingefroren sind.
+#
+#   answer: null   noch nicht eingefroren; eval.run --verlauf laeuft dann nicht
+#   answer: ""     die Runde ist eskaliert
+
+mandant: demo-acme
+stand: 2026-10-13
+
+faelle:
+
+  - id: verlauf-acme-01
+    kategorie: sprache
+    verlauf:
+      - question: "Wie lange prüfen Sie eine Rücksendung?"
+        answer: "Nach Eingang prüfen wir die Ware innerhalb von fünf Werktagen."
+    folgefrage: "and when do I get my money back after that?"
+    erwartete_quelle: retouren-und-gewaehrleistung.md
+    erwartete_textstelle: "Gutschriften werden innerhalb von zehn Werktagen"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Englische Folgefrage beim deutschen Mandanten. Der Umformungsprompt ist
+      deutsch, und an genau dieser Stelle ist die Antwortsprache schon zweimal
+      gekippt, als ein Prompt in der Sprache des Mandanten eine englische Frage
+      rahmte. Die eigenstaendige Frage und die Antwort muessen englisch
+      bleiben. n=20 aus demselben Grund wie bei verlauf-04.

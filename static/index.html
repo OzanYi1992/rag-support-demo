@@ -32,8 +32,16 @@
 -->
 
 <header>
-  <h1>{{titel}}</h1>
-  <p class="mandant">{{display_name}}</p>
+  <div>
+    <h1>{{titel}}</h1>
+    <p class="mandant">{{display_name}}</p>
+  </div>
+  <!--
+    Leert den Verlauf im Speicher der Seite und alle Blasen ausser der
+    Begruessung, ohne Neuladen und ohne Netz. Der Verlauf liegt nur in einer
+    Variablen von app.js; Neuladen leert ihn ebenso.
+  -->
+  <button type="button" id="neues-gespraech">{{neues_gespraech}}</button>
 </header>
 
 <main id="verlauf" aria-live="polite">

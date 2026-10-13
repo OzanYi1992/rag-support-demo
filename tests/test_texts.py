@@ -13,7 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from app.prompts import _REGELWERK, GroundedAnswer, antwortmodell_fuer
+from app.prompts import (
+    _REGELWERK,
+    _UMFORMUNG,
+    GroundedAnswer,
+    antwortmodell_fuer,
+    umformungsmodell_fuer,
+)
 from app.texts import (
     _DEUTSCHE_ZEICHEN,
     _MARKER,
@@ -21,6 +27,7 @@ from app.texts import (
     KURZFORMELN,
     SCHEMABESCHREIBUNGEN,
     TEXTE,
+    UMFORMUNGSBESCHREIBUNGEN,
     VERFUEGBARE_SPRACHEN,
     Schemabeschreibungen,
     Texte,
@@ -697,6 +704,24 @@ def _gold_und_kontrollfragen() -> tuple[list[str], list[str]]:
 
 _GOLDFRAGEN, _KONTROLLFRAGEN = _gold_und_kontrollfragen()
 
+
+def _verlaufsfragen() -> list[str]:
+    """Die Folgefragen der Falldateien, ausser denen nach dem Assistenten selbst,
+    und die erste Runde der Gegenprobe."""
+    import yaml
+
+    eval_dir = Path(__file__).resolve().parents[1] / "eval"
+    fragen: list[str] = []
+    for datei in sorted(eval_dir.glob("*/verlauf.yaml")):
+        daten = yaml.safe_load(datei.read_text(encoding="utf-8"))
+        fragen += [f["folgefrage"] for f in daten["faelle"] if not f.get("erwartete_art")]
+        if daten.get("gegenprobe_vorrunde"):
+            fragen.append(daten["gegenprobe_vorrunde"]["question"])
+    return fragen
+
+
+_VERLAUFSFRAGEN = _verlaufsfragen()
+
 _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT = [
     "how do you ship",
     "how can i help",
@@ -712,10 +737,13 @@ def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
     """Gegenprobe gegen einen blinden Test unten: 45 Goldfragen, 11 Kontrollfragen."""
     assert len(_GOLDFRAGEN) == 45
     assert len(_KONTROLLFRAGEN) == 11
+    # Sechs Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
+    assert len(_VERLAUFSFRAGEN) == 7
 
 
 @pytest.mark.parametrize(
-    "eingabe", _GOLDFRAGEN + _KONTROLLFRAGEN + _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT
+    "eingabe",
+    _GOLDFRAGEN + _KONTROLLFRAGEN + _VERLAUFSFRAGEN + _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT,
 )
 def test_keine_echte_frage_wird_als_kurzformel_erkannt(eingabe: str) -> None:
     """Der Pflichttest gegen Fehltreffer. Eine Fachfrage, die hier traefe,
@@ -779,3 +807,60 @@ def test_die_antworten_auf_fragen_nach_dem_assistenten_im_katalog() -> None:
             assert name not in JAVASCRIPT_SCHLUESSEL
         # Die Identitaetsantwort beginnt mit dem KI-Satz der Begruessung.
         assert texte.identitaet_antwort.startswith(KI_SATZ[sprache]), sprache
+
+
+# --- Gespraech: Umformungsprompt und Anzeige ----------------------------------
+
+
+def _umformungstexte(sprache: str) -> dict[str, str]:
+    """Alle Zeichenketten, die bei der Umformung an das Modell gehen."""
+    umformung = _UMFORMUNG[sprache]
+    schema = umformungsmodell_fuer(sprache).model_json_schema()
+    return {
+        "system": umformung.system,
+        "rahmen": " ".join(umformung.rahmen),
+        "struktur": schema["description"],
+        "question": schema["properties"]["question"]["description"],
+    }
+
+
+def test_umformung_deckt_dieselben_sprachen_ab_wie_das_regelwerk() -> None:
+    """Sonst liefe eine Sprache erst bei der ersten Folgefrage in einen KeyError."""
+    assert set(_UMFORMUNG) == set(_REGELWERK) == set(TEXTE)
+    assert set(UMFORMUNGSBESCHREIBUNGEN) == set(TEXTE)
+
+
+def test_umformungsprompt_traegt_nur_marker_seiner_sprache() -> None:
+    """System, Rahmen und Feldbeschreibungen der Umformung tragen keine
+    Funktionswoerter einer anderen Sprache, und ausser im Deutschen keine
+    deutschen Zeichen. Derselbe Fehler wie beim Antwortschema: Ein Prompt in der
+    falschen Sprache kippt die Sprache der Antwort, gemessen."""
+    for sprache in VERFUEGBARE_SPRACHEN:
+        texte = _umformungstexte(sprache)
+        for name, text in texte.items():
+            assert text.strip(), (sprache, name)
+            for fremde in VERFUEGBARE_SPRACHEN:
+                if fremde == sprache:
+                    continue
+                treffer = _marker_treffer(text, fremde)
+                assert not treffer, f"Umformung {sprache!r}, {name!r}: {treffer}"
+            if sprache != "de":
+                assert not set(text) & _DEUTSCHE_ZEICHEN, (sprache, name)
+
+
+def test_umformungsprompt_marker_gegenprobe() -> None:
+    """Gegenprobe: Die Pruefung oben schlaegt an einem vertauschten Text an."""
+    assert _marker_treffer(_UMFORMUNG["de"].system, "de")
+    assert _marker_treffer(_UMFORMUNG["en"].system, "en")
+    assert _marker_treffer(_UMFORMUNG["de"].system + " the", "en") == ["the"]
+
+
+def test_gespraechstexte_im_katalog() -> None:
+    """Woertlich, mit echtem Umlaut. "Verstanden als" traegt den Platzhalter fuer
+    die eigenstaendige Frage und geht in den Browser, der Knopf nicht."""
+    assert TEXTE["de"].verstanden_als == "Verstanden als: {frage}"
+    assert TEXTE["en"].verstanden_als == "Understood as: {frage}"
+    assert TEXTE["de"].neues_gespraech == "Neues Gespräch"
+    assert TEXTE["en"].neues_gespraech == "New conversation"
+    assert "verstanden_als" in JAVASCRIPT_SCHLUESSEL
+    assert "neues_gespraech" not in JAVASCRIPT_SCHLUESSEL

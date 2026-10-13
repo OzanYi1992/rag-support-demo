@@ -14,8 +14,25 @@
   var eingabe = document.getElementById("frage");
   var senden = document.getElementById("senden");
   var verlauf = document.getElementById("verlauf");
+  var neu = document.getElementById("neues-gespraech");
   var token = formular.dataset.token;
   var themen = formular.dataset.themen || "";
+
+  // DAS GESPRAECH. Die frueheren Runden, die mit jeder Frage an den Server
+  // gehen, damit eine Folgefrage wie "how long does that take?" ihren Bezug
+  // findet. Sie liegen NUR in dieser Variablen: nicht im Speicher des
+  // Browsers, nicht in einem Cookie. Neu laden heisst neues Gespraech, und der
+  // Server haelt nichts davon ueber die Anfrage hinaus.
+  //
+  // Hinein kommt eine Runde nur, wenn die Antwort mit Status 200 kam und ueber
+  // die Unterlagen lief (kind "rag"): beantwortet mit Frage und Antworttext,
+  // eskaliert mit Frage und leerer Antwort, denn die Eskalationsmeldung
+  // enthaelt keine Tatsache. Begruessung, Dank, Abschied und die festen
+  // Antworten auf Fragen nach dem Assistenten bleiben draussen, ebenso jede
+  // fehlgeschlagene Anfrage.
+  var gespraech = [];
+  var MAX_RUNDEN = 3;
+  var MAX_ANTWORT = 2000;
 
   // Die Texte kommen serverseitig aus dem Katalog, ausgewaehlt ueber die
   // Sprache des Mandanten. Diese Datei wird unter /static/ fuer alle
@@ -241,16 +258,42 @@
     inhalt.appendChild(hinweis);
   }
 
-  function absenden(frage) {
+  // Die Antwort, wie sie in den Verlauf geht: der ganze Text aus der Antwort,
+  // nicht die gekuerzte Anzeige, auf 2 000 Zeichen begrenzt. Gezaehlt in
+  // Zeichen und nicht in UTF-16-Einheiten, damit kein Emoji halbiert wird und
+  // der Server dieselbe Laenge sieht.
+  function fuerDenVerlauf(text) {
+    var zeichen = Array.from(text || "");
+    return zeichen.length > MAX_ANTWORT ? zeichen.slice(0, MAX_ANTWORT).join("") : text;
+  }
+
+  function verstandenAnzeigen(blase, frage, daten) {
+    var eigenstaendig = daten.standalone_question;
+    if (!eigenstaendig || eigenstaendig === frage) return;
+    var zeile = document.createElement("div");
+    zeile.className = "verstanden";
+    // Als Funktion und nicht als Zeichenkette: Die Frage kommt vom Modell, und
+    // ein $& darin waere sonst ein Ersetzungsmuster.
+    zeile.textContent = texte.verstanden_als.replace("{frage}", function () {
+      return eigenstaendig;
+    });
+    blase.huelle.appendChild(zeile);
+  }
+
+  function absenden(frage, blase) {
     senden.disabled = true;
     eingabe.disabled = true;
+    neu.disabled = true;
 
     var wartet = nachricht("assistent wartet", texte.sucht);
+    // Eine Kopie, damit eine spaetere Aenderung am Gespraech diese Anfrage
+    // nicht mehr beruehrt.
+    var runden = gespraech.slice(-MAX_RUNDEN);
 
     fetch("/t/" + encodeURIComponent(token) + "/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: frage })
+      body: JSON.stringify({ question: frage, history: runden })
     })
       .then(function (antwort) {
         if (antwort.status === 429) {
@@ -277,11 +320,19 @@
       })
       .then(function (daten) {
         wartet.huelle.className = "nachricht assistent";
+        verstandenAnzeigen(blase, frage, daten);
         antwortAnzeigen(wartet.inhalt, daten.text);
         if (daten.escalated) {
           eskalationAnhaengen(wartet.inhalt);
         } else {
           quellenAnhaengen(wartet, daten.sources, daten.source_scores);
+        }
+        if (daten.kind === "rag") {
+          gespraech.push({
+            question: frage,
+            answer: daten.escalated ? "" : fuerDenVerlauf(daten.text)
+          });
+          gespraech = gespraech.slice(-MAX_RUNDEN);
         }
       })
       .catch(function (fehler) {
@@ -291,6 +342,7 @@
       .finally(function () {
         senden.disabled = false;
         eingabe.disabled = false;
+        neu.disabled = false;
         eingabe.focus();
       });
   }
@@ -299,9 +351,21 @@
     ereignis.preventDefault();
     var frage = eingabe.value.trim();
     if (!frage) return;
-    nachricht("nutzer", frage);
+    var blase = nachricht("nutzer", frage);
     eingabe.value = "";
-    absenden(frage);
+    absenden(frage, blase);
+  });
+
+  // Neues Gespraech: Verlauf leeren und alle Blasen bis auf die Begruessung
+  // entfernen, ohne Neuladen und ohne Netz. Waehrend einer Anfrage ist der
+  // Knopf gesperrt, damit keine Antwort in ein schon geleertes Gespraech
+  // faellt.
+  neu.addEventListener("click", function () {
+    gespraech = [];
+    while (verlauf.children.length > 1) {
+      verlauf.removeChild(verlauf.lastElementChild);
+    }
+    eingabe.focus();
   });
 
   // Enter sendet, Umschalt+Enter macht eine neue Zeile.

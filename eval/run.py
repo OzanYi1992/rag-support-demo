@@ -24,6 +24,7 @@ waehrend das Verkaufsargument nicht traegt.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import statistics
@@ -46,6 +47,8 @@ from app.escalation import (
     REASON_FLAT,
     REASON_NO_HITS,
 )
+from app.llm import LlmNichtErreichbar
+from app.prompts import Runde
 from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, answer
 from app.search import search_tenant
 from app.tenants import load_tenant
@@ -239,6 +242,16 @@ class Frageergebnis:
     # echten Inhalten gehoert die Datei nicht ins oeffentliche Repo.
     laeufe_einzeln: list[dict[str, Any]] = field(default_factory=list)
 
+    # --- Gespraech ---------------------------------------------------------
+    # Nur in den Laeufen mit Verlauf belegt. `verlauf_runden` ist die Zahl der
+    # frueheren Runden, `erwartete_sprache` die Sprache, in der die Antwort
+    # kommen soll, und `erwartete_art` die feste Antwort, die eine Folgefrage
+    # nach dem Assistenten bekommen soll. `arm` traegt in der Gegenprobe A oder B.
+    verlauf_runden: int = 0
+    erwartete_sprache: str | None = None
+    erwartete_art: str | None = None
+    arm: str | None = None
+
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
     score_abweichung_max: float | None = None
@@ -360,9 +373,25 @@ class CloudZiel:
 # nicht aus der Wanduhr.
 CLOUD_PAUSE_S = 2.2
 
+# Ein Ausfall des Anbieters bei einem lokalen Lauf, als LlmNichtErreichbar.
+#
+# Die Anwendung wiederholt bewusst nicht; der Nutzer sieht dann eine eigene
+# Meldung. Fuer das Messwerkzeug ist ein Ausfall aber kein Messergebnis: Die
+# Anfrage hat keine Antwort erzeugt, die zu werten waere. Ohne Wiederholung
+# beendet ein einzelner 503 einen Lauf von mehreren hundert Aufrufen, und weil
+# die Datei erst am Ende geschrieben wird, ist alles davor verloren. So
+# geschehen am 2026-10-13, kurz vor dem Ende einer Gegenprobe.
+#
+# Wiederholt wird der ganze Lauf, Umformung und Antwort, und jeder Lauf zaehlt
+# seine Wiederholungen in `ausfall_wiederholt`.
+AUSFALL_VERSUCHE = 3
+AUSFALL_PAUSE_S = 15.0
 
-def cloud_antwort(ziel: CloudZiel, url_token: str, frage: str) -> dict[str, Any]:
-    """Stellt eine Frage an die deployte Instanz.
+
+def cloud_antwort(
+    ziel: CloudZiel, url_token: str, frage: str, verlauf: list[Runde] | None = None
+) -> dict[str, Any]:
+    """Stellt eine Frage an die deployte Instanz, mit Verlauf, wenn es einen gibt.
 
     Das url_token steht nur im Pfad dieses einen Aufrufs. Es wird weder
     zurueckgegeben noch gespeichert - auch nicht in einer Fehlermeldung. Es ist
@@ -370,8 +399,11 @@ def cloud_antwort(ziel: CloudZiel, url_token: str, frage: str) -> dict[str, Any]
     Repository. Deshalb kein raise_for_status(): dessen Meldung enthaelt die URL.
     """
     adresse = f"{ziel.base_url.rstrip('/')}/t/{url_token}/chat"
+    rumpf: dict[str, Any] = {"question": frage}
+    if verlauf:
+        rumpf["history"] = [runde.model_dump() for runde in verlauf]
     for versuch in (1, 2):
-        antwort = ziel.client.post(adresse, json={"question": frage}, timeout=180.0)
+        antwort = ziel.client.post(adresse, json=rumpf, timeout=180.0)
         if antwort.status_code == 200:
             daten: dict[str, Any] = antwort.json()
             return daten
@@ -487,17 +519,17 @@ def _kontrolle_fahren(
     )
 
 
-def eine_frage(
+def _retrieval_teil(
     slug: str,
     eintrag: dict[str, Any],
     settings: Settings,
     top_k: int,
     gesamtzahl: int,
-    nur_retrieval: bool,
-    cloud: CloudZiel | None = None,
-    url_token: str | None = None,
-    laeufe: int = 1,
-) -> Frageergebnis:
+) -> tuple[Frageergebnis, Any, list[float]]:
+    """Raenge, Kontrollfrage und Top-k einer Frage, ohne Modell.
+
+    Gibt das Ergebnis, den Embedder und die lokalen Top-k-Scores zurueck.
+    """
     erg = Frageergebnis(
         id=eintrag["id"],
         kategorie=eintrag["kategorie"],
@@ -505,6 +537,8 @@ def eine_frage(
         erwartete_quelle=eintrag.get("erwartete_quelle"),
         erwartete_textstelle=eintrag.get("erwartete_textstelle"),
         erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
+        erwartete_sprache=eintrag.get("erwartete_sprache"),
+        erwartete_art=eintrag.get("erwartete_art"),
     )
     embedder = get_embeddings(settings)
 
@@ -536,6 +570,226 @@ def eine_frage(
     erg.top_k_scores = [round(s, 4) for s in lokale_scores]
     erg.top_k_quellen = [t.source_file for t in top]
     erg.fremde_chunks = sorted({t.tenant_slug for t in alle if t.tenant_slug != slug})
+    return erg, embedder, lokale_scores
+
+
+@dataclass
+class _Sammler:
+    """Was die Laeufe einer Frage ueber alle Laeufe sammeln."""
+
+    eskalationen: list[bool] = field(default_factory=list)
+    sprachen: list[str] = field(default_factory=list)
+    bewertbar: int = 0
+    folgt: int = 0
+    scorelisten: list[list[float]] = field(default_factory=list)
+
+
+def _ein_aufruf(
+    slug: str,
+    frage: str,
+    settings: Settings,
+    embedder: Any,  # noqa: ANN401
+    cloud: CloudZiel | None,
+    url_token: str | None,
+    verlauf: list[Runde] | None,
+) -> dict[str, Any]:
+    """Ein Lauf, lokal ueber answer() oder gegen die deployte Instanz.
+
+    Gibt die Felder in einer Form zurueck, die fuer beide Wege gleich ist. Eine
+    Instanz von vor einem Feld liefert es nicht; dann steht None.
+    """
+    if cloud is not None:
+        # Nur die Generierung laeuft gegen die deployte Instanz. Die Raenge
+        # bleiben lokal - die Schnittstelle liefert keine vollstaendige
+        # Rangliste.
+        if url_token is None:
+            raise ValueError("Cloud-Lauf ohne url_token.")
+        daten = cloud_antwort(cloud, url_token, frage, verlauf)
+        return {
+            "eskaliert": daten["escalated"],
+            "grund": daten["escalation_reason"],
+            "antworttext": daten["text"],
+            "lang": None,
+            "kind": daten.get("kind"),
+            "scores": list(daten["retrieval_scores"]),
+            "latenz_retrieval_ms": daten["latency_ms_retrieval"],
+            "latenz_generierung_ms": daten["latency_ms_generation"],
+            "prompt_tokens": daten["prompt_tokens"],
+            "completion_tokens": daten["completion_tokens"],
+            "modell": daten["model"],
+            "sources": daten.get("sources"),
+            "removed_references": daten.get("removed_references"),
+            "eigenstaendige_frage": daten.get("standalone_question"),
+            "umformung": daten.get("rewrite_status"),
+            "umformung_grund": daten.get("rewrite_reason"),
+            "umformung_ms": daten.get("latency_ms_rewrite"),
+            "umformung_prompt_tokens": daten.get("rewrite_prompt_tokens"),
+            "umformung_completion_tokens": daten.get("rewrite_completion_tokens"),
+        }
+    for versuch in range(1, AUSFALL_VERSUCHE + 1):
+        try:
+            antwort = answer(slug, frage, settings=settings, embeddings=embedder, history=verlauf)
+            break
+        except LlmNichtErreichbar as fehler:
+            if versuch == AUSFALL_VERSUCHE:
+                raise
+            print(
+                f"    Anbieter nicht erreichbar ({fehler.grund}, {fehler.aufruf}), "
+                f"warte {AUSFALL_PAUSE_S:.0f} s und wiederhole",
+                file=sys.stderr,
+            )
+            time.sleep(AUSFALL_PAUSE_S)
+    return {
+        "ausfall_wiederholt": versuch - 1,
+        "eskaliert": antwort.escalated,
+        "grund": antwort.escalation_reason,
+        "antworttext": antwort.text,
+        "lang": antwort.lang,
+        "kind": antwort.kind,
+        "scores": list(antwort.retrieval_scores),
+        "latenz_retrieval_ms": antwort.latency_ms_retrieval,
+        "latenz_generierung_ms": antwort.latency_ms_generation,
+        "prompt_tokens": antwort.prompt_tokens,
+        "completion_tokens": antwort.completion_tokens,
+        "modell": antwort.model,
+        "sources": list(antwort.sources),
+        "removed_references": antwort.removed_references,
+        "eigenstaendige_frage": antwort.standalone_question,
+        "umformung": antwort.rewrite_status,
+        "umformung_grund": antwort.rewrite_reason,
+        "umformung_ms": antwort.latency_ms_rewrite,
+        "umformung_prompt_tokens": antwort.rewrite_prompt_tokens,
+        "umformung_completion_tokens": antwort.rewrite_completion_tokens,
+    }
+
+
+def _lauf_eintragen(
+    slug: str,
+    erg: Frageergebnis,
+    sammler: _Sammler,
+    lauf_nr: int,
+    d: dict[str, Any],
+    settings: Settings,
+    embedder: Any,  # noqa: ANN401
+    top_k: int,
+    verlauf: list[Runde] | None,
+) -> None:
+    """Traegt einen Lauf in das Ergebnis und in den Sammler ein."""
+    eskaliert = d["eskaliert"]
+    antworttext = d["antworttext"]
+    sammler.eskalationen.append(bool(eskaliert))
+    sammler.scorelisten.append(d["scores"])
+
+    # Die Antwortsprache je Lauf. Eskalationstexte bleiben aussen vor: Sie
+    # sind der Text des Mandanten und folgen dessen Sprache, nicht der Frage.
+    gesprochen = None
+    if not eskaliert and antworttext:
+        erg.antwortlaengen.append(len(antworttext))
+        gesprochen = _rate_sprache(antworttext)
+        if gesprochen:
+            sammler.sprachen.append(gesprochen)
+        gefragt = _rate_sprache(erg.frage)
+        if gesprochen and gefragt:
+            sammler.bewertbar += 1
+            sammler.folgt += int(gesprochen == gefragt)
+
+    eigenstaendig = d["eigenstaendige_frage"]
+    eintrag: dict[str, Any] = {
+        "lauf": lauf_nr + 1,
+        "kind": d["kind"],
+        "eskaliert": bool(eskaliert),
+        "grund": d["grund"],
+        "lang": d["lang"],
+        "sprache_der_antwort": gesprochen,
+        "antworttext": antworttext,
+        "sources": d["sources"],
+        "removed_references": d["removed_references"],
+        "prompt_tokens": d["prompt_tokens"],
+        "completion_tokens": d["completion_tokens"],
+        "eigenstaendige_frage": eigenstaendig,
+        "sprache_der_eigenstaendigen_frage": _rate_sprache(eigenstaendig)
+        if eigenstaendig
+        else None,
+        "umformung": d["umformung"],
+        "umformung_grund": d["umformung_grund"],
+        "umformung_ms": d["umformung_ms"],
+        "umformung_prompt_tokens": d["umformung_prompt_tokens"],
+        "umformung_completion_tokens": d["umformung_completion_tokens"],
+        "ausfall_wiederholt": d.get("ausfall_wiederholt", 0),
+    }
+
+    # Mit Verlauf sucht jeder Lauf mit seiner eigenen Frage. Ob die erwartete
+    # Stelle im Kontext lag, wird deshalb je Lauf mit genau dieser Frage
+    # nachgesehen, nicht mit der getippten.
+    if verlauf is not None:
+        stelle = None
+        if erg.erwartete_textstelle and d["kind"] == "rag":
+            suchfrage = eigenstaendig or erg.frage
+            treffer = search_tenant(
+                slug, suchfrage, k=top_k, settings=settings, embeddings=embedder
+            )
+            stelle = any(erg.erwartete_textstelle in t.text for t in treffer)
+        eintrag["stelle_im_kontext"] = stelle
+    erg.laeufe_einzeln.append(eintrag)
+
+    # Der ERSTE Lauf fuellt die Einzelfelder. Damit bleibt ein Bericht mit
+    # laeufe=1 genau der von vorher.
+    if lauf_nr == 0:
+        erg.eskaliert = eskaliert
+        erg.grund = d["grund"]
+        erg.antworttext = antworttext
+        erg.lang = d["lang"]
+        erg.latenz_retrieval_ms = d["latenz_retrieval_ms"]
+        erg.latenz_generierung_ms = d["latenz_generierung_ms"]
+        erg.prompt_tokens = d["prompt_tokens"]
+        erg.completion_tokens = d["completion_tokens"]
+        erg.modell = d["modell"]
+
+
+def _abschliessen(erg: Frageergebnis, sammler: _Sammler, mit_verlauf: bool) -> None:
+    """Verteilungen ueber alle Laeufe und die abgeleiteten Felder."""
+    erg.eskaliert_anzahl = sum(sammler.eskalationen)
+    erg.eskalation_wie_erwartet_anzahl = sum(
+        1 for e in sammler.eskalationen if e == erg.erwartet_eskalation
+    )
+    erg.stabil = len(set(sammler.eskalationen)) == 1
+    erg.sprachen_der_antworten = sammler.sprachen
+    erg.sprache_bewertbar_anzahl = sammler.bewertbar
+    erg.sprache_folgt_frage_anzahl = sammler.folgt
+
+    # Retrieval ueber alle Laeufe: eine Scoreliste oder ein Befund. Mit Verlauf
+    # nicht anwendbar, weil jeder Lauf mit seiner eigenen eigenstaendigen Frage
+    # sucht; dort steht None statt eines falschen Alarms.
+    if mit_verlauf:
+        erg.retrieval_identisch = None
+        erg.score_abweichung_intern = None
+    else:
+        listen = sammler.scorelisten
+        erg.retrieval_identisch = all(liste == listen[0] for liste in listen)
+        erg.score_abweichung_intern = max(
+            (abs(a - b) for liste in listen[1:] for a, b in zip(liste, listen[0], strict=False)),
+            default=0.0,
+        )
+
+    erg.tor = _tor_von(erg.grund)
+    erg.eskalation_wie_erwartet = erg.eskaliert == erg.erwartet_eskalation
+    erg.abweichungsklasse = _abweichungsklasse(erg)
+    _sprache_pruefen(erg)
+
+
+def eine_frage(
+    slug: str,
+    eintrag: dict[str, Any],
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    nur_retrieval: bool,
+    cloud: CloudZiel | None = None,
+    url_token: str | None = None,
+    laeufe: int = 1,
+    verlauf: list[Runde] | None = None,
+) -> Frageergebnis:
+    erg, embedder, lokale_scores = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
 
     if nur_retrieval:
         erg.abweichungsklasse = _abweichungsklasse(erg)
@@ -547,12 +801,8 @@ def eine_frage(
     # retrieval_identisch traegt das Ergebnis. Bei einem Cloudlauf liefert die
     # Instanz ihre Scores mit, dann wird zusaetzlich gegen lokal verglichen.
     erg.laeufe = laeufe
-    eskalationen: list[bool] = []
-    sprachen: list[str] = []
-    bewertbar = 0
-    folgt = 0
-    scorelisten: list[list[float]] = []
-
+    erg.verlauf_runden = len(verlauf or [])
+    sammler = _Sammler()
     for lauf_nr in range(laeufe):
         # Vor JEDEM Cloudaufruf, auch dem ersten einer Frage. Nur zwischen den
         # Wiederholungen zu pausieren waere ein Taktfehler: Fuenf Aufrufe in neun
@@ -560,105 +810,55 @@ def eine_frage(
         # Minute - drei ueber dem Limit, und der Lauf stirbt nach etwa der Haelfte.
         if cloud is not None:
             time.sleep(CLOUD_PAUSE_S)
-        if cloud is not None:
-            # Nur die Generierung laeuft gegen die deployte Instanz. Die Raenge
-            # oben bleiben lokal - die Schnittstelle liefert keine vollstaendige
-            # Rangliste.
-            if url_token is None:
-                raise ValueError("Cloud-Lauf ohne url_token.")
-            daten = cloud_antwort(cloud, url_token, erg.frage)
-            eskaliert = daten["escalated"]
-            grund = daten["escalation_reason"]
-            antworttext = daten["text"]
-            lang = None
-            # Eine Instanz vor der Einfuehrung von kind liefert das Feld nicht.
-            kind = daten.get("kind")
-            scorelisten.append(list(daten["retrieval_scores"]))
-            if lauf_nr == 0:
-                erg.latenz_retrieval_ms = daten["latency_ms_retrieval"]
-                erg.latenz_generierung_ms = daten["latency_ms_generation"]
-                erg.prompt_tokens = daten["prompt_tokens"]
-                erg.completion_tokens = daten["completion_tokens"]
-                erg.modell = daten["model"]
-                erg.scores_wie_lokal, erg.score_abweichung_max = vergleiche_scores(
-                    lokale_scores, daten["retrieval_scores"]
-                )
-        else:
-            antwort = answer(slug, erg.frage, settings=settings, embeddings=embedder)
-            eskaliert = antwort.escalated
-            grund = antwort.escalation_reason
-            antworttext = antwort.text
-            lang = antwort.lang
-            kind = antwort.kind
-            scorelisten.append(list(antwort.retrieval_scores))
-            if lauf_nr == 0:
-                erg.latenz_retrieval_ms = antwort.latency_ms_retrieval
-                erg.latenz_generierung_ms = antwort.latency_ms_generation
-                erg.prompt_tokens = antwort.prompt_tokens
-                erg.completion_tokens = antwort.completion_tokens
-                erg.modell = antwort.model
+        d = _ein_aufruf(slug, erg.frage, settings, embedder, cloud, url_token, verlauf)
+        if cloud is not None and lauf_nr == 0:
+            erg.scores_wie_lokal, erg.score_abweichung_max = vergleiche_scores(
+                lokale_scores, d["scores"]
+            )
+        _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
 
-        eskalationen.append(bool(eskaliert))
-
-        # Die Antwortsprache je Lauf. Eskalationstexte bleiben aussen vor: Sie
-        # sind der Text des Mandanten und folgen dessen Sprache, nicht der Frage.
-        gesprochen = None
-        if not eskaliert and antworttext:
-            erg.antwortlaengen.append(len(antworttext))
-            gesprochen = _rate_sprache(antworttext)
-            if gesprochen:
-                sprachen.append(gesprochen)
-            gefragt = _rate_sprache(erg.frage)
-            if gesprochen and gefragt:
-                bewertbar += 1
-                folgt += int(gesprochen == gefragt)
-
-        erg.laeufe_einzeln.append(
-            {
-                "lauf": lauf_nr + 1,
-                "kind": kind,
-                "eskaliert": bool(eskaliert),
-                "grund": grund,
-                "lang": lang,
-                "sprache_der_antwort": gesprochen,
-                "antworttext": antworttext,
-            }
-        )
-
-        # Der ERSTE Lauf fuellt die Einzelfelder. Damit bleibt ein Bericht mit
-        # laeufe=1 genau der von vorher.
-        if lauf_nr == 0:
-            erg.eskaliert = eskaliert
-            erg.grund = grund
-            erg.antworttext = antworttext
-            erg.lang = lang
-
-    # --- Verteilungen ------------------------------------------------------
-    erg.eskaliert_anzahl = sum(eskalationen)
-    erg.eskalation_wie_erwartet_anzahl = sum(
-        1 for e in eskalationen if e == erg.erwartet_eskalation
-    )
-    erg.stabil = len(set(eskalationen)) == 1
-    erg.sprachen_der_antworten = sprachen
-    erg.sprache_bewertbar_anzahl = bewertbar
-    erg.sprache_folgt_frage_anzahl = folgt
-
-    # Retrieval ueber alle Laeufe: eine Scoreliste oder ein Befund.
-    erg.retrieval_identisch = all(liste == scorelisten[0] for liste in scorelisten)
-    erg.score_abweichung_intern = max(
-        (
-            abs(a - b)
-            for liste in scorelisten[1:]
-            for a, b in zip(liste, scorelisten[0], strict=False)
-        ),
-        default=0.0,
-    )
-
-    erg.tor = _tor_von(erg.grund)
-    erg.eskalation_wie_erwartet = erg.eskaliert == erg.erwartet_eskalation
-    erg.abweichungsklasse = _abweichungsklasse(erg)
-    _sprache_pruefen(erg)
+    _abschliessen(erg, sammler, mit_verlauf=verlauf is not None)
     return erg
+
+
+def gegenprobe_frage(
+    slug: str,
+    eintrag: dict[str, Any],
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    laeufe: int,
+    vorrunde: Runde,
+) -> tuple[Frageergebnis, Frageergebnis]:
+    """Eine Goldfrage in zwei Fassungen, verschraenkt: A ohne Verlauf, B als
+    zweite Runde nach einer fremden ersten.
+
+    Je Lauf einmal A und einmal B, die Reihenfolge wechselt von Lauf zu Lauf.
+    So verschiebt eine Aenderung beim Anbieter waehrend der Messung beide
+    Fassungen gleich und erscheint nicht als Wirkung des Verlaufs.
+
+    Die Raenge stammen aus der getippten Frage und gelten fuer A. B sucht je
+    Lauf mit seiner eigenstaendigen Frage; ist sie zeichengleich mit der
+    getippten, ist der Antwortprompt von B zeichengleich mit dem von A.
+    """
+    erg_a, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
+    erg_b = copy.deepcopy(erg_a)
+    erg_a.arm, erg_b.arm = "A", "B"
+    erg_a.laeufe = erg_b.laeufe = laeufe
+    erg_b.verlauf_runden = 1
+    sammler_a, sammler_b = _Sammler(), _Sammler()
+    arme = {
+        "A": (erg_a, sammler_a, None),
+        "B": (erg_b, sammler_b, [vorrunde]),
+    }
+    for lauf_nr in range(laeufe):
+        for arm in ("A", "B") if lauf_nr % 2 == 0 else ("B", "A"):
+            erg, sammler, verlauf = arme[arm]
+            d = _ein_aufruf(slug, erg.frage, settings, embedder, None, None, verlauf)
+            _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
+    _abschliessen(erg_a, sammler_a, mit_verlauf=False)
+    _abschliessen(erg_b, sammler_b, mit_verlauf=True)
+    return erg_a, erg_b
 
 
 def _rate_sprache(text: str) -> str | None:
@@ -950,6 +1150,244 @@ def fahre(
     }
 
 
+# --- Gespraech: Verlaufsfaelle und Gegenprobe --------------------------------
+#
+# Die Faelle stehen je Mandant in eval/<mandant>/verlauf.yaml. Die Antworten im
+# Verlauf sind eingefroren: echte Antworten, einmal erzeugt und in die Datei
+# geschrieben, damit jeder Lauf denselben Verlauf sieht. `answer: null` heisst
+# "noch nicht eingefroren", `answer: ""` heisst "die Runde ist eskaliert".
+
+ARTEN_FUER_VERLAUF = ("capabilities", "identity")
+
+
+def pruefe_verlauf(daten: dict[str, Any], quelle: str, eingefroren: bool) -> None:
+    """Lehnt eine Falldatei ab, die nicht messbar ist.
+
+    Geprueft wird jedes Pflichtfeld und, mit `eingefroren`, dass jede Antwort im
+    Verlauf eingefroren ist. Jede Runde muss die Grenzen der Route einhalten,
+    sonst misst die Datei einen Verlauf, den es im Betrieb nicht geben kann.
+    """
+    fehler: list[str] = []
+    for f in daten.get("faelle", []):
+        fid = f.get("id", "?")
+        for feld in ("id", "kategorie", "verlauf", "folgefrage", "begruendung"):
+            if not f.get(feld):
+                fehler.append(f"{fid}: {feld} fehlt")
+        if f.get("erwartete_quelle") is None:
+            fehler.append(f"{fid}: erwartete_quelle fehlt oder ist null")
+        if not isinstance(f.get("erwartet_eskalation"), bool):
+            fehler.append(f"{fid}: erwartet_eskalation ist kein Wahrheitswert")
+        if f.get("erwartete_sprache") not in VERFUEGBARE_SPRACHEN:
+            fehler.append(f"{fid}: erwartete_sprache {f.get('erwartete_sprache')!r} unbekannt")
+        if not isinstance(f.get("laeufe"), int) or f["laeufe"] < 1:
+            fehler.append(f"{fid}: laeufe fehlt oder ist kleiner als 1")
+        if f.get("erwartete_art") not in (None, *ARTEN_FUER_VERLAUF):
+            fehler.append(f"{fid}: erwartete_art {f.get('erwartete_art')!r} unbekannt")
+        if len(f.get("verlauf") or []) > 3:
+            fehler.append(f"{fid}: mehr als drei Runden")
+        for runde in f.get("verlauf") or []:
+            if eingefroren and runde.get("answer") is None:
+                fehler.append(f"{fid}: Antwort auf {runde.get('question')!r} nicht eingefroren")
+            anweisung = runde.get("eingeschleuste_anweisung")
+            if anweisung and runde.get("answer") is not None:
+                if not runde["answer"].endswith(anweisung):
+                    fehler.append(f"{fid}: die eingeschleuste Anweisung steht nicht am Ende")
+            try:
+                Runde(question=runde.get("question"), answer=runde.get("answer") or "")
+            except ValueError as grund:
+                fehler.append(f"{fid}: Runde ungueltig: {grund}")
+    vorrunde = daten.get("gegenprobe_vorrunde")
+    if vorrunde is not None and eingefroren and vorrunde.get("answer") is None:
+        fehler.append("gegenprobe_vorrunde: Antwort nicht eingefroren")
+    if fehler:
+        raise ValueError(f"{quelle}: " + "; ".join(fehler))
+
+
+def _runden(liste: list[dict[str, Any]]) -> list[Runde]:
+    return [Runde(question=r["question"], answer=r.get("answer") or "") for r in liste]
+
+
+def lade_verlauf(slug: str, eingefroren: bool = True) -> dict[str, Any]:
+    pfad = EVAL_DIR / slug / "verlauf.yaml"
+    daten: dict[str, Any] = yaml.safe_load(pfad.read_text(encoding="utf-8"))
+    pruefe_verlauf(daten, str(pfad), eingefroren)
+    return daten
+
+
+def _top_k_und_herkunft(settings: Settings, slug: str) -> tuple[int, str]:
+    tenant = load_tenant(slug, settings.tenants_dir)
+    if tenant.retrieval_top_k is not None:
+        return tenant.retrieval_top_k, "tenant.yaml (Mandanten-Override)"
+    return settings.retrieval_top_k, "Settings-Default"
+
+
+def _kopf_lokal(
+    settings: Settings,
+    slug: str,
+    lauf: str,
+    baseline: bool,
+    modus: str,
+    laeufe: object,
+    top_k: int,
+    herkunft: str,
+    gesamt: int,
+    preise: dict[str, Any],
+    bedeutung: str,
+) -> dict[str, Any]:
+    """Der Ergebniskopf eines lokalen Laufs mit Modell, fuer die Gespraechsmodi."""
+    return {
+        "zeitstempel": datetime.now(UTC).isoformat(timespec="seconds"),
+        "lauf": lauf,
+        "baseline": baseline,
+        "laeufe_je_frage": laeufe,
+        "sampling_temperature": settings.llm_temperature,
+        "mandant": slug,
+        "modus": modus,
+        "ziel": "lokal",
+        "retrieval_quelle": "lokal",
+        "antwort_quelle": "lokal",
+        "metrik": METRIK_DATEI_UND_CHUNK,
+        "metrik_bedeutung": bedeutung,
+        "git_commit": _git_commit(),
+        "embedding_modell": settings.embedding_model,
+        "embedding_dimension": settings.embedding_dimension,
+        "llm_modell": settings.model_name,
+        "chunk_size": settings.chunk_size,
+        "chunk_overlap": settings.chunk_overlap,
+        "top_k": top_k,
+        "top_k_herkunft": herkunft,
+        "eskalationsstrategie": settings.escalation_strategy,
+        "retrieval_score_threshold": settings.retrieval_score_threshold,
+        "chunks_im_index": gesamt,
+        "preise_hinterlegt": bool(preise.get("stand")),
+    }
+
+
+def _gleich_getippt(ergebnisse: list[Frageergebnis]) -> str:
+    """Wie oft die eigenstaendige Frage zeichengleich mit der getippten war."""
+    umgeformt = [
+        (e.frage, lauf["eigenstaendige_frage"])
+        for e in ergebnisse
+        for lauf in e.laeufe_einzeln
+        if lauf.get("eigenstaendige_frage") is not None
+    ]
+    gleich = sum(1 for getippt, eigen in umgeformt if getippt == eigen)
+    return f"{gleich}/{len(umgeformt)}"
+
+
+BEDEUTUNG_VERLAUF = (
+    "Folgefragen mit eingefrorenem Verlauf. rang und rang_chunk sind die der "
+    "GETIPPTEN Folgefrage und sagen deshalb wenig; je Lauf steht in "
+    "laeufe_einzeln, mit welcher eigenstaendigen Frage gesucht wurde und ob die "
+    "erwartete Stelle mit ihr im Kontext lag (stelle_im_kontext)."
+)
+BEDEUTUNG_KONTROLLE = (
+    "Dieselben Folgefragen ohne Verlauf, also das Verhalten ohne Gespraech. "
+    "rang = Rang der Quelldatei, rang_chunk = Rang des Chunks mit der "
+    "erwarteten Textstelle."
+)
+BEDEUTUNG_GEGENPROBE = (
+    "Goldfragen verschraenkt in zwei Fassungen: A ohne Verlauf, B als zweite "
+    "Runde nach einer fremden ersten. Raenge aus der getippten Frage, sie gelten "
+    "fuer A. b_eigenstaendig_gleich_getippt zaehlt die Laeufe von B, deren "
+    "eigenstaendige Frage zeichengleich mit der getippten war."
+)
+
+
+def fahre_verlauf(
+    slug: str, lauf: str, baseline: bool, mit_verlauf: bool, laeufe_kontrolle: int
+) -> dict[str, Any]:
+    """Die Verlaufsfaelle eines Mandanten, mit Verlauf oder als Kontrolle ohne.
+
+    Mit Verlauf nimmt jeder Fall seine Laufzahl aus der Datei. Die Kontrolle
+    stellt dieselben Folgefragen ohne Verlauf, je `laeufe_kontrolle` mal.
+    """
+    settings = Settings()
+    daten = lade_verlauf(slug, eingefroren=mit_verlauf)
+    top_k, herkunft = _top_k_und_herkunft(settings, slug)
+    gesamt = _chunkzahl(settings, slug)
+    preise = _preise()
+
+    ergebnisse: list[Frageergebnis] = []
+    laeufe_je_fall: dict[str, int] = {}
+    for fall in daten["faelle"]:
+        eintrag = {**fall, "frage": fall["folgefrage"]}
+        n = fall["laeufe"] if mit_verlauf else laeufe_kontrolle
+        laeufe_je_fall[fall["id"]] = n
+        verlauf = _runden(fall["verlauf"]) if mit_verlauf else None
+        ergebnisse.append(
+            eine_frage(slug, eintrag, settings, top_k, gesamt, False, laeufe=n, verlauf=verlauf)
+        )
+
+    kopf = _kopf_lokal(
+        settings,
+        slug,
+        lauf,
+        baseline,
+        "verlauf" if mit_verlauf else "verlauf_kontrolle",
+        "je_fall",
+        top_k,
+        herkunft,
+        gesamt,
+        preise,
+        BEDEUTUNG_VERLAUF if mit_verlauf else BEDEUTUNG_KONTROLLE,
+    )
+    kopf["laeufe_je_fall"] = laeufe_je_fall
+    # YAML liest `stand: 2026-10-13` als Datum; die Ergebnisdatei ist JSON.
+    kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
+    if mit_verlauf:
+        kopf["eigenstaendig_gleich_getippt"] = _gleich_getippt(ergebnisse)
+    return {
+        "kopf": kopf,
+        "aggregiert_je_kategorie": aggregiere(ergebnisse, top_k, preise, settings.model_name),
+        "fragen": [asdict(e) for e in ergebnisse],
+    }
+
+
+def fahre_gegenprobe(slug: str, lauf: str, baseline: bool, laeufe: int) -> dict[str, Any]:
+    """Die Goldfragen verschraenkt, A ohne und B mit fremder erster Runde."""
+    settings = Settings()
+    gold = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
+    daten = lade_verlauf(slug, eingefroren=True)
+    vorrunde_roh = daten.get("gegenprobe_vorrunde")
+    if vorrunde_roh is None:
+        raise ValueError(f"eval/{slug}/verlauf.yaml hat keine gegenprobe_vorrunde.")
+    vorrunde = _runden([vorrunde_roh])[0]
+    top_k, herkunft = _top_k_und_herkunft(settings, slug)
+    gesamt = _chunkzahl(settings, slug)
+    preise = _preise()
+
+    arm_a: list[Frageergebnis] = []
+    arm_b: list[Frageergebnis] = []
+    for f in gold["fragen"]:
+        a, b = gegenprobe_frage(slug, f, settings, top_k, gesamt, laeufe, vorrunde)
+        arm_a.append(a)
+        arm_b.append(b)
+
+    kopf = _kopf_lokal(
+        settings,
+        slug,
+        lauf,
+        baseline,
+        "gegenprobe",
+        laeufe,
+        top_k,
+        herkunft,
+        gesamt,
+        preise,
+        BEDEUTUNG_GEGENPROBE,
+    )
+    kopf["vorrunde_frage"] = vorrunde.question
+    kopf["b_eigenstaendig_gleich_getippt"] = _gleich_getippt(arm_b)
+    return {
+        "kopf": kopf,
+        "aggregiert_je_kategorie": aggregiere(arm_a, top_k, preise, settings.model_name),
+        "aggregiert_je_kategorie_b": aggregiere(arm_b, top_k, preise, settings.model_name),
+        "fragen": [asdict(e) for e in arm_a],
+        "fragen_b": [asdict(e) for e in arm_b],
+    }
+
+
 def pruefe_kopf(bericht: dict[str, Any]) -> None:
     """Verweigert das Schreiben einer Datei ohne gueltige Metrikangabe.
 
@@ -1198,7 +1636,33 @@ def main(argv: list[str] | None = None) -> int:
             "--base-url: Der Digest sagt, was deployt wurde, nicht wer geantwortet hat"
         ),
     )
+    p.add_argument(
+        "--verlauf",
+        action="store_true",
+        help="Verlaufsfaelle aus eval/<mandant>/verlauf.yaml, mit Verlauf und der Laufzahl je Fall",
+    )
+    p.add_argument(
+        "--kontrolle",
+        action="store_true",
+        help="mit --verlauf: dieselben Folgefragen ohne Verlauf, --laeufe je Frage",
+    )
+    p.add_argument(
+        "--gegenprobe",
+        action="store_true",
+        help="Goldfragen verschraenkt, A ohne Verlauf und B nach einer fremden ersten Runde",
+    )
     args = p.parse_args(argv)
+
+    gespraech = args.verlauf or args.gegenprobe
+    if args.kontrolle and not args.verlauf:
+        p.error("--kontrolle gilt nur zusammen mit --verlauf.")
+    if args.verlauf and args.gegenprobe:
+        p.error("--verlauf und --gegenprobe sind zwei getrennte Laeufe.")
+    if gespraech and (args.retrieval_only or args.base_url or args.top_k is not None):
+        p.error(
+            "--verlauf und --gegenprobe laufen lokal mit Modell und mit dem top_k des "
+            "Mandanten; --retrieval-only, --base-url und --top-k passen nicht dazu."
+        )
 
     if args.laeufe < 1:
         p.error("--laeufe muss mindestens 1 sein.")
@@ -1232,8 +1696,9 @@ def main(argv: list[str] | None = None) -> int:
     # url_token. Deshalb nie unterhalb von WARNING, egal wer Logging konfiguriert.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+    datei_noetig = "verlauf.yaml" if gespraech else "gold.yaml"
     slugs = (
-        sorted(d.name for d in EVAL_DIR.iterdir() if d.is_dir() and (d / "gold.yaml").is_file())
+        sorted(d.name for d in EVAL_DIR.iterdir() if d.is_dir() and (d / datei_noetig).is_file())
         if args.all
         else [args.slug]
     )
@@ -1246,22 +1711,41 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         for slug in slugs:
-            bericht = fahre(
-                slug,
-                args.top_k,
-                args.retrieval_only,
-                args.lauf,
-                args.baseline,
-                cloud,
-                # Ohne LLM gibt es nichts zu wiederholen: Retrieval ist
-                # deterministisch, und n Laeufe davon kosten Zeit ohne Erkenntnis.
-                1 if args.retrieval_only else args.laeufe,
-            )
+            if args.verlauf:
+                bericht = fahre_verlauf(
+                    slug, args.lauf, args.baseline, not args.kontrolle, args.laeufe
+                )
+            elif args.gegenprobe:
+                bericht = fahre_gegenprobe(slug, args.lauf, args.baseline, args.laeufe)
+            else:
+                bericht = fahre(
+                    slug,
+                    args.top_k,
+                    args.retrieval_only,
+                    args.lauf,
+                    args.baseline,
+                    cloud,
+                    # Ohne LLM gibt es nichts zu wiederholen: Retrieval ist
+                    # deterministisch, und n Laeufe davon kosten Zeit ohne
+                    # Erkenntnis.
+                    1 if args.retrieval_only else args.laeufe,
+                )
             pruefe_kopf(bericht)
             stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
             datei = ERGEBNIS_DIR / f"{stempel}-{slug}-lauf{args.lauf}.json"
             datei.write_text(json.dumps(bericht, ensure_ascii=False, indent=2), encoding="utf-8")
             print(tabelle(bericht))
+            if "aggregiert_je_kategorie_b" in bericht:
+                print("\nFassung B, nach der fremden ersten Runde:")
+                print(
+                    tabelle(
+                        {
+                            **bericht,
+                            "aggregiert_je_kategorie": bericht["aggregiert_je_kategorie_b"],
+                            "fragen": bericht["fragen_b"],
+                        }
+                    )
+                )
             print(f"\ngeschrieben: {datei.relative_to(PROJEKTWURZEL)}\n")
     return 0
 

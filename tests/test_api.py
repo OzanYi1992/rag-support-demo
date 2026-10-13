@@ -34,7 +34,7 @@ from app.main import (
 from app.prompts import GroundedAnswer
 from app.tenants import load_tenant
 from app.texts import JAVASCRIPT_SCHLUESSEL, TEXTE
-from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, lege_mandant_an
+from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, FakeUmformer, lege_mandant_an
 
 ACME_TOKEN = "acme-token-1234567890"
 NORDWIND_TOKEN = "nordwind-token-123456"
@@ -108,10 +108,17 @@ def _client(
     umgebung: tuple[Settings, E5Embeddings],
     llm: FakeLlm | None = None,
     rate_limit: int = 30,
+    umformer: FakeUmformer | None = None,
 ) -> tuple[TestClient, FakeLlm]:
     settings, embeddings = umgebung
     aktives_llm = llm or FakeLlm(parsed=gute_antwort())
-    app = create_app(settings, llm=aktives_llm, embeddings=embeddings, rate_limit=rate_limit)
+    app = create_app(
+        settings,
+        llm=aktives_llm,
+        embeddings=embeddings,
+        rate_limit=rate_limit,
+        umformer=umformer,
+    )
     return TestClient(app), aktives_llm
 
 
@@ -1299,9 +1306,10 @@ def test_anbieterausfall_wird_503_mit_eigenem_text(
 ) -> None:
     """Ein Ausfall ist 503 mit dem eigenen Katalogtext, kein 500 und keine Eskalation.
 
-    Das Ereignis chat_abgebrochen traegt tenant_id, grund und gesamt_ms und
-    keinen Text: Die Frage steht in keinem Ereignis. Gegenprobe im selben Test:
-    derselbe Aufbau ohne Ausfall gibt 200.
+    Das Ereignis chat_abgebrochen traegt tenant_id, grund, aufruf und gesamt_ms
+    und keinen Text: Die Frage steht in keinem Ereignis. `aufruf` ist ohne
+    Verlauf immer "antwort". Gegenprobe im selben Test: derselbe Aufbau ohne
+    Ausfall gibt 200.
     """
     status, meldung, ereignisse, log = _abbruch(
         umgebung, caplog, token, LlmNichtErreichbar("zeitlimit")
@@ -1315,7 +1323,8 @@ def test_anbieterausfall_wird_503_mit_eigenem_text(
     assert abbrueche[0]["tenant_id"] == slug
     assert abbrueche[0]["grund"] == "zeitlimit"
     assert isinstance(abbrueche[0]["gesamt_ms"], int)
-    assert set(abbrueche[0]) == {"ereignis", "tenant_id", "grund", "gesamt_ms"}
+    assert abbrueche[0]["aufruf"] == "antwort"
+    assert set(abbrueche[0]) == {"ereignis", "tenant_id", "grund", "aufruf", "gesamt_ms"}
     assert not [e for e in ereignisse if e["ereignis"] == "chat"]
     assert MARKER_FRAGE not in log
     assert token not in log
@@ -1455,3 +1464,186 @@ def test_verweise_entfernt_steht_im_ereignis_als_zahl(
     chats = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
     assert chats[0]["verweise_entfernt"] == 0
     assert isinstance(chats[0]["verweise_entfernt"], int)
+
+
+# --- Gespraech: Verlauf an der Route ------------------------------------------
+
+
+def _runde(
+    frage: str = "Wie lange gilt die RMA?", antwort: str = "21 Kalendertage."
+) -> dict[str, str]:
+    return {"question": frage, "answer": antwort}
+
+
+def test_verlauf_grenzen_am_server(umgebung: tuple[Settings, E5Embeddings]) -> None:
+    """Pflichttest. Vier Runden, eine Antwort mit 2 001 Zeichen, eine Frage mit
+    2 001 Zeichen und ein unbekanntes Feld ergeben je 422, ohne Modellaufruf.
+    Drei Runden an der Grenze ergeben 200."""
+    umformer = FakeUmformer("Wie lange gilt die RMA-Nummer?")
+    client, llm = _client(umgebung, umformer=umformer)
+    adresse = f"/t/{ACME_TOKEN}/chat"
+
+    zu_viel = [
+        [_runde()] * 4,
+        [_runde(antwort="a" * 2001)],
+        [_runde(frage="q" * 2001)],
+        [{**_runde(), "quelle": "doku.md"}],
+        [{"question": "", "answer": ""}],
+    ]
+    for verlauf in zu_viel:
+        antwort = client.post(adresse, json={"question": "Und danach?", "history": verlauf})
+        assert antwort.status_code == 422, verlauf
+    assert llm.calls == [] and umformer.calls == []
+
+    grenze = [_runde(frage="q" * 2000, antwort="a" * 2000)] * 3
+    antwort = client.post(adresse, json={"question": "Und danach?", "history": grenze})
+    assert antwort.status_code == 200
+    assert len(umformer.calls) == 1
+    assert len(llm.calls) == 1
+
+
+def test_anfrage_ohne_verlauf_wie_heute(umgebung: tuple[Settings, E5Embeddings]) -> None:
+    """Pflichttest. Eine Anfrage ohne das neue Feld bekommt 200, mit genau einem
+    Modellaufruf und ohne Umformer. Ein Browser mit einer alten Seite bricht
+    nicht."""
+    umformer = FakeUmformer("darf nie kommen")
+    client, llm = _client(umgebung, umformer=umformer)
+
+    antwort = client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Wie lange gilt die RMA?"})
+
+    assert antwort.status_code == 200
+    assert len(llm.calls) == 1
+    assert umformer.calls == []
+    daten = antwort.json()
+    assert daten["history_turns"] == 0
+    assert daten["standalone_question"] is None
+    assert daten["rewrite_status"] == "keine"
+
+    # Ein leerer Verlauf ist dasselbe wie keiner.
+    antwort = client.post(
+        f"/t/{ACME_TOKEN}/chat", json={"question": "Wie lange gilt die RMA?", "history": []}
+    )
+    assert antwort.status_code == 200
+    assert umformer.calls == []
+
+
+MARKER_GESPRAECH = {
+    "frage": "MARKER-FOLGEFRAGE-8K2P",
+    "verlauf_frage": "MARKER-VERLAUFSFRAGE-3H9D",
+    "verlauf_antwort": "MARKER-VERLAUFSANTWORT-6T1W",
+    "eigenstaendig": "MARKER-EIGENSTAENDIG-5N4X",
+    "antwort": "MARKER-ANTWORT-2R7C",
+}
+
+
+def test_kein_text_in_einem_ereignis(
+    umgebung: tuple[Settings, E5Embeddings], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Pflichttest. Frage, Antwort, Verlauf und eigenstaendige Frage stehen in
+    keinem Ereignis, je mit einem eigenen Marker geprueft. Gegenproben: Das
+    Ereignis chat ist da, mit tenant_id, verlauf_runden 2 und umformung
+    "umgeformt", und die eigenstaendige Frage kommt in der Antwort an."""
+    m = MARKER_GESPRAECH
+    umformer = FakeUmformer(f"Wie lange gilt die RMA? {m['eigenstaendig']}")
+    llm = FakeLlm(parsed=gute_antwort(f"21 Kalendertage. {m['antwort']}"))
+    client, _ = _client(umgebung, llm=llm, umformer=umformer)
+    verlauf = [
+        _runde(f"Was ist eine RMA? {m['verlauf_frage']}", f"Eine Nummer. {m['verlauf_antwort']}"),
+        _runde("Brauche ich sie?", ""),
+    ]
+
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(
+            f"/t/{ACME_TOKEN}/chat",
+            json={"question": f"Und wie lange? {m['frage']}", "history": verlauf},
+        )
+
+    assert antwort.status_code == 200
+    daten = antwort.json()
+    assert m["eigenstaendig"] in daten["standalone_question"]
+    assert m["antwort"] in daten["text"]
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert log, "Kein Logeintrag - der Test waere sonst blind."
+    for name, marker in m.items():
+        assert marker not in log, name
+    chats = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
+    assert len(chats) == 1
+    assert chats[0]["tenant_id"] == "demo-acme"
+    assert chats[0]["verlauf_runden"] == 2
+    assert chats[0]["umformung"] == "umgeformt"
+    assert chats[0]["umformung_prompt_tokens"] == 211
+    assert "umformung_grund" not in chats[0]
+    # Jedes Feld des Ereignisses ist eine Zahl, ein Wahrheitswert, None oder
+    # ein kurzer fester Code - nie ein Satz.
+    for feld, wert in chats[0].items():
+        assert wert is None or isinstance(wert, (int, float, bool)) or " " not in str(wert), feld
+
+
+@pytest.mark.parametrize(
+    ("umformer", "grund"),
+    [
+        (FakeUmformer(None), "parsefehler"),
+        (FakeUmformer(fehler=LlmAnfrageAbgelehnt("inhaltsfilter")), "abgelehnt"),
+    ],
+)
+def test_verworfene_umformung_steht_im_ereignis(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    umformer: FakeUmformer,
+    grund: str,
+) -> None:
+    """Eine verworfene Umformung ergibt 200 mit der getippten Frage, und das
+    Ereignis traegt umformung "verworfen" und den Grund als festen Code."""
+    client, llm = _client(umgebung, umformer=umformer)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(
+            f"/t/{ACME_TOKEN}/chat", json={"question": "Und danach?", "history": [_runde()]}
+        )
+    assert antwort.status_code == 200
+    assert antwort.json()["standalone_question"] is None
+    assert llm.calls[0][1].endswith("Frage: Und danach?")
+    chats = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
+    assert chats[0]["umformung"] == "verworfen"
+    assert chats[0]["umformung_grund"] == grund
+
+
+def test_umformer_nicht_erreichbar_wird_503(
+    umgebung: tuple[Settings, E5Embeddings], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Wie ein Ausfall bei der Antwort, fuer den ersten der beiden Aufrufe: 503
+    mit dem eigenen Text, das Ereignis traegt aufruf "umformung", und das
+    Antwortmodell wird nicht gerufen."""
+    umformer = FakeUmformer(fehler=LlmNichtErreichbar("zeitlimit"))
+    client, llm = _client(umgebung, umformer=umformer)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(
+            f"/t/{ACME_TOKEN}/chat",
+            json={"question": f"{MARKER_FRAGE} Und danach?", "history": [_runde()]},
+        )
+    assert antwort.status_code == 503
+    assert antwort.json()["detail"] == TEXTE["de"].anbieter_nicht_erreichbar
+    assert len(umformer.calls) == 1
+    assert llm.calls == []
+    abbrueche = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat_abgebrochen"]
+    assert len(abbrueche) == 1
+    assert abbrueche[0]["aufruf"] == "umformung"
+    assert abbrueche[0]["grund"] == "zeitlimit"
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert MARKER_FRAGE not in log
+
+
+@pytest.mark.parametrize(
+    ("token", "sprache"),
+    [(ACME_TOKEN, "de"), (ENGLISCH_TOKEN, "en")],
+)
+def test_seite_traegt_den_knopf_fuer_ein_neues_gespraech(
+    umgebung: tuple[Settings, E5Embeddings], token: str, sprache: str
+) -> None:
+    """Der Knopf steht in der Seite, in der Sprache des Mandanten. Der Text fuer
+    "Verstanden als" geht mit den Browsertexten hinaus."""
+    client, _ = _client(umgebung)
+    seite = _seite(client, token)
+    knopf = html.escape(TEXTE[sprache].neues_gespraech)
+    assert f'<button type="button" id="neues-gespraech">{knopf}</button>' in seite
+    assert "verstanden_als" in JAVASCRIPT_SCHLUESSEL
+    assert json.dumps(TEXTE[sprache].verstanden_als, ensure_ascii=False) in seite

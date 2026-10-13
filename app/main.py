@@ -49,7 +49,8 @@ from app.config import Settings
 from app.dokumentseite import INHALTSRICHTLINIE, dokumentseite_bauen
 from app.embeddings import E5Embeddings, get_embeddings
 from app.ingest import DOC_PATTERN
-from app.llm import LlmAnfrageAbgelehnt, LlmClient, LlmNichtErreichbar
+from app.llm import LlmAnfrageAbgelehnt, LlmClient, LlmNichtErreichbar, Umformer
+from app.prompts import Runde
 from app.rag import Answer, answer
 from app.ratelimit import RateLimiter
 from app.tenants import (
@@ -252,6 +253,12 @@ class ChatAnfrage(BaseModel):
 
     question: str = Field(min_length=1, max_length=2000)
     response_language: str | None = Field(default=None, max_length=16)
+    # Die frueheren Runden des Gespraechs, hoechstens drei. Sie liegen nur im
+    # Browser und kommen mit jeder Anfrage; der Server haelt nichts davon. Fehlt
+    # das Feld, ist der Verlauf leer, und alles laeuft wie ohne Gespraech: Ein
+    # Browser mit einer alten Seite bricht nicht. Mehr als drei Runden ergeben
+    # 422, statt still die aeltesten wegzulassen.
+    history: list[Runde] = Field(default_factory=list, max_length=3)
 
 
 def create_app(
@@ -260,11 +267,13 @@ def create_app(
     llm: LlmClient | None = None,
     embeddings: E5Embeddings | None = None,
     rate_limit: int = 30,
+    umformer: Umformer | None = None,
 ) -> FastAPI:
     """Baut die Anwendung.
 
-    `llm` und `embeddings` sind Einspeisepunkte fuer Tests. Bleiben sie None,
-    loest answer() sie selbst aus den Settings auf - die Produktionsvariante.
+    `llm`, `umformer` und `embeddings` sind Einspeisepunkte fuer Tests. Bleiben
+    sie None, loest answer() sie selbst aus den Settings auf - die
+    Produktionsvariante.
     """
     aktive_settings = settings or Settings()
 
@@ -309,6 +318,7 @@ def create_app(
     app.state.limiter = RateLimiter(max_requests=rate_limit, window_seconds=60.0)
     app.state.settings = aktive_settings
     app.state.llm = llm
+    app.state.umformer = umformer
     app.state.embeddings = embeddings
 
     # docs_url/redoc_url/openapi_url sind abgeschaltet: Ein Schema-Endpunkt
@@ -414,6 +424,7 @@ def create_app(
             "{{frage_platzhalter}}": html.escape(texte.frage_platzhalter),
             "{{senden}}": html.escape(texte.senden),
             "{{fusszeile}}": html.escape(texte.fusszeile),
+            "{{neues_gespraech}}": html.escape(texte.neues_gespraech),
             "{{url_token}}": html.escape(url_token),
             "{{topics}}": html.escape(tenant.topics.strip()),
             # Steht im <script>-Element und wird deshalb anders maskiert.
@@ -552,12 +563,17 @@ def create_app(
                 settings=aktive_settings,
                 llm=app.state.llm,
                 embeddings=app.state.embeddings,
+                history=anfrage.history,
+                umformer=app.state.umformer,
             )
         except LlmNichtErreichbar as fehler:
+            # `aufruf` sagt, welcher der beiden Aufrufe gescheitert ist:
+            # "antwort" oder, bei einer Folgefrage, "umformung".
             _ereignis(
                 "chat_abgebrochen",
                 tenant.slug,
                 grund=fehler.grund,
+                aufruf=fehler.aufruf,
                 gesamt_ms=int((time.monotonic() - begonnen) * 1000),
             )
             raise HTTPException(
@@ -569,6 +585,7 @@ def create_app(
                 "chat_abgebrochen",
                 tenant.slug,
                 grund=fehler.grund,
+                aufruf=fehler.aufruf,
                 gesamt_ms=int((time.monotonic() - begonnen) * 1000),
             )
             raise HTTPException(
@@ -577,7 +594,19 @@ def create_app(
             ) from None
         gesamt_ms = int((time.monotonic() - begonnen) * 1000)
 
-        # Kein Fragetext, kein Antworttext, keine Quellnamen im Log.
+        # Kein Fragetext, kein Antworttext, keine Quellnamen im Log. Aus dem
+        # Gespraech nur Zahlen und feste Codes: weder der Verlauf noch die
+        # eigenstaendige Frage.
+        gespraech: dict[str, object] = {
+            "verlauf_runden": ergebnis.history_turns,
+            "umformung": ergebnis.rewrite_status,
+            "umformung_ms": ergebnis.latency_ms_rewrite,
+            "umformung_prompt_tokens": ergebnis.rewrite_prompt_tokens,
+            "umformung_completion_tokens": ergebnis.rewrite_completion_tokens,
+            "umformung_modell": ergebnis.rewrite_model,
+        }
+        if ergebnis.rewrite_reason is not None:
+            gespraech["umformung_grund"] = ergebnis.rewrite_reason
         _ereignis(
             "chat",
             tenant.slug,
@@ -591,6 +620,7 @@ def create_app(
             completion_tokens=ergebnis.completion_tokens,
             model=ergebnis.model,
             gesamt_ms=gesamt_ms,
+            **gespraech,
         )
         return ergebnis
 

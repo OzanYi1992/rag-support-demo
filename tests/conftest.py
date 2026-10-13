@@ -96,6 +96,40 @@ class FakeLlm:
         )
 
 
+class FakeUmformer:
+    """Umformer-Ersatz ohne Netz, fuer Folgefragen.
+
+    Liefert eine feste eigenstaendige Frage, oder None wie bei einem
+    Parsefehler, oder wirft `fehler`. Zeichnet jeden Aufruf auf: Ob die
+    Umformung ueberhaupt lief, laesst sich nur ueber `calls` pruefen.
+    """
+
+    def __init__(
+        self,
+        frage: str | None = None,
+        fehler: Exception | None = None,
+        model: str = "fake-model-2026",
+    ) -> None:
+        self._frage = frage
+        self._fehler = fehler
+        self._model = model
+        self.calls: list[tuple[str, str]] = []
+
+    def umformen(self, system_prompt: str, user_prompt: str) -> object:
+        from app.llm import UmformungsErgebnis
+
+        self.calls.append((system_prompt, user_prompt))
+        if self._fehler is not None:
+            raise self._fehler
+        return UmformungsErgebnis(
+            frage=self._frage,
+            parsing_error=None if self._frage is not None else "kein JSON",
+            prompt_tokens=211,
+            completion_tokens=17,
+            model=self._model,
+        )
+
+
 # Eskalationsnachrichten je Sprache. Der Default haengt an `language`, weil ein
 # Mandant mit `language: en` und einer deutschen Nachricht seit EN-2 beim Laden
 # abgewiesen wird - zu Recht. Ein fester deutscher Default haette jeden
