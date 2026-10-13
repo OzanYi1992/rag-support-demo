@@ -34,6 +34,8 @@ from eval.run import (
     _kontrolle_fahren,
     aggregiere,
     cloud_antwort,
+    eine_frage,
+    latenz_p95,
     main,
     pruefe_goldsatz,
     pruefe_kopf,
@@ -531,3 +533,117 @@ def test_cloud_ziel_ohne_revision_ist_moeglich_aber_leer() -> None:
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
     assert CloudZiel("https://x.invalid", "sha256:abc", client).revision is None
     client.close()
+
+
+# --- jeder Lauf mit seinem Antworttext ----------------------------------------
+
+
+def _antwort(text: str, eskaliert: bool, lang: str, kind: str = "rag") -> object:
+    from app.rag import Answer
+
+    return Answer(
+        text=text,
+        sources=[],
+        source_scores=[],
+        escalated=eskaliert,
+        escalation_reason="not_grounded" if eskaliert else None,
+        escalation_metric=None,
+        retrieval_scores=[0.9],
+        latency_ms_retrieval=3,
+        latency_ms_generation=50,
+        prompt_tokens=100,
+        completion_tokens=10,
+        model="fake-model-2026",
+        lang=lang,
+        kind=kind,
+    )
+
+
+def test_jeder_lauf_steht_mit_seinem_antworttext_in_der_datei(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drei Laeufe, drei Eintraege, je mit Text, Eskalation, Grund, Sprache und Art.
+
+    Die Einzelfelder tragen weiter den ersten Lauf, wie bisher. Gerade die
+    Antwort aus Lauf 2 stand vorher nirgends.
+    """
+    antworten = iter(
+        [
+            _antwort("Our return window is 30 days.", False, "en"),
+            _antwort("Dazu finde ich nichts.", True, "en"),
+            _antwort("Die Frist betraegt 30 Tage, die Rueckgabe ist kostenlos.", False, "de"),
+        ]
+    )
+    monkeypatch.setattr("eval.run.answer", lambda *a, **k: next(antworten))
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({"Frage?": [("a.md", "eine Stelle")]}))
+    eintrag = {
+        "id": "test-01",
+        "kategorie": "direkt",
+        "frage": "Frage?",
+        "erwartete_quelle": "a.md",
+        "erwartete_textstelle": "eine Stelle",
+        "erwartet_eskalation": False,
+    }
+
+    erg = eine_frage("demo-test", eintrag, None, 2, 10, nur_retrieval=False, laeufe=3)  # type: ignore[arg-type]
+
+    assert [e["lauf"] for e in erg.laeufe_einzeln] == [1, 2, 3]
+    assert [e["antworttext"] for e in erg.laeufe_einzeln] == [
+        "Our return window is 30 days.",
+        "Dazu finde ich nichts.",
+        "Die Frist betraegt 30 Tage, die Rueckgabe ist kostenlos.",
+    ]
+    assert [e["eskaliert"] for e in erg.laeufe_einzeln] == [False, True, False]
+    assert [e["grund"] for e in erg.laeufe_einzeln] == [None, "not_grounded", None]
+    assert [e["lang"] for e in erg.laeufe_einzeln] == ["en", "en", "de"]
+    assert [e["kind"] for e in erg.laeufe_einzeln] == ["rag", "rag", "rag"]
+    # Die geratene Sprache nur fuer beantwortete Laeufe, wie bisher.
+    assert [e["sprache_der_antwort"] for e in erg.laeufe_einzeln] == ["en", None, "de"]
+    # Die bisherigen Felder bleiben die des ersten Laufs.
+    assert erg.antworttext == "Our return window is 30 days."
+    assert erg.eskaliert is False
+    assert erg.eskaliert_anzahl == 1
+
+
+def test_ein_reiner_retrievallauf_hat_keine_eintraege(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({"Frage?": [("a.md", "x")]}))
+    eintrag = {
+        "id": "t",
+        "kategorie": "direkt",
+        "frage": "Frage?",
+        "erwartete_quelle": "a.md",
+        "erwartete_textstelle": None,
+        "erwartet_eskalation": False,
+    }
+    erg = eine_frage("demo-test", eintrag, None, 2, 10, nur_retrieval=True)  # type: ignore[arg-type]
+    assert erg.laeufe_einzeln == []
+
+
+# --- p95 nach dem naechsten Rang ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("werte", "p95"),
+    [
+        ([1200, 900], 1200),
+        (list(range(1, 21)), 19),
+        (list(range(20, 0, -1)), 19),
+        ([742], 742),
+        ([], None),
+    ],
+)
+def test_latenz_p95_nach_dem_naechsten_rang(werte: list[int], p95: int | None) -> None:
+    """Rang = 0,95 * n aufgerundet. Bei zwei Werten der groessere, bei 1 bis 20
+    die 19, bei einem Wert dieser Wert."""
+    assert latenz_p95(werte) == p95
+
+
+def test_aggregiere_traegt_das_p95_nach_dem_naechsten_rang() -> None:
+    """Zwei Fragen einer Kategorie: Das p95 ist die langsamere, nie unter dem p50."""
+    schnell = _frage(id="a", latenz_retrieval_ms=100, latenz_generierung_ms=1200)
+    langsam = _frage(id="b", latenz_retrieval_ms=100, latenz_generierung_ms=1700)
+    aus = aggregiere([schnell, langsam], top_k=2, preise={}, modell=None)["direkt"]
+    assert aus["latenz_p95_ms"] == 1800
+    assert aus["latenz_p95_ms"] >= aus["latenz_p50_ms"]

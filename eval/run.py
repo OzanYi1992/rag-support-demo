@@ -228,6 +228,17 @@ class Frageergebnis:
     sprache_bewertbar_anzahl: int | None = None
     antwortlaengen: list[int] = field(default_factory=list)
 
+    # Jeder Lauf als eigener Eintrag, mit seinem Antworttext. Die Einzelfelder
+    # oben tragen nur den ersten Lauf; bei einer Frage, die in zwei von fuenf
+    # Laeufen antwortet, stand so oft gerade die Antwort nicht in der Datei, die
+    # man lesen muesste. Die Felder oben bleiben, wie sie sind, damit aeltere
+    # Ergebnisdateien vergleichbar bleiben.
+    #
+    # Jeder Eintrag traegt Text aus dem Korpus des Mandanten. Vor einem Commit
+    # gilt deshalb dasselbe wie fuer `antworttext`: Bei einem Mandanten mit
+    # echten Inhalten gehoert die Datei nicht ins oeffentliche Repo.
+    laeufe_einzeln: list[dict[str, Any]] = field(default_factory=list)
+
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
     score_abweichung_max: float | None = None
@@ -560,6 +571,8 @@ def eine_frage(
             grund = daten["escalation_reason"]
             antworttext = daten["text"]
             lang = None
+            # Eine Instanz vor der Einfuehrung von kind liefert das Feld nicht.
+            kind = daten.get("kind")
             scorelisten.append(list(daten["retrieval_scores"]))
             if lauf_nr == 0:
                 erg.latenz_retrieval_ms = daten["latency_ms_retrieval"]
@@ -576,6 +589,7 @@ def eine_frage(
             grund = antwort.escalation_reason
             antworttext = antwort.text
             lang = antwort.lang
+            kind = antwort.kind
             scorelisten.append(list(antwort.retrieval_scores))
             if lauf_nr == 0:
                 erg.latenz_retrieval_ms = antwort.latency_ms_retrieval
@@ -588,6 +602,7 @@ def eine_frage(
 
         # Die Antwortsprache je Lauf. Eskalationstexte bleiben aussen vor: Sie
         # sind der Text des Mandanten und folgen dessen Sprache, nicht der Frage.
+        gesprochen = None
         if not eskaliert and antworttext:
             erg.antwortlaengen.append(len(antworttext))
             gesprochen = _rate_sprache(antworttext)
@@ -597,6 +612,18 @@ def eine_frage(
             if gesprochen and gefragt:
                 bewertbar += 1
                 folgt += int(gesprochen == gefragt)
+
+        erg.laeufe_einzeln.append(
+            {
+                "lauf": lauf_nr + 1,
+                "kind": kind,
+                "eskaliert": bool(eskaliert),
+                "grund": grund,
+                "lang": lang,
+                "sprache_der_antwort": gesprochen,
+                "antworttext": antworttext,
+            }
+        )
 
         # Der ERSTE Lauf fuellt die Einzelfelder. Damit bleibt ein Bericht mit
         # laeufe=1 genau der von vorher.
@@ -658,6 +685,22 @@ def _sprache_pruefen(erg: Frageergebnis) -> None:
     erg.sprache_der_antwort = _rate_sprache(erg.antworttext)
     if erg.sprache_der_frage and erg.sprache_der_antwort:
         erg.sprache_folgt_frage = erg.sprache_der_frage == erg.sprache_der_antwort
+
+
+def latenz_p95(latenzen: list[int]) -> int | None:
+    """Das 95. Perzentil nach der Methode des naechsten Rangs.
+
+    Rang = 0,95 * n, aufgerundet; der Wert an diesem Rang der sortierten Liste.
+    Bei zwei Werten ist das der groessere, bei einem Wert dieser Wert. Gerechnet
+    in ganzen Zahlen, damit keine Gleitkommarundung den Rang verschieben kann.
+
+    Die fruehere Formel nahm `int(n * 0,95) - 1` als Index und lieferte bei zwei
+    Werten den kleineren: ein p95 unter dem p50.
+    """
+    if not latenzen:
+        return None
+    rang = (95 * len(latenzen) + 99) // 100
+    return round(sorted(latenzen)[rang - 1])
 
 
 def aggregiere(
@@ -783,9 +826,7 @@ def aggregiere(
                 if any(e.abweichungsklasse == k for e in gruppe)
             },
             "latenz_p50_ms": round(statistics.median(latenzen)) if latenzen else None,
-            "latenz_p95_ms": (
-                round(sorted(latenzen)[max(0, int(len(latenzen) * 0.95) - 1)]) if latenzen else None
-            ),
+            "latenz_p95_ms": latenz_p95(latenzen),
             "kosten_je_frage_usd": (round(statistics.fmean(kosten), 6) if kosten else None),
         }
         if kategorie == "cross_lingual":
