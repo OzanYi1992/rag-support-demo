@@ -445,3 +445,26 @@ def test_assistant_documents_gueltige_namen_und_voreinstellung() -> None:
     assert _mit_assistentendokumenten([]).assistant_documents == []
     with pytest.raises(ValidationError):
         _mit_assistentendokumenten(["a.md", "a.md"])
+
+
+def test_demomandanten_haben_ein_eindeutiges_assistentendokument(demo_tenants_dir: Path) -> None:
+    """Jeder Demomandant nennt genau ein Dokument ueber den Assistenten, es liegt
+    in seinem Korpus, und kein Dateiname kommt bei zwei Mandanten vor.
+
+    Das Letzte ist die Vorbedingung des Trennungsnachweises auf der
+    Dokumentebene: Ein Name, den zwei Mandanten tragen, liesse sich ueber die
+    Dokumentroute nicht mehr eindeutig einem Mandanten zuordnen.
+    """
+    namen_je_mandant: dict[str, set[str]] = {}
+    for slug in ("demo-acme", "demo-fellgate", "demo-nordwind"):
+        mandant = load_tenant(slug, demo_tenants_dir)
+        dateien = {p.name for p in (demo_tenants_dir / slug / "docs").glob("*.md")}
+        assert len(mandant.assistant_documents) == 1, slug
+        assert mandant.assistant_documents[0] in dateien, slug
+        namen_je_mandant[slug] = dateien
+
+    alle = [name for namen in namen_je_mandant.values() for name in namen]
+    doppelt = sorted({name for name in alle if alle.count(name) > 1})
+    assert doppelt == []
+    # Gegenprobe: Die Zaehlung ist nicht leer gelaufen.
+    assert len(alle) == 24

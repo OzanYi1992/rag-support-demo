@@ -16,8 +16,8 @@
 
 mandant: demo-acme
 stand: 2026-08-17
-korpus_dateien: 6
-korpus_chunks: 25
+korpus_dateien: 7
+korpus_chunks: 26
 
 fragen:
 

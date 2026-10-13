@@ -17,8 +17,8 @@
 
 mandant: demo-nordwind
 stand: 2026-08-17
-korpus_dateien: 5
-korpus_chunks: 20
+korpus_dateien: 6
+korpus_chunks: 21
 
 fragen:
 

@@ -40,8 +40,8 @@
 
 mandant: demo-fellgate
 stand: 2026-10-02
-korpus_dateien: 10
-korpus_chunks: 40
+korpus_dateien: 11
+korpus_chunks: 41
 
 fragen:
 

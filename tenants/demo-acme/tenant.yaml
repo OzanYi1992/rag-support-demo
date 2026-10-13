@@ -51,3 +51,10 @@ retrieval_top_k: 6
 url_token: "demo-acme-oeffentlich-7f3a91c4e2"
 
 public_image_allowed: true
+
+# Das Dokument, das den Assistenten selbst beschreibt. Es steht im Index wie
+# jedes andere, damit eine Frage wie "Wobei koennen Sie helfen?" einen Beleg
+# hat, wird aber nie als Quelle ausgewiesen: nicht unter der Antwort und nicht
+# im Antworttext. Der Name ist ueber die drei Demomandanten eindeutig.
+assistant_documents:
+  - ueber-den-acme-assistenten.md

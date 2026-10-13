@@ -66,3 +66,10 @@ retrieval_top_k: 6
 url_token: d87hbtOOvupTpJcbDIlZ4oqIX6dsKVoI
 
 public_image_allowed: true
+
+# Das Dokument, das den Assistenten selbst beschreibt. Es steht im Index wie
+# jedes andere, damit eine Frage wie "Wobei koennen Sie helfen?" einen Beleg
+# hat, wird aber nie als Quelle ausgewiesen: nicht unter der Antwort und nicht
+# im Antworttext. Der Name ist ueber die drei Demomandanten eindeutig.
+assistant_documents:
+  - about-this-assistant.md
