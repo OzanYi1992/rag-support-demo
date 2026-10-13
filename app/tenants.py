@@ -97,6 +97,42 @@ class TenantConfig(BaseModel):
     # nachgebaut wird - siehe dort.
     public_image_allowed: bool = False
 
+    # Dokumente im Korpus, die den Assistenten selbst beschreiben: dass ein
+    # KI-System antwortet, nur aus den Unterlagen, und zu welchen Themen. Sie
+    # stehen im Index wie jedes andere Dokument, damit eine Frage wie "Wobei
+    # koennen Sie helfen?" einen Beleg hat, werden aber nie als Quelle
+    # ausgewiesen: nicht unter der Antwort und nicht im Antworttext.
+    #
+    # Nur Dateinamen, keine Pfade. Der Ingest bricht ab, wenn ein genanntes
+    # Dokument nicht im Korpus liegt. Leer ist die Voreinstellung und heisst:
+    # Jede Quelle wird ausgewiesen wie bisher.
+    assistant_documents: list[str] = Field(default_factory=list)
+
+    @field_validator("assistant_documents")
+    @classmethod
+    def _nur_markdown_dateinamen(cls, werte: list[str]) -> list[str]:
+        """Nur ein Dateiname auf .md, ohne Pfadtrenner und ohne "..".
+
+        Der Name wird nie zu einem Pfad zusammengesetzt; geprueft wird
+        trotzdem, damit ein Tippfehler beim Laden auffaellt und nicht als
+        Quelle, die still durchrutscht.
+        """
+        for wert in werte:
+            if (
+                not wert.endswith(".md")
+                or len(wert) <= len(".md")
+                or "/" in wert
+                or "\\" in wert
+                or ".." in wert
+                or wert != wert.strip()
+            ):
+                raise ValueError(
+                    f"assistant_documents: {wert!r} ist kein Dateiname auf .md ohne Pfadtrenner."
+                )
+        if len(set(werte)) != len(werte):
+            raise ValueError("assistant_documents nennt einen Namen doppelt.")
+        return werte
+
     @field_validator("language")
     @classmethod
     def _nur_sprachen_mit_textkatalog(cls, wert: str) -> str:

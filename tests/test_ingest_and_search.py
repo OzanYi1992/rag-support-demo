@@ -319,3 +319,45 @@ def test_fremdes_merkmal_liefert_keinen_fremden_treffer(
         "demo-nordwind", "RMA-Nummer Ruecksendung", k=10, settings=settings, embeddings=embeddings
     )
     assert all(t.tenant_slug == "demo-nordwind" for t in treffer)
+
+
+# --- Dokumente ueber den Assistenten ---------------------------------------
+
+
+def _mit_assistentendokument(root: Path, namen: list[str]) -> None:
+    """Traegt assistant_documents in die tenant.yaml von demo-acme ein."""
+    pfad = root / "demo-acme" / "tenant.yaml"
+    daten = yaml.safe_load(pfad.read_text(encoding="utf-8"))
+    daten["assistant_documents"] = namen
+    pfad.write_text(yaml.safe_dump(daten, allow_unicode=True), encoding="utf-8")
+
+
+def test_ingest_bricht_ab_wenn_ein_assistentendokument_fehlt(tmp_path: Path) -> None:
+    """Ein Name ohne Datei laesst den Ingest scheitern, statt dass er still durchlaeuft.
+
+    Sonst haette der Filter nichts zu filtern, und ein Tippfehler im Namen fiele
+    erst auf, wenn die Datei doch einmal unter einer Antwort steht. Gegenprobe:
+    Liegt die Datei im Korpus, laeuft derselbe Ingest durch.
+    """
+    tenants_root = tmp_path / "tenants"
+    tenants_root.mkdir()
+    _lege_mandant_an(tenants_root, "demo-acme", ACME_TEXT, "acme-token-1234567890")
+    _mit_assistentendokument(tenants_root, ["ueber-den-assistenten.md"])
+    settings = Settings(
+        openai_api_key="platzhalter",
+        openai_model="platzhalter",
+        tenants_dir=tenants_root,
+        index_dir=tmp_path / "index",
+        embedding_dimension=FAKE_DIMENSION,
+    )
+    embeddings = E5Embeddings(FakeBackend(), expected_dimension=FAKE_DIMENSION)
+
+    with pytest.raises(ValueError, match="ueber-den-assistenten.md"):
+        ingest_tenant("demo-acme", settings=settings, embeddings=embeddings)
+    assert not (tmp_path / "index" / "demo-acme").exists()
+
+    (tenants_root / "demo-acme" / "docs" / "ueber-den-assistenten.md").write_text(
+        "# Ueber den Assistenten\n\nDieser Assistent ist ein KI-System.\n", encoding="utf-8"
+    )
+    bericht = ingest_tenant("demo-acme", settings=settings, embeddings=embeddings)
+    assert bericht.files == 2

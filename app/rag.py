@@ -35,6 +35,7 @@ from app.texts import (
     kurzformel_erkennen,
     texte_fuer,
 )
+from app.verweis import assistentenverweise_entfernen, ist_assistentendokument
 
 REASON_NOT_GROUNDED = "not_grounded"
 REASON_UNPARSEABLE = "generation_unparseable"
@@ -90,6 +91,11 @@ class Answer(BaseModel):
     # Quellen haengt sie nichts an, ohne Eskalation zeigt sie keinen Kasten.
     kind: str = ART_RAG
 
+    # Wie viele Verweise auf ein Dokument ueber den Assistenten aus dem
+    # Antworttext genommen oder durch seinen Titel ersetzt wurden. Eine Zahl,
+    # kein Text: Sie geht ins Ereignis.
+    removed_references: int = 0
+
 
 def _eskaliert(
     tenant: TenantConfig,
@@ -127,7 +133,9 @@ def _eskaliert(
 
 
 def _quellen_verdichten(
-    genannt: list[str], treffer: list[SearchHit]
+    genannt: list[str],
+    treffer: list[SearchHit],
+    ausgenommen: list[str] | tuple[str, ...] = (),
 ) -> tuple[list[str], list[float | None]]:
     """Eine Datei, ein Eintrag - mit dem besten Score der Chunks dieser Datei.
 
@@ -147,6 +155,11 @@ def _quellen_verdichten(
     Nennt das Modell eine Datei, die im Kontext nicht vorkam, bleibt der Score
     None. Der Eintrag wird NICHT entfernt: Eine erfundene Quelle ist ein Befund
     und gehoert sichtbar, nicht stillschweigend weggeraeumt.
+
+    `ausgenommen` sind die Dokumente ueber den Assistenten aus der tenant.yaml
+    des Mandanten. Sie werden nie als Quelle ausgewiesen, mit und ohne .md und
+    ohne Ruecksicht auf Gross- und Kleinschreibung. Gefiltert werden nur diese
+    Namen; eine erfundene Quelle bleibt sichtbar wie oben.
     """
     beste: dict[str, float] = {}
     for hit in treffer:
@@ -158,6 +171,8 @@ def _quellen_verdichten(
     for name in genannt:
         saubere = name.strip()
         if not saubere or saubere in quellen:
+            continue
+        if ausgenommen and ist_assistentendokument(saubere, ausgenommen):
             continue
         quellen.append(saubere)
         scores.append(beste.get(saubere))
@@ -318,9 +333,16 @@ def answer(
             lang=ergebnis.parsed.language,
         )
 
-    quellen, quellscores = _quellen_verdichten(ergebnis.parsed.sources, treffer)
+    quellen, quellscores = _quellen_verdichten(
+        ergebnis.parsed.sources, treffer, ausgenommen=tenant.assistant_documents
+    )
+    # Nach beiden Toren und nur hier: Eine Eskalation traegt den Text des
+    # Mandanten, keinen Modelltext.
+    text, entfernt = assistentenverweise_entfernen(
+        tenant_id, tenant, ergebnis.parsed.answer, ergebnis.parsed.language
+    )
     return Answer(
-        text=ergebnis.parsed.answer,
+        text=text,
         sources=quellen,
         source_scores=quellscores,
         escalated=False,
@@ -333,4 +355,5 @@ def answer(
         completion_tokens=ergebnis.completion_tokens,
         model=ergebnis.model,
         lang=ergebnis.parsed.language,
+        removed_references=entfernt,
     )

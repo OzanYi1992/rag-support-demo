@@ -166,6 +166,19 @@ def ingest_tenant(
             f"Ein leerer Index wuerde jede Frage eskalieren lassen."
         )
 
+    # Ein Dokument ueber den Assistenten, das die tenant.yaml nennt, muss im
+    # Korpus liegen. Fehlt es, liefe der Ingest sonst durch, und der Filter
+    # haette nichts zu filtern: Ein Tippfehler im Namen fiele erst auf, wenn
+    # die Datei doch einmal unter einer Antwort steht.
+    vorhanden = {name for name, _ in documents}
+    fehlend = sorted(set(tenant.assistant_documents) - vorhanden)
+    if fehlend:
+        raise ValueError(
+            f"Mandant {tenant_id!r}: assistant_documents nennt {', '.join(fehlend)}, "
+            f"aber diese Dateien liegen nicht unter "
+            f"{Path(aktive_settings.tenants_dir) / tenant_id / DOCS_SUBDIR}."
+        )
+
     # Geteilter Embedder je Prozess (ADR-020).
     aktive_embeddings = embeddings if embeddings is not None else get_embeddings(aktive_settings)
 

@@ -1436,3 +1436,22 @@ def test_begruessung_zaehlt_im_limit(umgebung: tuple[Settings, E5Embeddings]) ->
         assert client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Hallo"}).status_code == 200
     assert client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "Hallo"}).status_code == 429
     assert llm.calls == []
+
+
+def test_verweise_entfernt_steht_im_ereignis_als_zahl(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Das Ereignis chat traegt verweise_entfernt als Zahl, nie als Text.
+
+    Ohne Dokument ueber den Assistenten ist sie 0, und der Antworttext steht
+    nicht im Ereignis.
+    """
+    client, _ = _client(umgebung)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(f"/t/{ACME_TOKEN}/chat", json={"question": "RMA?"})
+
+    assert antwort.json()["removed_references"] == 0
+    chats = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
+    assert chats[0]["verweise_entfernt"] == 0
+    assert isinstance(chats[0]["verweise_entfernt"], int)

@@ -400,3 +400,48 @@ def test_alle_demomandanten_tragen_themen_in_ihrer_sprache(demo_tenants_dir: Pat
         mandant = load_tenant(slug, demo_tenants_dir)
         assert mandant.topics.strip(), slug
         assert passt_zur_sprache(mandant.topics, mandant.language) is None, slug
+
+
+# --- Dokumente ueber den Assistenten ---------------------------------------
+
+
+def _mit_assistentendokumenten(namen: list[str]) -> TenantConfig:
+    return TenantConfig(
+        slug="demo-x",
+        display_name="X",
+        topics="Versand und Retouren",
+        escalation_message="Dazu finde ich nichts.",
+        url_token="x-token-1234567890123",
+        assistant_documents=namen,
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../ueber.md",
+        "docs/ueber.md",
+        "docs\\ueber.md",
+        "..md",
+        "ueber..md",
+        "ueber.txt",
+        "ueber.MD",
+        ".md",
+        " ueber.md",
+        "",
+    ],
+)
+def test_assistant_documents_werden_beim_laden_geprueft(name: str) -> None:
+    """Pfadtrenner, "..", eine andere Endung als .md und Leerraum werden abgewiesen."""
+    with pytest.raises(ValidationError):
+        _mit_assistentendokumenten([name])
+
+
+def test_assistant_documents_gueltige_namen_und_voreinstellung() -> None:
+    """Gegenprobe: ein gewoehnlicher Dateiname geht, ohne Angabe ist die Liste leer."""
+    assert _mit_assistentendokumenten(["ueber-den-assistenten.md"]).assistant_documents == [
+        "ueber-den-assistenten.md"
+    ]
+    assert _mit_assistentendokumenten([]).assistant_documents == []
+    with pytest.raises(ValidationError):
+        _mit_assistentendokumenten(["a.md", "a.md"])

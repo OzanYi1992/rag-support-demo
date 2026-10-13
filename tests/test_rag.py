@@ -1037,3 +1037,113 @@ def test_die_antwort_auf_eine_kurzformel_prueft_den_mandanten(
     with pytest.raises(ValueError):
         kurzformel_beantworten("demo-englisch", acme, "greeting")
     assert kurzformel_beantworten("demo-acme", acme, "greeting").kind == "greeting"
+
+
+# =============================================================================
+# DAS DOKUMENT UEBER DEN ASSISTENTEN STEHT NIE IN SOURCES
+# =============================================================================
+
+UEBER_TEXT = """# Ueber den Assistenten
+
+Dieser Assistent ist ein KI-System und antwortet nur aus den Unterlagen.
+"""
+
+
+@pytest.fixture
+def umgebung_mit_assistentendokument(
+    tmp_path: Path,
+) -> tuple[Settings, E5Embeddings]:
+    """demo-acme mit einem Fachdokument und einem Dokument ueber den Assistenten."""
+    import yaml
+
+    from app.ingest import ingest_tenant
+
+    tenants_root = tmp_path / "tenants"
+    tenants_root.mkdir()
+    lege_mandant_an(tenants_root, "demo-acme", ACME_TEXT, "acme-token-1234567890", ESKALATIONSTEXT)
+    (tenants_root / "demo-acme" / "docs" / "ueber-den-assistenten.md").write_text(
+        UEBER_TEXT, encoding="utf-8"
+    )
+    pfad = tenants_root / "demo-acme" / "tenant.yaml"
+    daten = yaml.safe_load(pfad.read_text(encoding="utf-8"))
+    daten["assistant_documents"] = ["ueber-den-assistenten.md"]
+    pfad.write_text(yaml.safe_dump(daten, allow_unicode=True), encoding="utf-8")
+
+    settings = Settings(
+        openai_api_key="platzhalter",
+        openai_model="platzhalter",
+        tenants_dir=tenants_root,
+        index_dir=tmp_path / "index",
+        embedding_dimension=FAKE_DIMENSION,
+        chunk_size=200,
+        chunk_overlap=20,
+    )
+    embeddings = E5Embeddings(FakeBackend(), expected_dimension=FAKE_DIMENSION)
+    ingest_tenant("demo-acme", settings=settings, embeddings=embeddings)
+    return settings, embeddings
+
+
+def _quellen_ueber_answer(
+    umgebung: tuple[Settings, E5Embeddings], genannt: list[str]
+) -> tuple[list[str], list[float | None]]:
+    settings, embeddings = umgebung
+    llm = FakeLlm(
+        parsed=GroundedAnswer(
+            answerable=True, answer="Ja, 21 Kalendertage.", sources=genannt, language="de"
+        )
+    )
+    a = answer(
+        "demo-acme",
+        "Wie lange gilt die RMA-Nummer und wer antwortet hier?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+    )
+    return a.sources, a.source_scores
+
+
+def test_assistentendokument_steht_nie_in_sources(
+    umgebung_mit_assistentendokument: tuple[Settings, E5Embeddings],
+) -> None:
+    """Ueber answer(), mit dem Feld aus der tenant.yaml.
+
+    Nennt das Modell das Dokument und eine Fachdatei, steht nur die Fachdatei
+    in sources, mit ihrem Score. Nennt es nur das Dokument, ist sources leer.
+    Eine erfundene Datei bleibt sichtbar, mit Score None. Faengt einen
+    fehlenden Filter, einen, der zu viel filtert, und eine versteckte
+    erfundene Quelle.
+    """
+    quellen, scores = _quellen_ueber_answer(
+        umgebung_mit_assistentendokument, ["ueber-den-assistenten.md", "doku.md"]
+    )
+    assert "ueber-den-assistenten.md" not in quellen
+    assert quellen == ["doku.md"]
+    assert isinstance(scores[0], float)
+
+    assert _quellen_ueber_answer(
+        umgebung_mit_assistentendokument, ["ueber-den-assistenten.md"]
+    ) == (
+        [],
+        [],
+    )
+
+    quellen, scores = _quellen_ueber_answer(
+        umgebung_mit_assistentendokument, ["Ueber-den-Assistenten.md", "erfunden.md"]
+    )
+    assert quellen == ["erfunden.md"]
+    assert scores == [None]
+
+
+def test_ausgenommen_filtert_nur_die_genannten_namen() -> None:
+    """Direkt an der Funktion: mit und ohne .md, ohne Ruecksicht auf die Schreibung."""
+    treffer = [_hit("a.md", 0.93), _hit("ueber.md", 0.95)]
+    for genannt in (["ueber.md", "a.md"], ["UEBER.md", "a.md"], ["ueber", "a.md"]):
+        assert _quellen_verdichten(genannt, treffer, ausgenommen=["ueber.md"]) == (
+            ["a.md"],
+            [0.93],
+        )
+    # Ohne Ausnahme steht das Dokument da wie jede andere Quelle.
+    assert _quellen_verdichten(["ueber.md", "a.md"], treffer) == (
+        ["ueber.md", "a.md"],
+        [0.95, 0.93],
+    )

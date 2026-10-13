@@ -122,6 +122,12 @@ class Texte(BaseModel, frozen=True):
     dank_antwort: str
     abschied_antwort: str
 
+    # Der Titel des Dokuments ueber den Assistenten. Er ersetzt dessen
+    # Dateinamen, wo das Modell ihn im Fliesstext nennt ("according to
+    # about-this-assistant.md"). Steht in der Sprache der Antwort, mit den
+    # Anfuehrungszeichen dieser Sprache.
+    assistentendokument_titel: str
+
     def fuer_javascript(self) -> dict[str, str]:
         """Die Teilmenge, die im Browser gebraucht wird.
 
@@ -167,6 +173,7 @@ _DE = Texte(
     begruessung_antwort="Guten Tag. Ich beantworte Fragen zu {topics}. Was möchten Sie wissen?",
     dank_antwort="Gern geschehen. Haben Sie noch eine Frage?",
     abschied_antwort="Auf Wiedersehen und vielen Dank für Ihre Fragen.",
+    assistentendokument_titel="„Über den Assistenten“",
 )
 
 _EN = Texte(
@@ -204,6 +211,7 @@ _EN = Texte(
     begruessung_antwort="Hello. I answer questions about {topics}. What would you like to know?",
     dank_antwort="You're welcome. Is there anything else you would like to know?",
     abschied_antwort="Goodbye, and thank you for your questions.",
+    assistentendokument_titel="“About This Assistant”",
 )
 
 TEXTE: dict[str, Texte] = {"de": _DE, "en": _EN}

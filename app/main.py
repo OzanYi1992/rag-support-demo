@@ -582,6 +582,7 @@ def create_app(
             "chat",
             tenant.slug,
             art=ergebnis.kind,
+            verweise_entfernt=ergebnis.removed_references,
             escalated=ergebnis.escalated,
             escalation_reason=ergebnis.escalation_reason,
             treffer=len(ergebnis.sources),
