@@ -41,7 +41,14 @@ body {
   min-height: 100vh;
 }
 
+/* Die Kopfzeile bleibt beim Rollen oben stehen, damit "Neues Gespraech" auch
+   am Ende eines langen Gespraechs erreichbar ist. Der Hintergrund ist der der
+   Seite und deckt die Blasen ab, die darunter durchrollen. */
 header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--grund);
   padding: 1.25rem 0 1rem;
   border-bottom: 1px solid var(--linie);
   display: flex;

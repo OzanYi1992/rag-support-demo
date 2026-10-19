@@ -1,4 +1,4 @@
-"""Statische Pruefungen an static/app.js.
+"""Statische Pruefungen an static/app.js, dazu eine an static/style.css.
 
 Es gibt kein JavaScript-Werkzeug in diesem Projekt, und es soll auch keins
 dazukommen. Was sich am Quelltext pruefen laesst, wird deshalb hier geprueft:
@@ -16,6 +16,7 @@ import re
 from tests.conftest import REPO_ROOT
 
 APP_JS = REPO_ROOT / "static" / "app.js"
+STYLE_CSS = REPO_ROOT / "static" / "style.css"
 
 # Jede dieser Schnittstellen macht aus einer Zeichenkette Markup oder laedt
 # Markup in einen Rahmen. Dazu jeder Speicher im Browser: Der Verlauf eines
@@ -147,3 +148,27 @@ def test_neues_gespraech_leert_ohne_netz() -> None:
     assert "gespraech = [];" in zweig
     assert "verlauf.children.length > 1" in zweig
     assert "fetch(" not in zweig and "location" not in zweig
+
+
+def _css_regel(quelle: str, auswahl: str) -> str:
+    """Der Rumpf der ersten Regel mit genau diesem Selektor, ohne Kommentare."""
+    ohne = re.sub(r"/\*.*?\*/", "", quelle, flags=re.S)
+    treffer = re.search(rf"(?m)^{re.escape(auswahl)}\s*\{{([^}}]*)\}}", ohne)
+    assert treffer, f"keine Regel {auswahl!r}"
+    return treffer.group(1)
+
+
+def test_die_kopfzeile_bleibt_beim_rollen_stehen() -> None:
+    """Titel und "Neues Gespraech" bleiben oben sichtbar, mit dem Hintergrund
+    der Seite aus dem Farbtoken, hell wie dunkel. Statisch geprueft; Hoehe und
+    Klickbarkeit nach dem Rollen zeigt der Browser.
+
+    Gegenprobe: Die Suche findet die Regel auch ohne sticky, sie ist also nicht
+    blind.
+    """
+    regel = _css_regel(STYLE_CSS.read_text(encoding="utf-8"), "header")
+    assert "position: sticky;" in regel
+    assert "top: 0;" in regel
+    assert "background: var(--grund);" in regel
+    assert "padding: 1.25rem 0 1rem;" in regel
+    assert "position: sticky" not in _css_regel("header {\n  padding: 0;\n}", "header")
