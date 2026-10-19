@@ -718,9 +718,9 @@ _ASSISTENTENFRAGEN = [
 
 
 def test_die_listen_fuer_fragen_nach_dem_assistenten_sind_vollstaendig() -> None:
-    """36 Formeln fuer capabilities und 34 fuer identity, ueber beide Sprachen."""
-    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "capabilities") == 36
-    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "identity") == 34
+    """64 Formeln fuer capabilities und 57 fuer identity, ueber beide Sprachen."""
+    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "capabilities") == 64
+    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "identity") == 57
     # Echte Umlaute in den deutschen Listen, nicht die Umschreibung.
     deutsch = " ".join(f for s, _, f in _ASSISTENTENFRAGEN if s == "de")
     assert "können" in deutsch and "wofür" in deutsch
@@ -734,6 +734,111 @@ def test_jede_frage_nach_dem_assistenten_wird_genau_erkannt(
     eingabe = _wie_getippt(formel, sprache)
     assert eingabe != formel
     assert kurzformel_erkennen(eingabe) == art, eingabe
+
+
+# Die Eintraege, die nach dem Telefontest vom 2026-10-19 dazukamen, je Art und
+# Sprache am Ende der bestehenden Liste.
+_NEU_NACH_DEM_TELEFONTEST = {
+    ("en", "identitaet"): (
+        "who made you",
+        "who built you",
+        "who created you",
+        "who programmed you",
+        "who developed you",
+        "who is your programmer",
+        "who is your developer",
+        "who is your creator",
+        "what is your origin",
+        "what model are you",
+        "which model are you",
+        "are you chatgpt",
+    ),
+    ("de", "identitaet"): (
+        "wer hat dich gebaut",
+        "wer hat dich programmiert",
+        "wer hat dich entwickelt",
+        "wer hat dich erstellt",
+        "wer hat dich gemacht",
+        "wer hat sie programmiert",
+        "wer ist dein programmierer",
+        "wer ist dein entwickler",
+        "welches modell bist du",
+        "bist du chatgpt",
+        "sind sie chatgpt",
+    ),
+    ("en", "faehigkeiten"): (
+        "i need help",
+        "i need some help",
+        "can you help me",
+        "could you help me",
+        "can you help",
+        "help me",
+        "help me please",
+        "please help",
+        "i have a question",
+        "i have a problem",
+        "give me all the documentation you have",
+        "show me your documents",
+        "what documents do you have",
+        "which documents do you have",
+        "what are your sources",
+    ),
+    ("de", "faehigkeiten"): (
+        "ich brauche hilfe",
+        "ich brauche ihre hilfe",
+        "ich brauche deine hilfe",
+        "kannst du mir helfen",
+        "können sie mir helfen",
+        "hilf mir",
+        "helfen sie mir",
+        "ich habe eine frage",
+        "ich habe ein problem",
+        "welche dokumente hast du",
+        "welche dokumente haben sie",
+        "welche unterlagen haben sie",
+        "zeig mir alle dokumente",
+    ),
+}
+
+
+def test_die_eintraege_nach_dem_telefontest_stehen_woertlich_in_den_listen() -> None:
+    """Am Ende der bestehenden Listen, Zeichen fuer Zeichen, "können" mit echtem
+    Umlaut. Herkunft und Ort gehoeren bewusst nicht dazu: "where are you from"
+    meint im Shop oft den Haendler."""
+    for (sprache, art), neu in _NEU_NACH_DEM_TELEFONTEST.items():
+        liste = getattr(KURZFORMELN[sprache], art)
+        assert liste[-len(neu) :] == neu, (sprache, art)
+    assert "können sie mir helfen" in KURZFORMELN["de"].faehigkeiten
+    for sprache in ("en", "de"):
+        for art in ("faehigkeiten", "identitaet"):
+            liste = getattr(KURZFORMELN[sprache], art)
+            assert not {"where are you from", "where do you come from", "woher kommst du"} & set(
+                liste
+            ), (sprache, art)
+
+
+@pytest.mark.parametrize(
+    ("eingabe", "art"),
+    [
+        ("What is you origin", "identity"),
+        ("Who is your programmer?", "identity"),
+        ("Who made you?", "identity"),
+        ("I need help", "capabilities"),
+        ("Give me all the documentation you have", "capabilities"),
+    ],
+)
+def test_die_fragen_aus_dem_telefontest_bekommen_eine_feste_antwort(eingabe: str, art: str) -> None:
+    """Die Eingaben, die am 2026-10-19 mit dem Verweis an den Support
+    eskalierten. "What is you origin" trifft ueber die Toleranz."""
+    assert kurzformel_erkennen(eingabe) == art
+
+
+@pytest.mark.parametrize(
+    "eingabe", ["I need new pullovers", "I need new shoes", "Do you Ship to norway?"]
+)
+def test_die_fachfragen_aus_dem_telefontest_bleiben_fachfragen(eingabe: str) -> None:
+    """Gegenprobe: Was der Telefontest an Fachfragen brachte, trifft keine Formel."""
+    assert kurzformel_erkennen(eingabe) is None
 
 
 def test_wie_getippt_sieht_aus_wie_ein_mensch_tippt() -> None:
@@ -798,8 +903,8 @@ def test_tippfehler_bei_fragen_nach_dem_assistenten(eingabe: str, art: str) -> N
         "Good mornin",
         "thank yu",
         "goodbey",
-        # Die kuerzere Laenge zaehlt: "help" hat 4 Zeichen.
-        "help me",
+        # Unter 8 Zeichen nur genau: "help us" trifft weder "help" noch "help me".
+        "help us",
         # Umschrift statt Umlaut bei einer kurzen Formel: Abstand 2 bei 14 Zeichen.
         "was koennen sie",
     ],
@@ -850,6 +955,15 @@ _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT = [
     "what can i return",
     "how do i pay",
     "is this a bot question",
+    "where do you ship from",
+    "where are you from",
+    "who makes your boots",
+    "who made this jacket",
+    "what documents do i need",
+    "can you help me return boots",
+    "wer hat das zelt gebaut",
+    "woher kommt die ware",
+    "ich habe eine frage zu meiner bestellung",
 ]
 
 

@@ -302,6 +302,12 @@ VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
 # eskalierte "Are you a bot?" bei Fellgate in 18 von 20 Laeufen, obwohl das
 # Dokument auf Rang 1 im Kontext lag.
 #
+# Dazu Fragen danach, wer den Assistenten gebaut hat und woher er kommt
+# (identity), und Bitten um Hilfe oder um die Unterlagen selbst (capabilities).
+# Bewusst NICHT in den Listen: "where are you from", "where do you come from"
+# und "woher kommst du". In einem Shop meinen sie oft den Haendler, und die
+# Unterlagen beantworten das, etwa mit dem Lager in Schweden.
+#
 # Nur fuer diese beiden Arten gilt eine Toleranz fuer Tippfehler, weil genau
 # solche Fragen schnell und ungenau getippt werden ("How do ou help?"). Fuer
 # Gruss, Dank und Abschied gilt sie nicht: Die Formeln sind kurz, und ein
@@ -370,6 +376,19 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "was kann ich fragen",
             "was kann ich sie fragen",
             "hilfe",
+            "ich brauche hilfe",
+            "ich brauche ihre hilfe",
+            "ich brauche deine hilfe",
+            "kannst du mir helfen",
+            "können sie mir helfen",
+            "hilf mir",
+            "helfen sie mir",
+            "ich habe eine frage",
+            "ich habe ein problem",
+            "welche dokumente hast du",
+            "welche dokumente haben sie",
+            "welche unterlagen haben sie",
+            "zeig mir alle dokumente",
         ),
         identitaet=(
             "bist du ein bot",
@@ -387,6 +406,17 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "rede ich mit einem menschen",
             "wer bist du",
             "wer sind sie",
+            "wer hat dich gebaut",
+            "wer hat dich programmiert",
+            "wer hat dich entwickelt",
+            "wer hat dich erstellt",
+            "wer hat dich gemacht",
+            "wer hat sie programmiert",
+            "wer ist dein programmierer",
+            "wer ist dein entwickler",
+            "welches modell bist du",
+            "bist du chatgpt",
+            "sind sie chatgpt",
         ),
     ),
     "en": Kurzformeln(
@@ -444,6 +474,21 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "what do you know",
             "what is this",
             "help",
+            "i need help",
+            "i need some help",
+            "can you help me",
+            "could you help me",
+            "can you help",
+            "help me",
+            "help me please",
+            "please help",
+            "i have a question",
+            "i have a problem",
+            "give me all the documentation you have",
+            "show me your documents",
+            "what documents do you have",
+            "which documents do you have",
+            "what are your sources",
         ),
         identitaet=(
             "are you a bot",
@@ -465,6 +510,18 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "am i talking to a real person",
             "who are you",
             "what are you",
+            "who made you",
+            "who built you",
+            "who created you",
+            "who programmed you",
+            "who developed you",
+            "who is your programmer",
+            "who is your developer",
+            "who is your creator",
+            "what is your origin",
+            "what model are you",
+            "which model are you",
+            "are you chatgpt",
         ),
     ),
 }

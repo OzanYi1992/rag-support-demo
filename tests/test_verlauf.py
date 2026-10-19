@@ -351,6 +351,28 @@ def test_ok_mit_verlauf_ergibt_die_feste_antwort(
     assert a.standalone_question is None
 
 
+def test_heinis_your_programmer_wird_ueber_die_umformung_zu_identity(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Aus dem Telefontest: "Heinis your programmer" trifft selbst keine Formel.
+    Die Umformung macht daraus "Who is your programmer?", und das ergibt die
+    feste Antwort auf die Frage, wer antwortet. Weder Suche noch Antwortaufruf."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-englisch",
+        "Heinis your programmer",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=VERLAUF,
+        umformer=FakeUmformer(frage="Who is your programmer?"),  # type: ignore[arg-type]
+    )
+    assert a.kind == "identity"
+    assert a.standalone_question == "Who is your programmer?"
+    assert a.rewrite_status == "umgeformt"
+    assert a.sources == [] and a.escalated is False
+
+
 def test_mit_verlauf_und_tippfehler_traegt_die_umformung_die_erkennung(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:
