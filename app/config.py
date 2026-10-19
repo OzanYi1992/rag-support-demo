@@ -31,6 +31,9 @@ LlmProvider = Literal["openai", "azure", "anthropic"]
 # damit ein Tippfehler beim Start auffaellt und nicht erst beim ersten Aufruf.
 EscalationStrategyName = Literal["degenerate_only", "absolute_threshold", "relative_margin"]
 
+# Die Stufen, die LOG_LEVEL annehmen darf.
+_LOGSTUFEN: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 # Welcher Schluessel fuer welchen Provider Pflicht ist. Siehe ADR-006.
 _REQUIRED_KEY_PER_PROVIDER: dict[str, str] = {
     "openai": "openai_api_key",
@@ -64,6 +67,9 @@ class Settings(BaseSettings):
 
     # --- Anwendung ---------------------------------------------------------
     app_env: str = "local"
+    # Die Stufe des Loggers fuer die Ereignisse der Anwendung, eingerichtet in
+    # create_app. Erlaubt sind die Stufen von logging, ohne Ruecksicht auf die
+    # Schreibung.
     log_level: str = "INFO"
 
     # --- LLM-Provider ------------------------------------------------------
@@ -253,6 +259,20 @@ class Settings(BaseSettings):
         if not isinstance(data, dict):
             return data
         return {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip() == "")}
+
+    @field_validator("log_level")
+    @classmethod
+    def _nur_bekannte_logstufen(cls, wert: str) -> str:
+        """Laesst nur die Stufen von logging zu und schreibt sie gross.
+
+        Ein Tippfehler wie "INFOO" liesse logging sonst still bei einer anderen
+        Stufe weiterlaufen, oder er braeche erst beim ersten Ereignis. Hier
+        scheitert er beim Start.
+        """
+        stufe = wert.strip().upper()
+        if stufe not in _LOGSTUFEN:
+            raise ValueError(f"LOG_LEVEL ist {wert!r}, zulaessig sind {', '.join(_LOGSTUFEN)}.")
+        return stufe
 
     @field_validator("embedding_device")
     @classmethod

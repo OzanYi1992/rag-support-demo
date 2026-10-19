@@ -31,6 +31,7 @@ import hashlib
 import html
 import json
 import logging
+import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -231,6 +232,80 @@ def _pfadmuster(pfad: str) -> str:
     return pfad
 
 
+class _EreignisFormat(logging.Formatter):
+    """Eine Zeile je Ereignis: die Uhrzeit in UTC, ein Leerzeichen, das JSON.
+
+    Die Uhrzeit steht vorn, weil eine Zeile ohne sie bei einer Auswertung nicht
+    neben ein Protokoll zu legen ist. ISO 8601 mit Millisekunden und Z, damit
+    sie ohne Kenntnis der Zeitzone des Rechners eindeutig ist.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        zeit = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
+        return f"{zeit}.{int(record.msecs):03d}Z {record.getMessage()}"
+
+
+class _StdoutHandler(logging.Handler):
+    """Schreibt jede Zeile auf das sys.stdout, das beim Schreiben gilt.
+
+    Nicht ein beim Start festgehaltener Strom: Wer sys.stdout ersetzt, etwa ein
+    Test, der die Ausgabe einfaengt, bekommt die Zeile dort, wo er sie erwartet.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            sys.stdout.write(self.format(record) + "\n")
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+
+class _TokenMaske(logging.Filter):
+    """Maskiert das url_token im Zugriffsprotokoll von uvicorn.
+
+    uvicorn schreibt jeden Aufruf mit vollem Pfad, und im Pfad steht das Token,
+    die einzige Zugangskontrolle eines Mandanten. Ein Konsolenlog mit Token ist
+    eine Liste aller Links. Der Pfad ist das dritte Argument der Zeile; er geht
+    durch `_pfadmuster`, also mit demselben Platzhalter wie in den Ereignissen.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        argumente = record.args
+        if isinstance(argumente, tuple) and len(argumente) >= 3 and isinstance(argumente[2], str):
+            record.args = (*argumente[:2], _pfadmuster(argumente[2]), *argumente[3:])
+        return True
+
+
+def _logging_einrichten(settings: Settings) -> None:
+    """Richtet beim Start ein, wohin die Ereignisse gehen und wie das
+    Zugriffsprotokoll aussieht.
+
+    Ohne diese Einrichtung gingen die Ereignisse unter uvicorn verloren: Der
+    Logger `rag.api` hatte keinen Handler, und INFO eines Loggers ohne Handler
+    schreibt niemand. Uebrig blieb das Zugriffsprotokoll, mit Token im Klartext.
+
+    Die Einrichtung geschieht hier und nicht ueber eine Option von uvicorn,
+    damit sie unter `uvicorn app.main:create_app --factory` genauso gilt wie im
+    Image. uvicorn richtet sein eigenes Logging ein, bevor es die Fabrik ruft;
+    was hier geschieht, bleibt also bestehen.
+
+    Mehrfach aufgerufen ergibt sie dasselbe wie einmal: ein Handler, ein Filter.
+    `propagate` bleibt an, damit Tests die Ereignisse weiter am Logger lesen.
+    """
+    ereignisse = logging.getLogger("rag.api")
+    for vorhanden in list(ereignisse.handlers):
+        if isinstance(vorhanden, _StdoutHandler):
+            ereignisse.removeHandler(vorhanden)
+    ausgabe = _StdoutHandler()
+    ausgabe.setFormatter(_EreignisFormat())
+    ereignisse.addHandler(ausgabe)
+    ereignisse.setLevel(settings.log_level)
+
+    zugriff = logging.getLogger("uvicorn.access")
+    if not any(isinstance(filter_, _TokenMaske) for filter_ in zugriff.filters):
+        zugriff.addFilter(_TokenMaske())
+
+
 def _texte_als_json(texte: Texte) -> str:
     """Serialisiert die Browsertexte fuer den <script>-Block der Seite.
 
@@ -276,6 +351,7 @@ def create_app(
     Produktionsvariante.
     """
     aktive_settings = settings or Settings()
+    _logging_einrichten(aktive_settings)
 
     @asynccontextmanager
     async def lebenszyklus(laufende_app: FastAPI) -> AsyncIterator[None]:
