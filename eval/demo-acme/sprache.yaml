@@ -1,0 +1,21 @@
+# Sprachfaelle demo-acme
+#
+# Wie eval/demo-fellgate/sprache.yaml, dort steht, was die Fassungen A und B
+# bedeuten.
+
+mandant: demo-acme
+stand: 2026-10-19
+
+faelle:
+
+  - id: sprache-acme-01
+    kategorie: sprache
+    frage: "When do I get my money back after the return has been checked?"
+    erwartete_sprache: en
+    erwartete_quelle: retouren-und-gewaehrleistung.md
+    erwartete_textstelle: "Gutschriften werden innerhalb von zehn Werktagen"
+    erwartet_eskalation: false
+    laeufe: 20
+    begruendung: >
+      Englische Frage beim deutschen Mandanten, mit deutschem Korpus. Sie kam
+      mit und ohne Verlauf in jedem Lauf deutsch zurueck.

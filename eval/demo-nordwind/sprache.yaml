@@ -1,0 +1,21 @@
+# Sprachfaelle demo-nordwind
+#
+# Wie eval/demo-fellgate/sprache.yaml, dort steht, was die Fassungen A und B
+# bedeuten.
+
+mandant: demo-nordwind
+stand: 2026-10-19
+
+faelle:
+
+  - id: sprache-nord-01
+    kategorie: sprache
+    frage: "how long is the delivery time slot"
+    erwartete_sprache: en
+    erwartete_quelle: lieferung-und-montage.md
+    erwartete_textstelle: "ein Terminfenster von vier Stunden"
+    erwartet_eskalation: false
+    laeufe: 20
+    begruendung: >
+      Kurze englische Frage, klein und ohne Satzzeichen, beim zweiten deutschen
+      Mandanten. Belegt im deutschen Korpus.

@@ -1,0 +1,57 @@
+# Sprachfaelle demo-fellgate
+#
+# Fragen ohne Verlauf, je in zwei Fassungen verschraenkt: A ohne
+# response_language, wie die Seite heute fragt; B mit response_language gleich
+# der erwarteten Sprache. Gemessen wird, ob eine vom Server vorgegebene Sprache
+# die Antwortsprache haelt, und ob sie dabei das Tor verschiebt.
+#
+# Der Abschnitt goldsatz traegt die erwartete Sprache je Goldfrage. gold.yaml
+# bleibt, wie sie ist: Dort ist die Sprache keine Angabe der Frage.
+
+mandant: demo-fellgate
+stand: 2026-10-19
+
+faelle:
+
+  - id: sprache-fell-01
+    kategorie: sprache
+    frage: "Do you ship to Norway?"
+    erwartete_sprache: en
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    laeufe: 20
+    begruendung: >
+      Im Telefontest kam die Antwort auf diese Frage halb deutsch. Eine
+      englische Frage beim englischen Mandanten, belegt in where-we-ship.md.
+
+  - id: sprache-fell-02
+    kategorie: sprache
+    frage: "Does delivery to Norway take 5 working days because Norway is in Zone B?"
+    erwartete_sprache: en
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    laeufe: 20
+    begruendung: >
+      Die Bestaetigungsfrage, zu der die Umformung eine Rueckfrage oft macht.
+      Ohne Verlauf kam sie in 3 von 5 Laeufen deutsch zurueck.
+
+  - id: sprache-fell-03
+    kategorie: sprache
+    frage: "I need new pullovers"
+    erwartete_sprache: en
+    erwartete_quelle: product-range.md
+    erwartete_textstelle: "Waterproof shells, down and synthetic jackets, fleeces"
+    erwartet_eskalation: true
+    laeufe: 20
+    begruendung: >
+      Aus dem Telefontest, einmal deutsch und ohne Beleg beantwortet. Der Korpus
+      nennt keine Pullover; die ehrliche Antwort ist die Eskalation. Gemessen
+      wird hier die Sprache, die Eskalation nur gezaehlt.
+
+goldsatz:
+  laeufe: 5
+  erwartete_sprache: en
+  abweichend:
+    de: [fell-05, fell-06, fell-07, fell-08, fell-14]

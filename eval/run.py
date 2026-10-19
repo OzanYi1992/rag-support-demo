@@ -592,8 +592,12 @@ def _ein_aufruf(
     cloud: CloudZiel | None,
     url_token: str | None,
     verlauf: list[Runde] | None,
+    response_language: str | None = None,
 ) -> dict[str, Any]:
     """Ein Lauf, lokal ueber answer() oder gegen die deployte Instanz.
+
+    `response_language` gibt die Antwortsprache vor, nur lokal; ohne sie
+    antwortet das Modell in der Sprache, die es der Frage zuschreibt.
 
     Gibt die Felder in einer Form zurueck, die fuer beide Wege gleich ist. Eine
     Instanz von vor einem Feld liefert es nicht; dann steht None.
@@ -604,6 +608,8 @@ def _ein_aufruf(
         # Rangliste.
         if url_token is None:
             raise ValueError("Cloud-Lauf ohne url_token.")
+        if response_language is not None:
+            raise ValueError("Eine vorgegebene Antwortsprache gibt es nur lokal.")
         daten = cloud_antwort(cloud, url_token, frage, verlauf)
         return {
             "eskaliert": daten["escalated"],
@@ -628,7 +634,14 @@ def _ein_aufruf(
         }
     for versuch in range(1, AUSFALL_VERSUCHE + 1):
         try:
-            antwort = answer(slug, frage, settings=settings, embeddings=embedder, history=verlauf)
+            antwort = answer(
+                slug,
+                frage,
+                response_language=response_language,
+                settings=settings,
+                embeddings=embedder,
+                history=verlauf,
+            )
             break
         except LlmNichtErreichbar as fehler:
             if versuch == AUSFALL_VERSUCHE:
@@ -640,6 +653,7 @@ def _ein_aufruf(
             )
             time.sleep(AUSFALL_PAUSE_S)
     return {
+        "response_language": response_language,
         "ausfall_wiederholt": versuch - 1,
         "eskaliert": antwort.escalated,
         "grund": antwort.escalation_reason,
@@ -1410,6 +1424,174 @@ def fahre_gegenprobe(
     }
 
 
+# --- Sprache: vorgegebene Antwortsprache gegen die des Modells ----------------
+#
+# Die Faelle stehen je Mandant in eval/<mandant>/sprache.yaml, ohne Verlauf.
+# Jede Frage laeuft in zwei Fassungen, verschraenkt wie die Gegenprobe: A ohne
+# response_language, wie die Seite heute fragt; B mit response_language gleich
+# der erwarteten Sprache. Die Datei von Fellgate traegt dazu die erwartete
+# Sprache je Goldfrage; gold.yaml bleibt, wie sie ist.
+
+BEDEUTUNG_SPRACHE = (
+    "Fragen ohne Verlauf in zwei Fassungen, verschraenkt: A ohne response_language, "
+    "B mit response_language gleich der erwarteten Sprache. fragen und "
+    "aggregiert_je_kategorie sind A, fragen_b und aggregiert_je_kategorie_b sind B. "
+    "sprache_der_antwort ist die Markerschaetzung von eval.run, lang die Angabe des "
+    "Modells. stelle_im_kontext je Lauf ist die der Frage; ohne Verlauf sucht jeder "
+    "Lauf mit derselben Frage."
+)
+
+
+def pruefe_sprache(daten: dict[str, Any], quelle: str, gold_ids: set[str]) -> None:
+    """Lehnt eine Sprachdatei ab, die nicht messbar ist.
+
+    `gold_ids` sind die IDs aus gold.yaml desselben Mandanten. Eine Ausnahme im
+    Abschnitt goldsatz, die es dort nicht gibt, wuerde sonst still nichts
+    bewirken.
+    """
+    fehler: list[str] = []
+    for f in daten.get("faelle", []):
+        fid = f.get("id", "?")
+        for feld in ("id", "kategorie", "frage", "begruendung"):
+            if not f.get(feld):
+                fehler.append(f"{fid}: {feld} fehlt")
+        if f.get("erwartete_sprache") not in VERFUEGBARE_SPRACHEN:
+            fehler.append(f"{fid}: erwartete_sprache {f.get('erwartete_sprache')!r} unbekannt")
+        if f.get("erwartete_quelle") is None:
+            fehler.append(f"{fid}: erwartete_quelle fehlt oder ist null")
+        if not isinstance(f.get("erwartet_eskalation"), bool):
+            fehler.append(f"{fid}: erwartet_eskalation ist kein Wahrheitswert")
+        if not isinstance(f.get("laeufe"), int) or f["laeufe"] < 1:
+            fehler.append(f"{fid}: laeufe fehlt oder ist kleiner als 1")
+    gold = daten.get("goldsatz")
+    if gold is not None:
+        if not isinstance(gold.get("laeufe"), int) or gold["laeufe"] < 1:
+            fehler.append("goldsatz: laeufe fehlt oder ist kleiner als 1")
+        if gold.get("erwartete_sprache") not in VERFUEGBARE_SPRACHEN:
+            fehler.append("goldsatz: erwartete_sprache unbekannt")
+        for sprache, ids in (gold.get("abweichend") or {}).items():
+            if sprache not in VERFUEGBARE_SPRACHEN:
+                fehler.append(f"goldsatz: abweichende Sprache {sprache!r} unbekannt")
+            for gid in ids:
+                if gid not in gold_ids:
+                    fehler.append(f"goldsatz: {gid} steht nicht in gold.yaml")
+    if fehler:
+        raise ValueError(f"{quelle}: " + "; ".join(fehler))
+
+
+def lade_sprache(slug: str) -> dict[str, Any]:
+    pfad = EVAL_DIR / slug / "sprache.yaml"
+    daten: dict[str, Any] = yaml.safe_load(pfad.read_text(encoding="utf-8"))
+    gold = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
+    pruefe_sprache(daten, str(pfad), {f["id"] for f in gold["fragen"]})
+    return daten
+
+
+def goldsprachen(daten: dict[str, Any]) -> dict[str, str]:
+    """Die erwartete Sprache je Goldfrage-ID, aus dem Abschnitt goldsatz."""
+    gold = daten["goldsatz"]
+    zuordnung: dict[str, str] = {}
+    for sprache, ids in (gold.get("abweichend") or {}).items():
+        for gid in ids:
+            zuordnung[gid] = sprache
+    return zuordnung
+
+
+def sprachprobe_frage(
+    slug: str,
+    eintrag: dict[str, Any],
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    laeufe: int,
+    sprache: str,
+) -> tuple[Frageergebnis, Frageergebnis]:
+    """Eine Frage in zwei Fassungen, verschraenkt: A ohne, B mit vorgegebener
+    Antwortsprache. Je Lauf einmal A und einmal B, die Reihenfolge wechselt.
+
+    Ohne Verlauf sucht jeder Lauf mit derselben Frage. Die Stelle im Kontext ist
+    deshalb je Lauf die der Frage und steht so in jedem Eintrag.
+    """
+    erg_a, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
+    erg_a.erwartete_sprache = sprache
+    erg_b = copy.deepcopy(erg_a)
+    erg_a.arm, erg_b.arm = "A", "B"
+    erg_a.laeufe = erg_b.laeufe = laeufe
+    sammler_a, sammler_b = _Sammler(), _Sammler()
+    fassungen = {"A": (erg_a, sammler_a, None), "B": (erg_b, sammler_b, sprache)}
+    for lauf_nr in range(laeufe):
+        for arm in ("A", "B") if lauf_nr % 2 == 0 else ("B", "A"):
+            erg, sammler, vorgabe = fassungen[arm]
+            d = _ein_aufruf(slug, erg.frage, settings, embedder, None, None, None, vorgabe)
+            _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, None)
+            gesprochen = erg.laeufe_einzeln[-1]["sprache_der_antwort"]
+            erg.laeufe_einzeln[-1].update(
+                {
+                    "response_language": vorgabe,
+                    "erwartete_sprache": sprache,
+                    "sprache_wie_erwartet": None if gesprochen is None else gesprochen == sprache,
+                    "stelle_im_kontext": erg.antwort_im_kontext,
+                }
+            )
+    _abschliessen(erg_a, sammler_a, mit_verlauf=False)
+    _abschliessen(erg_b, sammler_b, mit_verlauf=False)
+    return erg_a, erg_b
+
+
+def fahre_sprache(slug: str, lauf: str, baseline: bool, gold: bool) -> dict[str, Any]:
+    """Die Sprachfaelle eines Mandanten, oder mit `gold` seinen Goldsatz, je in
+    den Fassungen A und B."""
+    settings = Settings()
+    daten = lade_sprache(slug)
+    top_k, herkunft = _top_k_und_herkunft(settings, slug)
+    gesamt = _chunkzahl(settings, slug)
+    preise = _preise()
+
+    if gold:
+        if daten.get("goldsatz") is None:
+            raise ValueError(f"eval/{slug}/sprache.yaml hat keinen Abschnitt goldsatz.")
+        goldfragen = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
+        abweichend = goldsprachen(daten)
+        standard = daten["goldsatz"]["erwartete_sprache"]
+        laeufe = int(daten["goldsatz"]["laeufe"])
+        auftraege = [(f, abweichend.get(f["id"], standard), laeufe) for f in goldfragen["fragen"]]
+    else:
+        auftraege = [(f, f["erwartete_sprache"], int(f["laeufe"])) for f in daten["faelle"]]
+
+    arm_a: list[Frageergebnis] = []
+    arm_b: list[Frageergebnis] = []
+    laeufe_je_frage: dict[str, int] = {}
+    for eintrag, sprache, n in auftraege:
+        laeufe_je_frage[eintrag["id"]] = n
+        a, b = sprachprobe_frage(slug, eintrag, settings, top_k, gesamt, n, sprache)
+        arm_a.append(a)
+        arm_b.append(b)
+
+    kopf = _kopf_lokal(
+        settings,
+        slug,
+        lauf,
+        baseline,
+        "sprache_gold" if gold else "sprache",
+        "je_frage",
+        top_k,
+        herkunft,
+        gesamt,
+        preise,
+        BEDEUTUNG_SPRACHE,
+    )
+    kopf["laeufe_je_fall"] = laeufe_je_frage
+    kopf["fassungen"] = ["A", "B"]
+    kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
+    return {
+        "kopf": kopf,
+        "aggregiert_je_kategorie": aggregiere(arm_a, top_k, preise, settings.model_name),
+        "aggregiert_je_kategorie_b": aggregiere(arm_b, top_k, preise, settings.model_name),
+        "fragen": [asdict(e) for e in arm_a],
+        "fragen_b": [asdict(e) for e in arm_b],
+    }
+
+
 def pruefe_kopf(bericht: dict[str, Any]) -> None:
     """Verweigert das Schreiben einer Datei ohne gueltige Metrikangabe.
 
@@ -1674,23 +1856,37 @@ def main(argv: list[str] | None = None) -> int:
         help="Goldfragen verschraenkt, A ohne Verlauf und B nach einer fremden ersten Runde",
     )
     p.add_argument(
+        "--sprache",
+        action="store_true",
+        help="Sprachfaelle aus eval/<mandant>/sprache.yaml, A ohne und B mit vorgegebener Sprache",
+    )
+    p.add_argument(
+        "--gold",
+        action="store_true",
+        help="mit --sprache: der Goldsatz, mit der erwarteten Sprache aus sprache.yaml",
+    )
+    p.add_argument(
         "--nur-b",
         action="store_true",
         help="mit --gegenprobe: nur Fassung B; der Bezug fuer A ist eine fruehere Datei",
     )
     args = p.parse_args(argv)
 
-    gespraech = args.verlauf or args.gegenprobe
+    gespraech = args.verlauf or args.gegenprobe or args.sprache
     if args.kontrolle and not args.verlauf:
         p.error("--kontrolle gilt nur zusammen mit --verlauf.")
     if args.nur_b and not args.gegenprobe:
         p.error("--nur-b gilt nur zusammen mit --gegenprobe.")
+    if args.gold and not args.sprache:
+        p.error("--gold gilt nur zusammen mit --sprache.")
+    if args.sprache and (args.verlauf or args.gegenprobe):
+        p.error("--sprache ist ein eigener Lauf, ohne --verlauf und --gegenprobe.")
     if args.verlauf and args.gegenprobe:
         p.error("--verlauf und --gegenprobe sind zwei getrennte Laeufe.")
     if gespraech and (args.retrieval_only or args.base_url or args.top_k is not None):
         p.error(
-            "--verlauf und --gegenprobe laufen lokal mit Modell und mit dem top_k des "
-            "Mandanten; --retrieval-only, --base-url und --top-k passen nicht dazu."
+            "--verlauf, --gegenprobe und --sprache laufen lokal mit Modell und mit dem "
+            "top_k des Mandanten; --retrieval-only, --base-url und --top-k passen nicht dazu."
         )
 
     if args.laeufe < 1:
@@ -1725,7 +1921,9 @@ def main(argv: list[str] | None = None) -> int:
     # url_token. Deshalb nie unterhalb von WARNING, egal wer Logging konfiguriert.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    datei_noetig = "verlauf.yaml" if gespraech else "gold.yaml"
+    datei_noetig = (
+        "sprache.yaml" if args.sprache else ("verlauf.yaml" if gespraech else "gold.yaml")
+    )
     slugs = (
         sorted(d.name for d in EVAL_DIR.iterdir() if d.is_dir() and (d / datei_noetig).is_file())
         if args.all
@@ -1744,6 +1942,8 @@ def main(argv: list[str] | None = None) -> int:
                 bericht = fahre_verlauf(
                     slug, args.lauf, args.baseline, not args.kontrolle, args.laeufe
                 )
+            elif args.sprache:
+                bericht = fahre_sprache(slug, args.lauf, args.baseline, args.gold)
             elif args.gegenprobe:
                 bericht = fahre_gegenprobe(
                     slug, args.lauf, args.baseline, args.laeufe, nur_b=args.nur_b
@@ -1768,7 +1968,11 @@ def main(argv: list[str] | None = None) -> int:
             if bericht["kopf"].get("fassungen") != ["B"]:
                 print(tabelle(bericht))
             if "aggregiert_je_kategorie_b" in bericht:
-                print("\nFassung B, nach der fremden ersten Runde:")
+                print(
+                    "\nFassung B, mit vorgegebener Sprache:"
+                    if args.sprache
+                    else "\nFassung B, nach der fremden ersten Runde:"
+                )
                 print(
                     tabelle(
                         {
