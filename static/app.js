@@ -140,16 +140,13 @@
     return rahmen;
   }
 
-  // quellen und scores kommen BEIDE aus daten.source_scores beziehungsweise
-  // daten.sources und sind gleich lang - der Server hat sie in
-  // app/rag.py, _quellen_verdichten() gemeinsam gebildet: eine Datei, ein
-  // Eintrag, der beste Score der Chunks dieser Datei.
+  // quellen kommt aus daten.sources: eine Datei, ein Eintrag, gebildet in
+  // app/rag.py, _quellen_verdichten(). Die Dateinamen stehen nur hier unter
+  // der Antwort, nicht in ihrem Text.
   //
-  // Bis zum 2026-09-24 stand hier daten.retrieval_scores. Das war falsch, und
-  // zwar unauffaellig falsch: Die Liste zaehlt CHUNKS in Trefferreihenfolge,
-  // quellen zaehlt DATEIEN, die das Modell zitiert. Die Zahl neben einem
-  // Dateinamen war damit der Score des i-ten Chunks und nicht der dieser Datei.
-  function quellenAnhaengen(antwort, quellen, scores) {
+  // Ohne Zahl. Der Score ist eine interne Kennzahl; die Antwort der API
+  // liefert ihn weiter in daten.source_scores, die Anzeige zeigt ihn nicht.
+  function quellenAnhaengen(antwort, quellen) {
     if (!quellen || quellen.length === 0) return;
     var block = document.createElement("div");
     block.className = "quellen";
@@ -188,7 +185,7 @@
     }
 
     var liste = document.createElement("ul");
-    quellen.forEach(function (quelle, i) {
+    quellen.forEach(function (quelle) {
       var zeile = document.createElement("li");
 
       // Der Dateiname wird ein Knopf, der das Dokument DIESES Mandanten unter
@@ -218,13 +215,6 @@
         }
       });
       zeile.appendChild(knopf);
-
-      if (scores && typeof scores[i] === "number") {
-        var score = document.createElement("span");
-        score.className = "score";
-        score.textContent = "  " + scores[i].toFixed(2);
-        zeile.appendChild(score);
-      }
       liste.appendChild(zeile);
     });
     block.appendChild(liste);
@@ -325,7 +315,7 @@
         if (daten.escalated) {
           eskalationAnhaengen(wartet.inhalt);
         } else {
-          quellenAnhaengen(wartet, daten.sources, daten.source_scores);
+          quellenAnhaengen(wartet, daten.sources);
         }
         if (daten.kind === "rag") {
           gespraech.push({

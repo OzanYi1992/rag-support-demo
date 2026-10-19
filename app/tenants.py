@@ -24,6 +24,7 @@ from app.texts import VERFUEGBARE_SPRACHEN, passt_zur_sprache
 SLUG_PATTERN = re.compile(r"^[a-z0-9-]{3,40}$")
 
 TENANT_FILE = "tenant.yaml"
+DOCS_DIR = "docs"
 
 # Ein url_token unter dieser Laenge ist ratbar. Siehe ADR-007: Der Token ist
 # Zugangsschutz durch Unratbarkeit, und Unratbarkeit ist eine Laengenfrage.
@@ -246,6 +247,23 @@ def _tenant_path(tenant_id: str, tenants_dir: Path) -> Path:
             f"Mandantenpfad fuer {tenant_id!r} zeigt aus {root} heraus und wird abgewiesen."
         )
     return candidate
+
+
+def dokumentordner(tenant_id: str, tenants_dir: Path) -> Path:
+    """Liefert den Ordner mit den Dokumenten eines Mandanten.
+
+    Mit denselben zwei Ebenen Schutz wie `_tenant_path`: Der Slug wird geprueft,
+    und der aufgeloeste Pfad muss unterhalb des Wurzelverzeichnisses liegen. Ob
+    der Ordner existiert, prueft der Aufrufer.
+    """
+    _validate_slug(tenant_id)
+    root = Path(tenants_dir).resolve()
+    ordner = (root / tenant_id / DOCS_DIR).resolve()
+    if not ordner.is_relative_to(root):
+        raise InvalidTenantSlug(
+            f"Dokumentordner fuer {tenant_id!r} zeigt aus {root} heraus und wird abgewiesen."
+        )
+    return ordner
 
 
 def load_tenant(tenant_id: str, tenants_dir: Path | None = None) -> TenantConfig:

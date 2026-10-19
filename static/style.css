@@ -105,11 +105,6 @@ main {
 }
 .quellen ul { margin: .25rem 0 0; padding-left: 1.1rem; }
 .quellen li { margin: .1rem 0; }
-.quellen .score {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-leise);
-  opacity: .85;
-}
 
 .fehler .text { background: transparent; border: 1px solid var(--linie); color: var(--text-leise); }
 

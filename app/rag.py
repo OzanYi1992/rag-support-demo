@@ -54,7 +54,7 @@ from app.texts import (
     kurzformel_genau,
     texte_fuer,
 )
-from app.verweis import assistentenverweise_entfernen, ist_assistentendokument
+from app.verweis import ist_assistentendokument, mandantendokumente, quellverweise_entfernen
 
 REASON_NOT_GROUNDED = "not_grounded"
 REASON_UNPARSEABLE = "generation_unparseable"
@@ -127,9 +127,9 @@ class Answer(BaseModel):
     # Kasten. Sie nimmt aber nur Runden der Art "rag" in den Verlauf.
     kind: str = ART_RAG
 
-    # Wie viele Verweise auf ein Dokument ueber den Assistenten aus dem
-    # Antworttext genommen oder durch seinen Titel ersetzt wurden. Eine Zahl,
-    # kein Text: Sie geht ins Ereignis.
+    # Wie viele Namen von Dokumenten des Mandanten aus dem Antworttext genommen
+    # oder durch den Titel des Dokuments ersetzt wurden. Eine Zahl, kein Text:
+    # Sie geht ins Ereignis.
     removed_references: int = 0
 
     # --- Gespraech ---------------------------------------------------------
@@ -591,9 +591,11 @@ def _beantworten(
         ergebnis.parsed.sources, treffer, ausgenommen=tenant.assistant_documents
     )
     # Nach beiden Toren und nur hier: Eine Eskalation traegt den Text des
-    # Mandanten, keinen Modelltext.
-    text, entfernt = assistentenverweise_entfernen(
-        tenant_id, tenant, ergebnis.parsed.answer, ergebnis.parsed.language
+    # Mandanten, keinen Modelltext. Die Dateinamen stehen unter der Antwort,
+    # nicht in ihr.
+    dokumente = mandantendokumente(tenant_id, aktive_settings.tenants_dir)
+    text, entfernt = quellverweise_entfernen(
+        tenant_id, tenant, ergebnis.parsed.answer, ergebnis.parsed.language, dokumente
     )
     return Answer(
         text=text,

@@ -149,6 +149,12 @@ class Texte(BaseModel, frozen=True):
     # Anfuehrungszeichen dieser Sprache.
     assistentendokument_titel: str
 
+    # Der Titel jedes anderen Dokuments des Mandanten, wo das Modell dessen
+    # Dateinamen im Fliesstext nennt ("Laut where-we-ship.md ..."). Der Titel
+    # selbst steht in der Sprache des Dokuments; die Anfuehrungszeichen folgen
+    # der Sprache der Antwort. Platzhalter {titel}.
+    dokumenttitel_im_text: str
+
     def fuer_javascript(self) -> dict[str, str]:
         """Die Teilmenge, die im Browser gebraucht wird.
 
@@ -204,6 +210,7 @@ _DE = Texte(
         "Grundlage der hinterlegten Unterlagen von {display_name}."
     ),
     assistentendokument_titel="„Über den Assistenten“",
+    dokumenttitel_im_text="„{titel}“",
     verstanden_als="Verstanden als: {frage}",
     neues_gespraech="Neues Gespräch",
 )
@@ -253,6 +260,7 @@ _EN = Texte(
         "{topics}, based on the documents stored for {display_name}."
     ),
     assistentendokument_titel="“About This Assistant”",
+    dokumenttitel_im_text="“{titel}”",
     verstanden_als="Understood as: {frage}",
     neues_gespraech="New conversation",
 )

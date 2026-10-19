@@ -172,3 +172,20 @@ def test_die_kopfzeile_bleibt_beim_rollen_stehen() -> None:
     assert "background: var(--grund);" in regel
     assert "padding: 1.25rem 0 1rem;" in regel
     assert "position: sticky" not in _css_regel("header {\n  padding: 0;\n}", "header")
+
+
+def test_die_quellen_stehen_ohne_zahl_unter_der_antwort() -> None:
+    """Die Dateinamen bleiben Knoepfe zum Aufklappen, aber ohne Score daneben.
+    Die API liefert source_scores weiter; die Anzeige liest sie nicht.
+
+    Gegenprobe: Die Pruefung schlaegt an der frueheren Zeile an.
+    """
+
+    def zeigt_zahl(code: str) -> bool:
+        return "toFixed(" in code or "source_scores" in code or '"score"' in code
+
+    code = _ohne_kommentare(APP_JS.read_text(encoding="utf-8"))
+    assert "quellenAnhaengen(wartet, daten.sources);" in code
+    assert 'knopf.className = "quelle";' in code
+    assert not zeigt_zahl(code)
+    assert zeigt_zahl('score.textContent = "  " + scores[i].toFixed(2);')
