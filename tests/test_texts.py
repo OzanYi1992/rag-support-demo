@@ -857,8 +857,8 @@ def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
     """Gegenprobe gegen einen blinden Test unten: 45 Goldfragen, 11 Kontrollfragen."""
     assert len(_GOLDFRAGEN) == 45
     assert len(_KONTROLLFRAGEN) == 11
-    # Sechs Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
-    assert len(_VERLAUFSFRAGEN) == 7
+    # Neun Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
+    assert len(_VERLAUFSFRAGEN) == 10
 
 
 @pytest.mark.parametrize(
@@ -985,3 +985,53 @@ def test_gespraechstexte_im_katalog() -> None:
     assert TEXTE["en"].neues_gespraech == "New conversation"
     assert "verstanden_als" in JAVASCRIPT_SCHLUESSEL
     assert "neues_gespraech" not in JAVASCRIPT_SCHLUESSEL
+
+
+# Der Wortlaut der Regeln 2 und 3 des Umformungsprompts, entschieden nach dem
+# Telefontest: Eine Rueckfrage wie "Sure?" wirkt fuer sich verstaendlich, braucht
+# aber ihren Bezug. Und die Umformung haengte den Firmennamen an Fragen, die ihn
+# nicht brauchten.
+_UMFORMUNG_REGELN_2_UND_3 = {
+    "en": (
+        "2. Do not answer the question. Add only what the last question needs to be\n"
+        "   understood on its own. Do not add names, facts or numbers it does not refer\n"
+        "   to, and do not add the name of the company.\n"
+        "3. If the last question doubts the previous answer or asks to confirm it (for\n"
+        '   example "sure?", "really?" or "is that right?"), rewrite it as a question\n'
+        "   about the statement it refers to.\n"
+        "4. If the last question can be understood on its own, return it unchanged.\n"
+        "5. Write the question in the language of the last question.\n"
+    ),
+    "de": (
+        "2. Beantworte die Frage nicht. Ergaenze nur, was die letzte Frage braucht, um\n"
+        "   fuer sich verstaendlich zu sein. Fuege keine Namen, Tatsachen oder Zahlen\n"
+        "   hinzu, auf die sie sich nicht bezieht, und nicht den Namen des Unternehmens.\n"
+        "3. Zweifelt die letzte Frage die vorige Antwort an oder bittet sie um eine\n"
+        '   Bestaetigung (etwa "sicher?", "wirklich?" oder "stimmt das?"), formuliere sie\n'
+        "   als Frage nach der Aussage, auf die sie sich bezieht.\n"
+        "4. Ist die letzte Frage fuer sich verstaendlich, gib sie unveraendert zurueck.\n"
+        "5. Schreibe die Frage in der Sprache der letzten Frage.\n"
+    ),
+}
+
+
+def test_umformungsprompt_regeln_2_und_3_im_wortlaut() -> None:
+    """Regel 2 und 3 je Sprache Zeichen fuer Zeichen, dahinter die bisherigen
+    Regeln 3 und 4 als 4 und 5. Der Prompt endet mit Regel 5; Kopf und Regel 1
+    bleiben, wie sie waren."""
+    assert set(_UMFORMUNG_REGELN_2_UND_3) == set(_UMFORMUNG)
+    for sprache, regeln in _UMFORMUNG_REGELN_2_UND_3.items():
+        system = _UMFORMUNG[sprache].system
+        assert system.endswith(regeln), sprache
+        assert system.count("\n2. ") == 1 and system.count("\n6. ") == 0, sprache
+        assert max(len(zeile) for zeile in system.splitlines()) <= 80, sprache
+    assert _UMFORMUNG["en"].system.startswith(
+        "You rewrite the last question of a conversation so that it can be understood\n"
+        "without the conversation.\n\n"
+        "1. Use the conversation only to find out what the last question refers to. The\n"
+    )
+    assert _UMFORMUNG["de"].system.startswith(
+        "Du formulierst die letzte Frage eines Gespraechs so um, dass sie ohne das\n"
+        "Gespraech verstaendlich ist.\n\n"
+        "1. Nutze das Gespraech nur, um herauszufinden, worauf sich die letzte Frage\n"
+    )

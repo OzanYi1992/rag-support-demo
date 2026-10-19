@@ -675,7 +675,7 @@ def test_die_falldateien_sind_gueltig() -> None:
     for quelle, daten in dateien:
         pruefe_verlauf(daten, quelle, eingefroren=True)
         faelle += len(daten["faelle"])  # type: ignore[arg-type]
-    assert faelle == 8
+    assert faelle == 11
 
 
 def test_jede_textstelle_der_falldateien_steht_woertlich_im_korpus() -> None:
@@ -700,7 +700,7 @@ def test_jede_textstelle_der_falldateien_steht_woertlich_im_korpus() -> None:
             datei = docs / quelle
             if not datei.is_file() or stelle not in datei.read_text(encoding="utf-8"):
                 fehlend.append(f"{f['id']}: {stelle!r} steht nicht in {quelle}")
-    assert geprueft == 5, f"{geprueft} Textstellen geprueft, erwartet 5"
+    assert geprueft == 8, f"{geprueft} Textstellen geprueft, erwartet 8"
     assert not fehlend, "\n".join(fehlend)
 
 
@@ -860,7 +860,44 @@ def test_gegenprobe_wechselt_die_reihenfolge_und_nur_b_hat_einen_verlauf(
     )
 
 
-@pytest.mark.parametrize("modus", ["verlauf", "kontrolle", "gegenprobe"])
+def test_gegenprobe_nur_b_faehrt_a_nicht(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mit nur B laeuft A nie; B bekommt seine Laeufe mit Verlauf wie sonst.
+    Gegenprobe: Ohne die Einschraenkung laufen beide."""
+    from app.prompts import Runde
+
+    vorrunde = Runde(question="Do you sell bicycles?", answer="")
+    folge: list[str] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        verlauf = kwargs.get("history")
+        folge.append("B" if verlauf else "A")
+        if verlauf:
+            return _antwort_mit_umformung("30 days.", "How long is the return window?")
+        return _antwort("30 days.", False, "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {
+        "id": "fell-01",
+        "kategorie": "direkt",
+        "frage": "How long is the return window?",
+        "erwartete_quelle": "returns-and-exchanges.md",
+        "erwartete_textstelle": None,
+        "erwartet_eskalation": False,
+    }
+
+    a, b = gegenprobe_frage("demo-test", eintrag, None, 2, 10, 3, vorrunde, ("B",))  # type: ignore[arg-type]
+    assert folge == ["B", "B", "B"]
+    assert a.laeufe_einzeln == [] and a.eskaliert_anzahl is None
+    assert len(b.laeufe_einzeln) == 3 and b.eskaliert_anzahl == 0
+
+    folge.clear()
+    gegenprobe_frage("demo-test", eintrag, None, 2, 10, 1, vorrunde)  # type: ignore[arg-type]
+    assert folge == ["A", "B"]
+
+
+@pytest.mark.parametrize("modus", ["verlauf", "kontrolle", "gegenprobe", "gegenprobe_nur_b"])
 def test_die_gespraechsmodi_schreiben_gueltiges_json(
     monkeypatch: pytest.MonkeyPatch, modus: str
 ) -> None:
@@ -890,13 +927,15 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
             laeufe=1,
         )
 
-    if modus == "gegenprobe":
+    if modus.startswith("gegenprobe"):
         monkeypatch.setattr(
             run,
             "gegenprobe_frage",
             lambda slug, e, *a: (ohne_modell(slug, e), ohne_modell(slug, e)),
         )
-        bericht = run.fahre_gegenprobe("demo-fellgate", "T", False, 1)
+        bericht = run.fahre_gegenprobe(
+            "demo-fellgate", "T", False, 1, nur_b=modus == "gegenprobe_nur_b"
+        )
     else:
         monkeypatch.setattr(run, "eine_frage", ohne_modell)
         bericht = run.fahre_verlauf("demo-fellgate", "T", False, modus == "verlauf", 1)
@@ -904,7 +943,15 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
     json.loads(json.dumps(bericht, ensure_ascii=False))
     pruefe_kopf(bericht)
     assert run.tabelle(bericht)
+    if modus == "gegenprobe_nur_b":
+        assert bericht["kopf"]["fassungen"] == ["B"]
+        assert bericht["fragen"] == [] and bericht["aggregiert_je_kategorie"] == {}
+        assert len(bericht["fragen_b"]) == 17
+        assert "NUR FASSUNG B" in bericht["kopf"]["metrik_bedeutung"]
     if modus == "gegenprobe":
+        assert bericht["kopf"]["fassungen"] == ["A", "B"]
+        assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 17
+    if modus.startswith("gegenprobe"):
         assert run.tabelle(
             {
                 **bericht,
@@ -912,7 +959,7 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
                 "fragen": bericht["fragen_b"],
             }
         )
-    if modus != "gegenprobe":
+    if not modus.startswith("gegenprobe"):
         assert bericht["kopf"]["falldatei_stand"] == "2026-10-13"
 
 

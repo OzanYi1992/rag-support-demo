@@ -13,7 +13,7 @@ faelle:
 
   - id: verlauf-acme-01
     kategorie: sprache
-    verlauf:
+    verlauf: &pruefung
       - question: "Wie lange prüfen Sie eine Rücksendung?"
         answer: "Nach Eingang prüfen wir die Ware innerhalb von fünf Werktagen."
     folgefrage: "and when do I get my money back after that?"
@@ -28,3 +28,17 @@ faelle:
       gekippt, als ein Prompt in der Sprache des Mandanten eine englische Frage
       rahmte. Die eigenstaendige Frage und die Antwort muessen englisch
       bleiben. n=20 aus demselben Grund wie bei verlauf-04.
+
+  - id: verlauf-10
+    kategorie: rueckfrage
+    verlauf: *pruefung
+    folgefrage: "Wirklich?"
+    erwartete_quelle: retouren-und-gewaehrleistung.md
+    erwartete_textstelle: "Nach Eingang pruefen wir die Ware innerhalb von fuenf Werktagen"
+    erwartet_eskalation: false
+    erwartete_sprache: de
+    laeufe: 10
+    begruendung: >
+      Eine deutsche Rueckfrage beim deutschen Mandanten. Der Verlauf ist der von
+      verlauf-acme-01, ueber den Anker, damit beide Faelle denselben Verlauf
+      sehen. Die Umformung soll daraus eine Frage nach der Pruefdauer machen.

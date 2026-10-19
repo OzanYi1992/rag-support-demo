@@ -829,6 +829,7 @@ def gegenprobe_frage(
     gesamtzahl: int,
     laeufe: int,
     vorrunde: Runde,
+    arme: tuple[str, ...] = ("A", "B"),
 ) -> tuple[Frageergebnis, Frageergebnis]:
     """Eine Goldfrage in zwei Fassungen, verschraenkt: A ohne Verlauf, B als
     zweite Runde nach einer fremden ersten.
@@ -836,6 +837,10 @@ def gegenprobe_frage(
     Je Lauf einmal A und einmal B, die Reihenfolge wechselt von Lauf zu Lauf.
     So verschiebt eine Aenderung beim Anbieter waehrend der Messung beide
     Fassungen gleich und erscheint nicht als Wirkung des Verlaufs.
+
+    `arme` sind die Fassungen, die gefahren werden. Mit nur B laeuft A nicht:
+    Dann ist eine fruehere Messung der Bezug fuer A, und die Fassung A dieses
+    Ergebnisses bleibt ohne Laeufe.
 
     Die Raenge stammen aus der getippten Frage und gelten fuer A. B sucht je
     Lauf mit seiner eigenstaendigen Frage; ist sie zeichengleich mit der
@@ -847,17 +852,21 @@ def gegenprobe_frage(
     erg_a.laeufe = erg_b.laeufe = laeufe
     erg_b.verlauf_runden = 1
     sammler_a, sammler_b = _Sammler(), _Sammler()
-    arme = {
+    fassungen = {
         "A": (erg_a, sammler_a, None),
         "B": (erg_b, sammler_b, [vorrunde]),
     }
     for lauf_nr in range(laeufe):
         for arm in ("A", "B") if lauf_nr % 2 == 0 else ("B", "A"):
-            erg, sammler, verlauf = arme[arm]
+            if arm not in arme:
+                continue
+            erg, sammler, verlauf = fassungen[arm]
             d = _ein_aufruf(slug, erg.frage, settings, embedder, None, None, verlauf)
             _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
-    _abschliessen(erg_a, sammler_a, mit_verlauf=False)
-    _abschliessen(erg_b, sammler_b, mit_verlauf=True)
+    if "A" in arme:
+        _abschliessen(erg_a, sammler_a, mit_verlauf=False)
+    if "B" in arme:
+        _abschliessen(erg_b, sammler_b, mit_verlauf=True)
     return erg_a, erg_b
 
 
@@ -1286,6 +1295,10 @@ BEDEUTUNG_KONTROLLE = (
     "rang = Rang der Quelldatei, rang_chunk = Rang des Chunks mit der "
     "erwarteten Textstelle."
 )
+BEDEUTUNG_NUR_B = (
+    " IN DIESEM LAUF NUR FASSUNG B: fragen und aggregiert_je_kategorie sind leer, "
+    "der Bezug fuer A ist eine fruehere Ergebnisdatei."
+)
 BEDEUTUNG_GEGENPROBE = (
     "Goldfragen verschraenkt in zwei Fassungen: A ohne Verlauf, B als zweite "
     "Runde nach einer fremden ersten. Raenge aus der getippten Frage, sie gelten "
@@ -1344,8 +1357,14 @@ def fahre_verlauf(
     }
 
 
-def fahre_gegenprobe(slug: str, lauf: str, baseline: bool, laeufe: int) -> dict[str, Any]:
-    """Die Goldfragen verschraenkt, A ohne und B mit fremder erster Runde."""
+def fahre_gegenprobe(
+    slug: str, lauf: str, baseline: bool, laeufe: int, nur_b: bool = False
+) -> dict[str, Any]:
+    """Die Goldfragen verschraenkt, A ohne und B mit fremder erster Runde.
+
+    Mit `nur_b` laeuft nur Fassung B, etwa nach einer Aenderung, die nur den Weg
+    mit Verlauf betrifft. Dann ist eine fruehere Messung der Bezug fuer A.
+    """
     settings = Settings()
     gold = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
     daten = lade_verlauf(slug, eingefroren=True)
@@ -1357,11 +1376,13 @@ def fahre_gegenprobe(slug: str, lauf: str, baseline: bool, laeufe: int) -> dict[
     gesamt = _chunkzahl(settings, slug)
     preise = _preise()
 
+    arme = ("B",) if nur_b else ("A", "B")
     arm_a: list[Frageergebnis] = []
     arm_b: list[Frageergebnis] = []
     for f in gold["fragen"]:
-        a, b = gegenprobe_frage(slug, f, settings, top_k, gesamt, laeufe, vorrunde)
-        arm_a.append(a)
+        a, b = gegenprobe_frage(slug, f, settings, top_k, gesamt, laeufe, vorrunde, arme)
+        if "A" in arme:
+            arm_a.append(a)
         arm_b.append(b)
 
     kopf = _kopf_lokal(
@@ -1375,8 +1396,9 @@ def fahre_gegenprobe(slug: str, lauf: str, baseline: bool, laeufe: int) -> dict[
         herkunft,
         gesamt,
         preise,
-        BEDEUTUNG_GEGENPROBE,
+        BEDEUTUNG_GEGENPROBE + (BEDEUTUNG_NUR_B if nur_b else ""),
     )
+    kopf["fassungen"] = list(arme)
     kopf["vorrunde_frage"] = vorrunde.question
     kopf["b_eigenstaendig_gleich_getippt"] = _gleich_getippt(arm_b)
     return {
@@ -1651,11 +1673,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Goldfragen verschraenkt, A ohne Verlauf und B nach einer fremden ersten Runde",
     )
+    p.add_argument(
+        "--nur-b",
+        action="store_true",
+        help="mit --gegenprobe: nur Fassung B; der Bezug fuer A ist eine fruehere Datei",
+    )
     args = p.parse_args(argv)
 
     gespraech = args.verlauf or args.gegenprobe
     if args.kontrolle and not args.verlauf:
         p.error("--kontrolle gilt nur zusammen mit --verlauf.")
+    if args.nur_b and not args.gegenprobe:
+        p.error("--nur-b gilt nur zusammen mit --gegenprobe.")
     if args.verlauf and args.gegenprobe:
         p.error("--verlauf und --gegenprobe sind zwei getrennte Laeufe.")
     if gespraech and (args.retrieval_only or args.base_url or args.top_k is not None):
@@ -1716,7 +1745,9 @@ def main(argv: list[str] | None = None) -> int:
                     slug, args.lauf, args.baseline, not args.kontrolle, args.laeufe
                 )
             elif args.gegenprobe:
-                bericht = fahre_gegenprobe(slug, args.lauf, args.baseline, args.laeufe)
+                bericht = fahre_gegenprobe(
+                    slug, args.lauf, args.baseline, args.laeufe, nur_b=args.nur_b
+                )
             else:
                 bericht = fahre(
                     slug,
@@ -1734,7 +1765,8 @@ def main(argv: list[str] | None = None) -> int:
             stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
             datei = ERGEBNIS_DIR / f"{stempel}-{slug}-lauf{args.lauf}.json"
             datei.write_text(json.dumps(bericht, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(tabelle(bericht))
+            if bericht["kopf"].get("fassungen") != ["B"]:
+                print(tabelle(bericht))
             if "aggregiert_je_kategorie_b" in bericht:
                 print("\nFassung B, nach der fremden ersten Runde:")
                 print(
