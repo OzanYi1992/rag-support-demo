@@ -528,3 +528,52 @@ def test_der_weg_ueber_suche_und_modell_prueft_den_mandanten(
     )
     assert a.kind == "rag"
     assert len(llm.calls) == 1
+
+
+# --- "Verstanden als" nur bei mehr als Schreibweise und Satzzeichen ------------
+
+
+@pytest.mark.parametrize(
+    ("getippt", "eigenstaendig", "erwartet"),
+    [
+        # Aus dem Telefontest: nur Gross- und Kleinschreibung.
+        ("Do you Ship to norway?", "Do you ship to Norway?", False),
+        # Aus der Gegenprobe: Der Artikel kommt dazu, die Frage ist eine andere.
+        ("is usa in zone a", "Is the USA in zone A?", True),
+        ("how long does that take?", "How long does delivery to Norway take?", True),
+    ],
+)
+def test_standalone_question_differs_vergleicht_in_der_normalform(
+    umgebung: tuple[Settings, E5Embeddings], getippt: str, eigenstaendig: str, erwartet: bool
+) -> None:
+    """Das Feld sagt, ob die eigenstaendige Frage in der Normalform der festen
+    Antworten von der getippten abweicht. Die eigenstaendige Frage selbst steht
+    unveraendert in der Antwort; sie geht weiter in Suche und Antwortprompt."""
+    settings, embeddings = umgebung
+    a = answer(
+        "demo-englisch",
+        getippt,
+        settings=settings,
+        embeddings=embeddings,
+        llm=FakeLlm(parsed=_antwort_en()),
+        history=VERLAUF,
+        umformer=FakeUmformer(eigenstaendig),
+    )
+    assert a.standalone_question == eigenstaendig
+    assert a.standalone_question_differs is erwartet
+
+
+def test_ohne_verlauf_ist_standalone_question_differs_falsch(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Ohne Verlauf gibt es keine Umformung und keine Zeile."""
+    settings, embeddings = umgebung
+    a = answer(
+        "demo-englisch",
+        "is usa in zone a",
+        settings=settings,
+        embeddings=embeddings,
+        llm=FakeLlm(parsed=_antwort_en()),
+    )
+    assert a.standalone_question is None
+    assert a.standalone_question_differs is False

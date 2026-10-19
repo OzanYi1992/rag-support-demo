@@ -257,9 +257,13 @@
     return zeichen.length > MAX_ANTWORT ? zeichen.slice(0, MAX_ANTWORT).join("") : text;
   }
 
-  function verstandenAnzeigen(blase, frage, daten) {
+  // Die Zeile steht nur, wenn der Server sagt, dass sich die eigenstaendige
+  // Frage mehr als in Schreibweise und Satzzeichen von der getippten
+  // unterscheidet. Den Vergleich macht der Server in seiner Normalform; hier
+  // wird nicht ein zweites Mal verglichen.
+  function verstandenAnzeigen(blase, daten) {
     var eigenstaendig = daten.standalone_question;
-    if (!eigenstaendig || eigenstaendig === frage) return;
+    if (!daten.standalone_question_differs || !eigenstaendig) return;
     var zeile = document.createElement("div");
     zeile.className = "verstanden";
     // Als Funktion und nicht als Zeichenkette: Die Frage kommt vom Modell, und
@@ -310,7 +314,7 @@
       })
       .then(function (daten) {
         wartet.huelle.className = "nachricht assistent";
-        verstandenAnzeigen(blase, frage, daten);
+        verstandenAnzeigen(blase, daten);
         antwortAnzeigen(wartet.inhalt, daten.text);
         if (daten.escalated) {
           eskalationAnhaengen(wartet.inhalt);

@@ -189,3 +189,23 @@ def test_die_quellen_stehen_ohne_zahl_unter_der_antwort() -> None:
     assert 'knopf.className = "quelle";' in code
     assert not zeigt_zahl(code)
     assert zeigt_zahl('score.textContent = "  " + scores[i].toFixed(2);')
+
+
+def test_verstanden_als_folgt_dem_feld_des_servers() -> None:
+    """Die Zeile steht nur, wenn standalone_question_differs wahr ist. Der
+    Browser vergleicht nicht selbst; ein zeichengleicher Vergleich zeigte die
+    Zeile auch bei blosser Grossschreibung.
+
+    Gegenprobe: Die Pruefung schlaegt an der frueheren Bedingung an.
+    """
+
+    def folgt_dem_server(code: str) -> bool:
+        return (
+            "if (!daten.standalone_question_differs || !eigenstaendig) return;" in code
+            and "eigenstaendig === frage" not in code
+        )
+
+    code = _ohne_kommentare(APP_JS.read_text(encoding="utf-8"))
+    assert folgt_dem_server(code)
+    assert "verstandenAnzeigen(blase, daten);" in code
+    assert not folgt_dem_server("if (!eigenstaendig || eigenstaendig === frage) return;")

@@ -52,6 +52,7 @@ from app.texts import (
     ART_IDENTITAET,
     kurzformel_erkennen,
     kurzformel_genau,
+    normalisieren,
     texte_fuer,
 )
 from app.verweis import ist_assistentendokument, mandantendokumente, quellverweise_entfernen
@@ -138,6 +139,11 @@ class Answer(BaseModel):
     # Die Oberflaeche zeigt sie als "Verstanden als", ins Ereignis geht sie
     # nicht: Sie ist Text.
     standalone_question: str | None = None
+    # Ob sich die eigenstaendige Frage in der Normalform von der getippten
+    # unterscheidet, also mehr als Schreibweise und Satzzeichen. Nur dann zeigt
+    # die Oberflaeche "Verstanden als": Eine Zeile, die nur die Grossschreibung
+    # korrigiert, sagt nichts ueber den Bezug. Ohne Verlauf immer falsch.
+    standalone_question_differs: bool = False
     # Wie viele fruehere Runden die Anfrage mitbrachte.
     history_turns: int = 0
     # "keine", "umgeformt" oder "verworfen", und bei "verworfen" der Grund:
@@ -302,10 +308,18 @@ class Umformung:
     completion_tokens: int | None
     modell: str | None
 
-    def als_felder(self, runden: int) -> dict[str, object]:
-        """Die Felder einer `Answer`, die diese Umformung beschreiben."""
+    def als_felder(self, runden: int, getippt: str) -> dict[str, object]:
+        """Die Felder einer `Answer`, die diese Umformung beschreiben.
+
+        `getippt` ist die Frage, wie sie kam. Verglichen wird in derselben
+        Normalform wie bei den festen Antworten, damit es nur eine gibt.
+        """
+        unterscheidet = self.eigenstaendige_frage is not None and normalisieren(
+            self.eigenstaendige_frage
+        ) != normalisieren(getippt)
         return {
             "standalone_question": self.eigenstaendige_frage,
+            "standalone_question_differs": unterscheidet,
             "history_turns": runden,
             "rewrite_status": self.status,
             "rewrite_reason": self.grund,
@@ -468,7 +482,7 @@ def answer(
         )
     )
     umformung = eigenstaendige_frage(tenant_id, tenant, verlauf, question, aktiver_umformer)
-    felder = umformung.als_felder(len(verlauf))
+    felder = umformung.als_felder(len(verlauf), question)
 
     art = kurzformel_erkennen(umformung.suchfrage)
     if art is not None:

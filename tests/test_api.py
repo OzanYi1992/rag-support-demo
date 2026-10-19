@@ -1647,3 +1647,29 @@ def test_seite_traegt_den_knopf_fuer_ein_neues_gespraech(
     assert f'<button type="button" id="neues-gespraech">{knopf}</button>' in seite
     assert "verstanden_als" in JAVASCRIPT_SCHLUESSEL
     assert json.dumps(TEXTE[sprache].verstanden_als, ensure_ascii=False) in seite
+
+
+def test_die_antwort_traegt_standalone_question_differs(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Route liefert das boolesche Feld, nach dem die Oberflaeche "Verstanden
+    als" zeigt: ohne Verlauf falsch, mit einer Umformung, die nur die
+    Grossschreibung aendert, ebenso falsch, mit einer echten Umformung wahr."""
+    client, _ = _client(umgebung, umformer=FakeUmformer("Do you ship to Norway?"))
+    ohne = client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": "Do you ship to Norway?"})
+    assert ohne.json()["standalone_question_differs"] is False
+
+    verlauf = [{"question": "Hello there, a question", "answer": "Sure."}]
+    nur_gross = client.post(
+        f"/t/{ENGLISCH_TOKEN}/chat",
+        json={"question": "Do you Ship to norway?", "history": verlauf},
+    )
+    assert nur_gross.json()["standalone_question"] == "Do you ship to Norway?"
+    assert nur_gross.json()["standalone_question_differs"] is False
+
+    client, _ = _client(umgebung, umformer=FakeUmformer("How long does delivery to Norway take?"))
+    echt = client.post(
+        f"/t/{ENGLISCH_TOKEN}/chat",
+        json={"question": "how long does that take?", "history": verlauf},
+    )
+    assert echt.json()["standalone_question_differs"] is True
