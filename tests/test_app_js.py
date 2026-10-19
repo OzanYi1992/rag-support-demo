@@ -209,3 +209,22 @@ def test_verstanden_als_folgt_dem_feld_des_servers() -> None:
     assert folgt_dem_server(code)
     assert "verstandenAnzeigen(blase, daten);" in code
     assert not folgt_dem_server("if (!eigenstaendig || eigenstaendig === frage) return;")
+
+
+def test_vor_den_quellen_steht_nur_das_dreieck() -> None:
+    """Die Liste der Quellen hat keinen Aufzaehlungspunkt und keinen Einzug;
+    vor jeder Quelle steht nur das Dreieck des Knopfs. Statisch geprueft; wie
+    es aussieht, zeigt der Browser.
+
+    Gegenprobe: Die Pruefung schlaegt an der frueheren Regel an.
+    """
+
+    def ohne_punkt(regel: str) -> bool:
+        return "list-style: none;" in regel and "padding-left: 0;" in regel
+
+    css = STYLE_CSS.read_text(encoding="utf-8")
+    assert ohne_punkt(_css_regel(css, ".quellen ul"))
+    assert 'content: "\\25B8";' in _css_regel(css, ".quellen button.quelle::before")
+    assert not ohne_punkt(
+        _css_regel(".quellen ul { margin: .25rem 0 0; padding-left: 1.1rem; }", ".quellen ul")
+    )

@@ -103,7 +103,10 @@ main {
   font-size: .82rem;
   color: var(--text-leise);
 }
-.quellen ul { margin: .25rem 0 0; padding-left: 1.1rem; }
+/* Ohne Aufzaehlungspunkt: Vor jeder Quelle steht schon das Dreieck des Knopfs,
+   und ein Punkt davor waere ein zweites Zeichen fuer dasselbe. Die Knoepfe
+   stehen buendig unter der Ueberschrift. */
+.quellen ul { margin: .25rem 0 0; padding-left: 0; list-style: none; }
 .quellen li { margin: .1rem 0; }
 
 .fehler .text { background: transparent; border: 1px solid var(--linie); color: var(--text-leise); }
