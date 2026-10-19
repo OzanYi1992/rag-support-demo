@@ -327,6 +327,30 @@ def test_mit_verlauf_und_genauer_formel_ohne_umformung_und_ohne_modell(
     assert a.standalone_question is None
 
 
+def test_ok_mit_verlauf_ergibt_die_feste_antwort(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """ "ok" nach einer Antwort: feste Antwort ohne Umformung, ohne Suche und ohne
+    Modell. Vorher ging die Bestaetigung in die Umformung und dann in die Suche.
+    Umformer und Antwortclient werfen bei jedem Zugriff."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-englisch",
+        "ok",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=VERLAUF,
+        umformer=_Verboten("Umformer"),  # type: ignore[arg-type]
+    )
+    assert a.kind == "acknowledgment"
+    assert a.text == "Sure. What would you like to know?"
+    assert a.sources == [] and a.escalated is False
+    assert a.history_turns == 1
+    assert a.rewrite_status == "keine"
+    assert a.standalone_question is None
+
+
 def test_mit_verlauf_und_tippfehler_traegt_die_umformung_die_erkennung(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:

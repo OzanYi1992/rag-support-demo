@@ -123,6 +123,10 @@ class Texte(BaseModel, frozen=True):
     dank_antwort: str
     abschied_antwort: str
 
+    # Auf eine Bestaetigung wie "ok" oder "alles klar", ebenfalls aus diesem
+    # Katalog. Vorher ging "ok" nach einer Antwort in die Suche und eskalierte.
+    bestaetigung_antwort: str
+
     # Auf eine Frage nach dem Assistenten selbst, was er kann und wozu er da ist
     # oder ob ein Mensch antwortet, ebenfalls aus diesem Katalog. Beide tragen
     # {topics} und {display_name}, wie die Begruessung der Seite.
@@ -190,6 +194,7 @@ _DE = Texte(
     begruessung_antwort="Guten Tag. Ich beantworte Fragen zu {topics}. Was möchten Sie wissen?",
     dank_antwort="Gern geschehen. Haben Sie noch eine Frage?",
     abschied_antwort="Auf Wiedersehen und vielen Dank für Ihre Fragen.",
+    bestaetigung_antwort="Gern. Was möchten Sie wissen?",
     faehigkeiten_antwort=(
         "Ich beantworte Fragen zu {topics}, auf Grundlage der hinterlegten Unterlagen von "
         "{display_name}. Was möchten Sie wissen?"
@@ -238,6 +243,7 @@ _EN = Texte(
     begruessung_antwort="Hello. I answer questions about {topics}. What would you like to know?",
     dank_antwort="You're welcome. Is there anything else you would like to know?",
     abschied_antwort="Goodbye, and thank you for your questions.",
+    bestaetigung_antwort="Sure. What would you like to know?",
     faehigkeiten_antwort=(
         "I answer questions about {topics}, based on the documents stored for "
         "{display_name}. What would you like to know?"
@@ -276,6 +282,11 @@ VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
 # das schwedische hallå. Gruesse anderer Sprachen erkennt die Liste nicht; sie
 # laufen den normalen Weg.
 #
+# BESTAETIGUNGEN wie "ok", "got it" oder "alles klar" auf demselben Weg, ohne
+# Toleranz wie Gruss, Dank und Abschied. Im Gespraech greift die genaue
+# Erkennung vor der Umformung; eine Bestaetigung geht damit weder in die Suche
+# noch in den Verlauf.
+#
 # FRAGEN NACH DEM ASSISTENTEN SELBST, auf demselben Weg und ebenfalls ohne
 # Modell: was er kann und wozu er da ist ("capabilities"), und ob ein Mensch,
 # ein Bot oder eine KI antwortet ("identity"). Das Dokument ueber den
@@ -297,6 +308,7 @@ class Kurzformeln(BaseModel, frozen=True):
     begruessung: tuple[str, ...]
     dank: tuple[str, ...]
     abschied: tuple[str, ...]
+    bestaetigung: tuple[str, ...]
     faehigkeiten: tuple[str, ...]
     identitaet: tuple[str, ...]
 
@@ -313,9 +325,25 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "guten morgen",
             "guten abend",
             "grüß gott",
+            # "wie geht's" in Normalform: Der Apostroph wird ein Leerzeichen.
+            "wie geht s",
+            "wie gehts",
+            "wie geht es ihnen",
         ),
         dank=("danke", "danke schön", "danke sehr", "vielen dank"),
         abschied=("tschüss", "auf wiedersehen", "bis bald", "ciao"),
+        bestaetigung=(
+            "alles klar",
+            "super",
+            "prima",
+            "gut",
+            "verstanden",
+            "perfekt",
+            "toll",
+            "klasse",
+            "aha",
+            "ach so",
+        ),
         faehigkeiten=(
             "was kannst du",
             "was können sie",
@@ -368,9 +396,26 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "hei",
             "moi",
             "hallå",
+            "how are you",
+            "how are you doing",
         ),
         dank=("thanks", "thank you", "thanks a lot", "thank you very much", "cheers"),
         abschied=("bye", "goodbye", "bye bye", "see you"),
+        bestaetigung=(
+            "ok",
+            "okay",
+            "cool",
+            "great",
+            "nice",
+            "perfect",
+            "awesome",
+            "got it",
+            "i see",
+            "alright",
+            "all right",
+            "understood",
+            "sounds good",
+        ),
         faehigkeiten=(
             "what can you do",
             "what can you help with",
@@ -421,6 +466,7 @@ KURZFORMELN: dict[str, Kurzformeln] = {
 ART_BEGRUESSUNG = "greeting"
 ART_DANK = "thanks"
 ART_ABSCHIED = "goodbye"
+ART_BESTAETIGUNG = "acknowledgment"
 ART_FAEHIGKEITEN = "capabilities"
 ART_IDENTITAET = "identity"
 
@@ -477,6 +523,7 @@ def _arten(formeln: Kurzformeln) -> tuple[tuple[str, tuple[str, ...]], ...]:
         (ART_BEGRUESSUNG, formeln.begruessung),
         (ART_DANK, formeln.dank),
         (ART_ABSCHIED, formeln.abschied),
+        (ART_BESTAETIGUNG, formeln.bestaetigung),
         (ART_FAEHIGKEITEN, formeln.faehigkeiten),
         (ART_IDENTITAET, formeln.identitaet),
     )
@@ -514,7 +561,7 @@ def _nach_tippfehler(normal: str) -> str | None:
 def kurzformel_genau(eingabe: str) -> str | None:
     """Die Art der Eingabe, wenn sie GENAU einer Formel entspricht, sonst None.
 
-    Ueber alle fuenf Arten und alle Sprachen, ohne Toleranz fuer Tippfehler. Im
+    Ueber alle Arten und alle Sprachen, ohne Toleranz fuer Tippfehler. Im
     Gespraech laeuft zuerst nur diese Pruefung auf die getippte Frage: Eine
     kurze Folgefrage wie "How can you tell?" liegt innerhalb der Toleranz einer
     Formel, meint aber die vorige Antwort und gehoert in die Umformung.

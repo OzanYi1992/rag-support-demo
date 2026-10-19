@@ -1026,6 +1026,47 @@ def test_abschied_ohne_retrieval_und_ohne_modell(
     assert len(llm.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("eingabe", "slug", "erwartet"),
+    [
+        ("ok", "demo-englisch", "Sure. What would you like to know?"),
+        ("Got it.", "demo-englisch", "Sure. What would you like to know?"),
+        ("Alles klar!", "demo-acme", "Gern. Was möchten Sie wissen?"),
+        # In der Sprache des Mandanten, nicht der Eingabe.
+        ("Super!", "demo-englisch", "Sure. What would you like to know?"),
+    ],
+)
+def test_bestaetigung_ohne_retrieval_und_ohne_modell(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    eingabe: str,
+    slug: str,
+    erwartet: str,
+) -> None:
+    """Ein "ok" nach einer Antwort geht weder in die Suche noch an das Modell.
+
+    Wie beim Dank. Gegenprobe im selben Test: "ok, do you ship to Norway?"
+    laeuft den normalen Weg, mit genau einem Modellaufruf.
+    """
+    settings, embeddings = umgebung_zweisprachig
+
+    a = answer(
+        slug, eingabe, settings=settings, embeddings=_Verboten("Embedder"), llm=_Verboten("Modell")
+    )
+    assert (a.kind, a.text, a.sources, a.escalated) == ("acknowledgment", erwartet, [], False)
+    assert a.retrieval_scores == [] and a.model is None and a.prompt_tokens is None
+
+    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    normal = answer(
+        slug,
+        "ok, do you ship to Norway?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+    )
+    assert normal.kind == "rag"
+    assert len(llm.calls) == 1
+
+
 def test_die_antwort_auf_eine_kurzformel_prueft_den_mandanten(
     umgebung_zweisprachig: tuple[Settings, E5Embeddings],
 ) -> None:
@@ -1132,6 +1173,7 @@ def test_ein_gleichstand_laeuft_den_normalen_weg(
                 begruessung=leer,
                 dank=leer,
                 abschied=leer,
+                bestaetigung=leer,
                 faehigkeiten=("abcdefgh x",),
                 identitaet=("abcdefgh y",),
             )

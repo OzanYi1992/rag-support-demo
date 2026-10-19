@@ -478,7 +478,14 @@ def test_kurzformellisten_decken_die_katalogsprachen_ab() -> None:
     """Dieselben Sprachschluessel wie der Textkatalog, keine Liste leer."""
     assert set(KURZFORMELN) == set(TEXTE)
     for sprache, formeln in KURZFORMELN.items():
-        for art in ("begruessung", "dank", "abschied", "faehigkeiten", "identitaet"):
+        for art in (
+            "begruessung",
+            "dank",
+            "abschied",
+            "bestaetigung",
+            "faehigkeiten",
+            "identitaet",
+        ):
             assert getattr(formeln, art), f"{sprache}.{art} ist leer"
 
 
@@ -489,7 +496,14 @@ def test_jede_formel_gehoert_zu_genau_einer_art() -> None:
     """
     arten: dict[str, set[str]] = {}
     for formeln in KURZFORMELN.values():
-        for art in ("begruessung", "dank", "abschied", "faehigkeiten", "identitaet"):
+        for art in (
+            "begruessung",
+            "dank",
+            "abschied",
+            "bestaetigung",
+            "faehigkeiten",
+            "identitaet",
+        ):
             for formel in getattr(formeln, art):
                 arten.setdefault(normalisieren(formel), set()).add(art)
                 # Jede Formel ist schon in Normalform geschrieben, bis auf ß.
@@ -504,6 +518,108 @@ def test_jede_formel_gehoert_zu_genau_einer_art() -> None:
 )
 def test_dank_und_abschied_werden_erkannt(eingabe: str, art: str) -> None:
     assert kurzformel_erkennen(eingabe) == art
+
+
+_BESTAETIGUNGEN = {
+    "en": (
+        "ok",
+        "okay",
+        "cool",
+        "great",
+        "nice",
+        "perfect",
+        "awesome",
+        "got it",
+        "i see",
+        "alright",
+        "all right",
+        "understood",
+        "sounds good",
+    ),
+    "de": (
+        "alles klar",
+        "super",
+        "prima",
+        "gut",
+        "verstanden",
+        "perfekt",
+        "toll",
+        "klasse",
+        "aha",
+        "ach so",
+    ),
+}
+
+
+def test_die_listen_der_bestaetigungen_sind_vollstaendig() -> None:
+    """13 englische und 10 deutsche Bestaetigungen, wie entschieden."""
+    for sprache, liste in _BESTAETIGUNGEN.items():
+        assert KURZFORMELN[sprache].bestaetigung == liste, sprache
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        "ok",
+        "OK",
+        "Ok.",
+        "Okay!",
+        "Cool",
+        "Great!",
+        "Nice.",
+        "Perfect!",
+        "Awesome!",
+        "Got it.",
+        "I see.",
+        "Alright.",
+        "All right!",
+        "Understood.",
+        "Sounds good!",
+        "Alles klar!",
+        "Super!",
+        "Prima.",
+        "Gut.",
+        "Verstanden.",
+        "Perfekt!",
+        "Toll!",
+        "Klasse!",
+        "Aha.",
+        "Ach so.",
+    ],
+)
+def test_bestaetigungen_werden_erkannt(eingabe: str) -> None:
+    """Jede Bestaetigung so, wie ein Mensch sie tippt."""
+    assert kurzformel_erkennen(eingabe) == "acknowledgment"
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        "ok, and do you ship to Norway?",
+        "ok so how long does that take?",
+        "Alles klar, und wie lange dauert das?",
+        "I see you ship to Norway",
+        "super danke",
+        # Keine Toleranz: Bestaetigungen sind kurz wie Gruss, Dank und Abschied.
+        "okk",
+        "alles klr",
+        "sounds god",
+    ],
+)
+def test_eine_bestaetigung_mit_frage_oder_tippfehler_trifft_nicht(eingabe: str) -> None:
+    """Nur die ganze Eingabe zaehlt, und nur genau."""
+    assert kurzformel_erkennen(eingabe) is None
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    ["How are you?", "how are you doing?", "Wie geht's?", "Wie gehts?", "Wie geht es Ihnen?"],
+)
+def test_die_frage_nach_dem_befinden_ist_eine_begruessung(eingabe: str) -> None:
+    """Sie bekommt die Begruessung, nicht die Suche. "wie geht's" steht in
+    Normalform in der Liste: Der Apostroph wird ein Leerzeichen."""
+    assert kurzformel_erkennen(eingabe) == "greeting"
+    assert "wie geht s" in KURZFORMELN["de"].begruessung
 
 
 # Der Satz, der sagt, dass ein KI-System antwortet. Er steht als zweiter Satz
@@ -543,7 +659,7 @@ def test_ki_satz_in_beiden_katalogen() -> None:
 
 
 def test_antworten_ohne_modell_im_katalog() -> None:
-    """Die drei Texte, woertlich, mit echten Umlauten im deutschen Katalog."""
+    """Die vier Texte, woertlich, mit echten Umlauten im deutschen Katalog."""
     assert TEXTE["de"].begruessung_antwort == (
         "Guten Tag. Ich beantworte Fragen zu {topics}. Was möchten Sie wissen?"
     )
@@ -556,9 +672,13 @@ def test_antworten_ohne_modell_im_katalog() -> None:
     )
     assert TEXTE["de"].abschied_antwort == "Auf Wiedersehen und vielen Dank für Ihre Fragen."
     assert TEXTE["en"].abschied_antwort == "Goodbye, and thank you for your questions."
+    assert TEXTE["de"].bestaetigung_antwort == "Gern. Was möchten Sie wissen?"
+    assert TEXTE["en"].bestaetigung_antwort == "Sure. What would you like to know?"
     # Serverseitig, nicht in der Seite.
-    for name in ("begruessung_antwort", "dank_antwort", "abschied_antwort"):
+    for name in ("begruessung_antwort", "dank_antwort", "abschied_antwort", "bestaetigung_antwort"):
         assert name not in JAVASCRIPT_SCHLUESSEL
+    for texte in TEXTE.values():
+        assert "—" not in texte.bestaetigung_antwort
 
 
 # --- Fragen nach dem Assistenten: was er kann und wer antwortet --------------
@@ -772,6 +892,7 @@ def test_ein_gleichstand_zwischen_beiden_arten_gilt_als_keine(
                 begruessung=leer,
                 dank=leer,
                 abschied=leer,
+                bestaetigung=leer,
                 faehigkeiten=("abcdefgh x",),
                 identitaet=("abcdefgh y",),
             )

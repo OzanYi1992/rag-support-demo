@@ -27,9 +27,9 @@
   // Hinein kommt eine Runde nur, wenn die Antwort mit Status 200 kam und ueber
   // die Unterlagen lief (kind "rag"): beantwortet mit Frage und Antworttext,
   // eskaliert mit Frage und leerer Antwort, denn die Eskalationsmeldung
-  // enthaelt keine Tatsache. Begruessung, Dank, Abschied und die festen
-  // Antworten auf Fragen nach dem Assistenten bleiben draussen, ebenso jede
-  // fehlgeschlagene Anfrage.
+  // enthaelt keine Tatsache. Begruessung, Dank, Abschied, Bestaetigung und die
+  // festen Antworten auf Fragen nach dem Assistenten bleiben draussen, ebenso
+  // jede fehlgeschlagene Anfrage.
   var gespraech = [];
   var MAX_RUNDEN = 3;
   var MAX_ANTWORT = 2000;

@@ -46,6 +46,7 @@ from app.tenants import TenantConfig, load_tenant
 from app.texts import (
     ART_ABSCHIED,
     ART_BEGRUESSUNG,
+    ART_BESTAETIGUNG,
     ART_DANK,
     ART_FAEHIGKEITEN,
     ART_IDENTITAET,
@@ -119,11 +120,11 @@ class Answer(BaseModel):
     # Phase 6 will das als Dimension.
     lang: str
 
-    # "rag", oder "greeting", "thanks", "goodbye", "capabilities" und
-    # "identity" fuer eine Antwort ohne Retrieval und ohne Modell. Die
-    # Oberflaeche braucht das Feld fuer die Antwort selbst nicht: Ohne Quellen
-    # haengt sie nichts an, ohne Eskalation zeigt sie keinen Kasten. Sie
-    # nimmt aber nur Runden der Art "rag" in den Verlauf.
+    # "rag", oder "greeting", "thanks", "goodbye", "acknowledgment",
+    # "capabilities" und "identity" fuer eine Antwort ohne Retrieval und ohne
+    # Modell. Die Oberflaeche braucht das Feld fuer die Antwort selbst nicht:
+    # Ohne Quellen haengt sie nichts an, ohne Eskalation zeigt sie keinen
+    # Kasten. Sie nimmt aber nur Runden der Art "rag" in den Verlauf.
     kind: str = ART_RAG
 
     # Wie viele Verweise auf ein Dokument ueber den Assistenten aus dem
@@ -234,8 +235,9 @@ def _quellen_verdichten(
 
 
 def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> Answer:
-    """Antwort auf eine Begruessung, einen Dank, einen Abschied oder eine Frage
-    nach dem Assistenten, aus dem Katalog in der Sprache des Mandanten.
+    """Antwort auf eine Begruessung, einen Dank, einen Abschied, eine
+    Bestaetigung oder eine Frage nach dem Assistenten, aus dem Katalog in der
+    Sprache des Mandanten.
 
     Kein Retrieval, kein Modell: keine Scores, keine Tokens,
     `latency_ms_generation` und `model` None. `sources` ist leer.
@@ -255,6 +257,8 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
         text = texte.dank_antwort
     elif art == ART_ABSCHIED:
         text = texte.abschied_antwort
+    elif art == ART_BESTAETIGUNG:
+        text = texte.bestaetigung_antwort
     elif art == ART_FAEHIGKEITEN:
         text = texte.faehigkeiten_antwort.format(
             topics=tenant.topics.strip(), display_name=tenant.display_name
