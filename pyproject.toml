@@ -79,6 +79,22 @@ dependencies = [
     # Direkt, ohne LangChain-Vectorstore (ADR-015).
     "faiss-cpu==1.15.0",
 
+    # --- Spracherkennung ----------------------------------------------------
+    # Der Server erkennt die Sprache der getippten Frage und prueft, ob die
+    # Antwort sie haelt. Kurze Fragen ohne "the" oder "und" trifft eine
+    # Markerliste nicht, deshalb ein statistisches Modell.
+    #
+    # Warum py3langid: klein (4,5 MB installiert), gepflegt, BSD-3-Clause, das
+    # Modell liegt im Paket und laedt ohne Netz. Die einzige Abhaengigkeit ist
+    # numpy 2, und das liegt ueber den Embedding-Stack ohnehin in venv und Image.
+    #
+    # Verworfen:
+    #   lingua    erkennt ebenso gut, kostet aber rund 290 MB im Image, mehr als
+    #             die Haelfte des Embedding-Modells.
+    #   fastText  das Repository ist seit 2024-03-19 archiviert, und das Modell
+    #             fuer die Spracherkennung steht unter CC BY-SA.
+    "py3langid==0.4.0",
+
     # --- Daten und Konfiguration --------------------------------------------
     # python-dotenv fehlt absichtlich: es ist Pflichtabhaengigkeit von
     # pydantic-settings. Direkt gelistet wuerde es dazu einladen, es direkt zu

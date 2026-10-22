@@ -54,6 +54,7 @@ from app.llm import LlmAnfrageAbgelehnt, LlmClient, LlmNichtErreichbar, Umformer
 from app.prompts import Runde
 from app.rag import Answer, answer
 from app.ratelimit import RateLimiter
+from app.sprache import erkenner
 from app.tenants import (
     MIN_TOKEN_LENGTH,
     AmbiguousUrlToken,
@@ -376,9 +377,15 @@ def create_app(
         nicht das WIE OFT. Ein eingespeister wird nicht ueberschrieben -
         sonst zoegen Tests, die einen Ersatz einspeisen, beim Start das echte
         Modell, und Unit-Tests duerfen nicht ins Netz.
+
+        Daneben der Erkenner fuer die Antwortsprache, aus demselben Grund und
+        ebenfalls einmal je Prozess: Die erste Frage soll ihn nicht laden. Er
+        hat keinen Einspeisepunkt, weil er ohne Netz und in rund 0,4 s laedt,
+        auch in Tests.
         """
         if laufende_app.state.embeddings is None:
             laufende_app.state.embeddings = get_embeddings(laufende_app.state.settings)
+        erkenner()
         yield
 
     app = FastAPI(
