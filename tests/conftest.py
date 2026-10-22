@@ -96,6 +96,43 @@ class FakeLlm:
         )
 
 
+class FakeLlmFolge:
+    """LLM-Ersatz ohne Netz, der je Aufruf das naechste Ergebnis der Folge liefert.
+
+    Fuer den zweiten Aufruf zur Antwortsprache: Erster und zweiter Aufruf sollen
+    verschieden antworten koennen. Ein Eintrag ist eine Antwortstruktur, None
+    fuer eine nicht lesbare Struktur, oder eine Ausnahme, die geworfen wird.
+
+    Zeichnet jeden Aufruf auf. Ein Aufruf mehr als vorgesehen ist ein Fehler im
+    Test und kein stiller Rueckfall auf den letzten Eintrag: Genau so faellt ein
+    dritter Aufruf auf. Die Tokens unterscheiden sich je Aufruf, 100 und 10 plus
+    die Nummer ab 0, damit ein Test sieht, welche Zahl zu welchem Aufruf gehoert.
+    """
+
+    def __init__(self, *folge: object, model: str = "fake-model-2026") -> None:
+        self._folge = list(folge)
+        self._model = model
+        self.calls: list[tuple[str, str]] = []
+
+    def generate(self, system_prompt: str, user_prompt: str) -> object:
+        from app.llm import LlmResult
+
+        nummer = len(self.calls)
+        self.calls.append((system_prompt, user_prompt))
+        if nummer >= len(self._folge):
+            raise AssertionError(f"Aufruf {nummer + 1} ist nicht vorgesehen.")
+        eintrag = self._folge[nummer]
+        if isinstance(eintrag, BaseException):
+            raise eintrag
+        return LlmResult(
+            parsed=eintrag,  # type: ignore[arg-type]
+            parsing_error=None if eintrag is not None else "kein JSON",
+            prompt_tokens=100 + nummer,
+            completion_tokens=10 + nummer,
+            model=self._model,
+        )
+
+
 class FakeUmformer:
     """Umformer-Ersatz ohne Netz, fuer Folgefragen.
 

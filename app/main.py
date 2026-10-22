@@ -31,6 +31,7 @@ import hashlib
 import html
 import json
 import logging
+import re
 import sys
 import time
 from collections.abc import AsyncIterator
@@ -63,7 +64,7 @@ from app.tenants import (
     TenantNotFound,
     resolve_token,
 )
-from app.texts import Texte, texte_fuer
+from app.texts import VERFUEGBARE_SPRACHEN, Texte, texte_fuer
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -208,6 +209,22 @@ def _ereignis(name: str, tenant_id: str | None, **felder: object) -> None:
     Token mitschreibt, ist eine Schluesselliste.
     """
     _log.info(json.dumps({"ereignis": name, "tenant_id": tenant_id, **felder}))
+
+
+# Ein Sprachkuerzel aus genau zwei Kleinbuchstaben, ASCII.
+_KUERZEL = re.compile(r"[a-z]{2}")
+
+
+def _sprachkuerzel(wert: str) -> str | None:
+    """Die Selbstauskunft des Modells fuer das Ereignis: nur ein Kuerzel aus
+    genau zwei Kleinbuchstaben, sonst None.
+
+    Das Feld schreibt das Modell, und es kann darin jeden Text schreiben. Ins
+    Log gehoert kein Text. Ein Kuerzel ausserhalb des Katalogs bleibt sichtbar,
+    etwa "no" fuer eine norwegische Antwort. In der Antwort der Schnittstelle
+    bleibt der Wert, wie das Modell ihn schrieb.
+    """
+    return wert if _KUERZEL.fullmatch(wert) else None
 
 
 def _pfadmuster(pfad: str) -> str:
@@ -690,6 +707,23 @@ def create_app(
         }
         if ergebnis.rewrite_reason is not None:
             gespraech["umformung_grund"] = ergebnis.rewrite_reason
+        # Die Antwortsprache nur als Kuerzel aus dem Katalog: Eine vorgegebene
+        # Sprache kommt vom Client, und ins Log gehoert kein Text. Die Felder
+        # des zweiten Aufrufs stehen immer da, ohne ihn als false und null.
+        sprache: dict[str, object] = {
+            "antwortsprache": (
+                ergebnis.answer_language
+                if ergebnis.answer_language in VERFUEGBARE_SPRACHEN
+                else None
+            ),
+            "antwortsprache_quelle": ergebnis.answer_language_source,
+            "sprache_gehalten": ergebnis.language_kept,
+            "zweiter_aufruf": ergebnis.language_retry,
+            "zweiter_aufruf_ergebnis": ergebnis.language_retry_result,
+            "zweiter_aufruf_ms": ergebnis.latency_ms_language_retry,
+            "zweiter_aufruf_prompt_tokens": ergebnis.language_retry_prompt_tokens,
+            "zweiter_aufruf_completion_tokens": ergebnis.language_retry_completion_tokens,
+        }
         _ereignis(
             "chat",
             tenant.slug,
@@ -698,12 +732,13 @@ def create_app(
             escalated=ergebnis.escalated,
             escalation_reason=ergebnis.escalation_reason,
             treffer=len(ergebnis.sources),
-            lang=ergebnis.lang,
+            lang=_sprachkuerzel(ergebnis.lang),
             prompt_tokens=ergebnis.prompt_tokens,
             completion_tokens=ergebnis.completion_tokens,
             model=ergebnis.model,
             gesamt_ms=gesamt_ms,
             **gespraech,
+            **sprache,
         )
         return ergebnis
 

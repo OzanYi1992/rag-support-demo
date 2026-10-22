@@ -64,7 +64,14 @@ def umgebung(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
     return settings, embeddings
 
 
-def gute_antwort(text: str = "Ja, 21 Kalendertage.", lang: str = "de") -> GroundedAnswer:
+# Ersatzantworten, die der Erkenner der Antwortsprache eindeutig zuordnet. Eine
+# Antwort, die er nicht erkennt, zaehlt als andere Sprache und loest einen
+# zweiten Aufruf aus; Tests, die etwas anderes pruefen, sollen davon frei sein.
+GUTE_ANTWORT_DE = "Ja, das Rückgaberecht gilt 21 Kalendertage ab Erhalt der Ware."
+GUTE_ANTWORT_EN = "Yes, we ship to Norway within five working days."
+
+
+def gute_antwort(text: str = GUTE_ANTWORT_DE, lang: str = "de") -> GroundedAnswer:
     return GroundedAnswer(answerable=True, answer=text, sources=["doku.md"], language=lang)
 
 
@@ -85,7 +92,7 @@ def test_normale_frage_liefert_quellen(umgebung: tuple[Settings, E5Embeddings]) 
 
     assert a.escalated is False
     assert a.escalation_reason is None
-    assert a.text == "Ja, 21 Kalendertage."
+    assert a.text == GUTE_ANTWORT_DE
     assert a.sources == ["doku.md"]
     assert a.model == "fake-model-2026"
     assert a.prompt_tokens == 123
@@ -831,8 +838,9 @@ def test_erste_frage_ohne_verlauf_bleibt_zeichengleich(
     Aufruf vor der Antwort.
     """
     settings, embeddings = umgebung_zweisprachig
+    text = GUTE_ANTWORT_DE if sprache == "de" else GUTE_ANTWORT_EN
     llm = FakeLlm(
-        parsed=GroundedAnswer(answerable=True, answer="x", sources=["doku.md"], language=sprache)
+        parsed=GroundedAnswer(answerable=True, answer=text, sources=["doku.md"], language=sprache)
     )
 
     answer(slug, frage, settings=settings, embeddings=embeddings, llm=llm)
@@ -921,7 +929,7 @@ def test_begruessung_ohne_retrieval_und_ohne_modell(
     assert a.model is None and a.prompt_tokens is None and a.completion_tokens is None
     assert a.lang == ("en" if slug == "demo-englisch" else "de")
 
-    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    llm = FakeLlm(parsed=gute_antwort(GUTE_ANTWORT_EN, lang="en"))
     normal = answer(
         slug,
         "Hi, do you ship to Norway?",
@@ -972,7 +980,7 @@ def test_dank_ohne_retrieval_und_ohne_modell(
     )
     assert (a.kind, a.text, a.sources, a.escalated) == (art, erwartet, [], False)
 
-    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    llm = FakeLlm(parsed=gute_antwort(GUTE_ANTWORT_EN, lang="en"))
     normal = answer(
         slug,
         "thanks, and do you ship to Norway?",
@@ -1014,7 +1022,7 @@ def test_abschied_ohne_retrieval_und_ohne_modell(
     )
     assert (a.kind, a.text, a.sources, a.escalated) == (art, erwartet, [], False)
 
-    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    llm = FakeLlm(parsed=gute_antwort(GUTE_ANTWORT_EN, lang="en"))
     normal = answer(
         slug,
         "bye, and do you ship to Norway?",
@@ -1055,7 +1063,7 @@ def test_bestaetigung_ohne_retrieval_und_ohne_modell(
     assert (a.kind, a.text, a.sources, a.escalated) == ("acknowledgment", erwartet, [], False)
     assert a.retrieval_scores == [] and a.model is None and a.prompt_tokens is None
 
-    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    llm = FakeLlm(parsed=gute_antwort(GUTE_ANTWORT_EN, lang="en"))
     normal = answer(
         slug,
         "ok, do you ship to Norway?",
@@ -1180,7 +1188,7 @@ def test_ein_gleichstand_laeuft_den_normalen_weg(
         },
     )
     settings, embeddings = umgebung_zweisprachig
-    llm = FakeLlm(parsed=gute_antwort(lang="en"))
+    llm = FakeLlm(parsed=gute_antwort(GUTE_ANTWORT_EN, lang="en"))
 
     a = answer("demo-englisch", "abcdefgh z", settings=settings, embeddings=embeddings, llm=llm)
 

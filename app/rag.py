@@ -34,6 +34,7 @@ from app.llm import (
     build_umformer,
 )
 from app.prompts import (
+    GroundedAnswer,
     Runde,
     antwortmodell_fuer,
     build_system_prompt,
@@ -42,6 +43,7 @@ from app.prompts import (
     umformungsprompts_bauen,
 )
 from app.search import SearchHit, search_tenant
+from app.sprache import sprache_bestimmen
 from app.tenants import TenantConfig, load_tenant
 from app.texts import (
     ART_ABSCHIED,
@@ -78,6 +80,20 @@ VERWORFEN_ABGELEHNT = "abgelehnt"
 # Laenger darf eine eigenstaendige Frage nicht sein; dieselbe Grenze wie fuer
 # die getippte Frage.
 UMFORMUNG_MAX_ZEICHEN = 2000
+
+# Woher die Antwortsprache kommt, als fester Code fuer Antwort und Ereignis.
+SPRACHE_VORGEGEBEN = "vorgegeben"  # response_language kam mit der Anfrage
+SPRACHE_FRAGE = "frage"  # die getippte Frage ist erkennbar
+SPRACHE_UMFORMUNG = "umformung"  # nur die eigenstaendige Frage ist erkennbar
+SPRACHE_MANDANT = "mandant"  # sonst, und immer bei einer festen Antwort
+
+# Was der zweite Aufruf ergab, wenn die erste Antwort die Sprache nicht hielt.
+# Nur bei "ersetzt" wird die zweite ausgeliefert, sonst bleibt die erste.
+ZWEITER_ERSETZT = "ersetzt"
+ZWEITER_ESKALIERT = "eskaliert"
+ZWEITER_PARSEFEHLER = "parsefehler"
+ZWEITER_NICHT_ERREICHBAR = "nicht_erreichbar"
+ZWEITER_ABGELEHNT = "abgelehnt"
 
 
 class Answer(BaseModel):
@@ -117,9 +133,21 @@ class Answer(BaseModel):
     completion_tokens: int | None
     model: str | None
 
-    # Tatsaechliche Antwortsprache, nicht der Eingabewert von response_language.
-    # Phase 6 will das als Dimension.
+    # Die Selbstauskunft des Modells zur ausgelieferten Antwort, aus dem Feld
+    # language seiner Struktur. Sie ist NICHT die gepruefte Sprache des Textes:
+    # Das Modell meldet oft die Sprache der Frage, auch zu einem Text in einer
+    # anderen. Die festgelegte Sprache steht in `answer_language`, das Urteil
+    # ueber den Text in `language_kept`.
     lang: str
+
+    # Die Sprache, die der Server festgelegt hat, und woher sie kommt:
+    # "vorgegeben", "frage", "umformung" oder "mandant". Eine feste Antwort traegt
+    # die Sprache des Mandanten mit "mandant". Bei einer Eskalation tragen beide
+    # Felder die festgelegte Sprache, also die Entscheidung; die
+    # Eskalationsmeldung selbst steht in der Sprache des Mandanten. Ohne Default,
+    # damit kein Weg sie still auslaesst.
+    answer_language: str
+    answer_language_source: str
 
     # "rag", oder "greeting", "thanks", "goodbye", "acknowledgment",
     # "capabilities" und "identity" fuer eine Antwort ohne Retrieval und ohne
@@ -157,6 +185,23 @@ class Answer(BaseModel):
     rewrite_completion_tokens: int | None = None
     rewrite_model: str | None = None
 
+    # --- Antwortsprache: Pruefung und zweiter Aufruf -----------------------
+    # Ob der ausgelieferte Text in der festgelegten Sprache steht, nach dem
+    # Erkenner. None bei fester Antwort, Eskalation und vorgegebener Sprache:
+    # Dort wird nicht geprueft.
+    language_kept: bool | None = None
+    # Der zweite Aufruf, wenn die erste belegte Antwort die Sprache nicht hielt.
+    # Alle anderen Felder ohne "language_retry" im Namen beschreiben den ERSTEN
+    # Aufruf, bis auf text, sources, source_scores, removed_references und lang:
+    # Die gehoeren zur ausgelieferten Antwort.
+    language_retry: bool = False
+    # "ersetzt", "eskaliert", "parsefehler", "nicht_erreichbar" oder
+    # "abgelehnt"; None ohne zweiten Aufruf.
+    language_retry_result: str | None = None
+    latency_ms_language_retry: int | None = None
+    language_retry_prompt_tokens: int | None = None
+    language_retry_completion_tokens: int | None = None
+
 
 def _eskaliert(
     tenant: TenantConfig,
@@ -164,6 +209,8 @@ def _eskaliert(
     metric: float | None,
     scores: list[float],
     latency_retrieval: int,
+    antwortsprache: str,
+    sprachquelle: str,
     latency_generation: int | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
@@ -175,6 +222,9 @@ def _eskaliert(
     Der Modelltext wird hier NIE ausgeliefert. Auch dann nicht, wenn das Modell
     etwas geschrieben hat - bei answerable=false ist genau dieser Text der, den
     ADR-003 verhindern soll.
+
+    `antwortsprache` und `sprachquelle` sind die festgelegte Sprache. Geprueft
+    wird eine Eskalation nicht, und einen zweiten Aufruf bekommt sie nie.
     """
     return Answer(
         text=tenant.escalation_message.strip(),
@@ -190,6 +240,8 @@ def _eskaliert(
         completion_tokens=completion_tokens,
         model=model,
         lang=lang,
+        answer_language=antwortsprache,
+        answer_language_source=sprachquelle,
     )
 
 
@@ -253,6 +305,10 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
     Themen und den Namen dieses Mandanten ein, also Mandanteninhalt.
     Passen beide nicht zusammen, ist das ein Fehler im Aufrufer und kein Fall
     fuer eine Antwort.
+
+    Die Antwortsprache ist die des Mandanten, mit der Quelle "mandant", auch
+    wenn die Anfrage eine Sprache vorgibt: Der Katalogtext nennt die Themen aus
+    der tenant.yaml, und die stehen nur in dieser Sprache.
     """
     if tenant.slug != tenant_id:
         raise ValueError("tenant passt nicht zur tenant_id.")
@@ -289,6 +345,8 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
         completion_tokens=None,
         model=None,
         lang=tenant.language,
+        answer_language=tenant.language,
+        answer_language_source=SPRACHE_MANDANT,
         kind=art,
     )
 
@@ -396,6 +454,47 @@ def eigenstaendige_frage(
     )
 
 
+def antwortsprache_festlegen(
+    tenant_id: str,
+    tenant: TenantConfig,
+    frage: str,
+    response_language: str | None,
+    umformung: Umformung | None = None,
+) -> tuple[str, str]:
+    """Legt die Antwortsprache fest und sagt, woher sie kommt.
+
+    In dieser Reihenfolge:
+
+      vorgegeben  `response_language` kam mit der Anfrage;
+      frage       die getippte Frage ist erkennbar;
+      umformung   mit Verlauf: Die getippte Frage ist nicht erkennbar, die
+                  Umformung hat eine eigenstaendige Frage geliefert, und diese
+                  ist erkennbar;
+      mandant     sonst die Sprache des Mandanten.
+
+    Eine Frage in einer Sprache ausserhalb des Katalogs ist nicht erkennbar und
+    bekommt die Sprache des Mandanten: "Leverer dere til Norge?" bei einem
+    englischen Mandanten also Englisch. Ein leeres `response_language` gilt
+    wie keines, wie in `build_system_prompt`.
+
+    `tenant_id` an erster Stelle: Die eigenstaendige Frage ist aus dem Verlauf
+    gebaut und kann dessen Inhalt tragen. Passt `tenant.slug` nicht, ist das
+    ein Fehler im Aufrufer.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    if response_language:
+        return response_language, SPRACHE_VORGEGEBEN
+    erkannt = sprache_bestimmen(frage)
+    if erkannt is not None:
+        return erkannt, SPRACHE_FRAGE
+    if umformung is not None and umformung.eigenstaendige_frage is not None:
+        erkannt = sprache_bestimmen(umformung.eigenstaendige_frage)
+        if erkannt is not None:
+            return erkannt, SPRACHE_UMFORMUNG
+    return tenant.language, SPRACHE_MANDANT
+
+
 def answer(
     tenant_id: str,
     question: str,
@@ -406,6 +505,7 @@ def answer(
     embeddings: E5Embeddings | None = None,
     history: list[Runde] | None = None,
     umformer: Umformer | None = None,
+    sprachpruefung: bool = True,
 ) -> Answer:
     """Beantwortet eine Frage fuer genau einen Mandanten.
 
@@ -437,6 +537,16 @@ def answer(
     tell?" liegt innerhalb der Toleranz einer Formel, meint aber die vorige
     Antwort. Nach der Umformung traegt sie ihren Bezug und trifft nicht mehr.
 
+    Die Antwortsprache legt der Server fest, unmittelbar vor der Suche, siehe
+    `antwortsprache_festlegen`. Der erste Aufruf laeuft trotzdem wie ohne sie:
+    ohne `response_language`, wenn keine vorgegeben ist. Erst wenn seine belegte
+    Antwort die festgelegte Sprache nicht haelt, folgt genau ein zweiter Aufruf
+    mit ihr, siehe `_beantworten`.
+
+    `sprachpruefung=False` nur fuer Messungen: Die Sprache wird festgelegt und
+    die Antwort beurteilt, aber es gibt keinen zweiten Aufruf. So laesst sich
+    der Weg ohne Nachforderung neben dem mit ihr messen.
+
     `strategy`, `llm`, `umformer` und `embeddings` sind injizierbar, damit Tests
     ohne Netz und ohne Schluessel auskommen. Keines davon hat einen
     Mandantenbezug.
@@ -454,11 +564,15 @@ def answer(
         art = kurzformel_erkennen(question)
         if art is not None:
             return kurzformel_beantworten(tenant_id, tenant, art)
+        sprache, quelle = antwortsprache_festlegen(tenant_id, tenant, question, response_language)
         return _beantworten(
             tenant_id,
             tenant,
             question,
             response_language,
+            sprache,
+            quelle,
+            sprachpruefung,
             aktive_settings,
             strategy,
             llm,
@@ -487,11 +601,17 @@ def answer(
     art = kurzformel_erkennen(umformung.suchfrage)
     if art is not None:
         return kurzformel_beantworten(tenant_id, tenant, art).model_copy(update=felder)
+    sprache, quelle = antwortsprache_festlegen(
+        tenant_id, tenant, question, response_language, umformung
+    )
     return _beantworten(
         tenant_id,
         tenant,
         umformung.suchfrage,
         response_language,
+        sprache,
+        quelle,
+        sprachpruefung,
         aktive_settings,
         strategy,
         llm,
@@ -504,6 +624,9 @@ def _beantworten(
     tenant: TenantConfig,
     frage: str,
     response_language: str | None,
+    antwortsprache: str,
+    sprachquelle: str,
+    sprachpruefung: bool,
     aktive_settings: Settings,
     strategy: EscalationStrategy | None,
     llm: LlmClient | None,
@@ -519,6 +642,20 @@ def _beantworten(
     von `tenant_id`, die Prompts tragen Name, Zusatz und Sprache von `tenant`.
     Passen beide nicht, ist das ein Fehler im Aufrufer, und er faellt hier auf,
     vor der Suche, nicht erst nach der Antwort.
+
+    Die Antwortsprache, nach beiden Toren und nur bei einer belegten Antwort:
+
+      1. Der erste Aufruf laeuft mit `response_language`, also ohne, wenn keine
+         vorgegeben ist.
+      2. Hat der Server die Sprache selbst festgelegt, prueft der Erkenner den
+         Text, den der Kunde sieht, also nach dem Entfernen der Verweise. Ein
+         nicht erkennbarer Text zaehlt als andere Sprache.
+      3. Haelt er sie nicht, folgt genau ein zweiter Aufruf mit
+         `antwortsprache`, siehe `_sprache_nachfordern`. Ist er belegt, wird er
+         ausgeliefert, auch wenn auch er die Sprache nicht haelt; sonst bleibt
+         die erste Antwort. Einen dritten gibt es nicht.
+
+    Mit `sprachpruefung=False` endet es nach Schritt 2.
     """
     if tenant.slug != tenant_id:
         raise ValueError("tenant passt nicht zur tenant_id.")
@@ -549,6 +686,8 @@ def _beantworten(
             metric=entscheidung.metric_value,
             scores=scores,
             latency_retrieval=latenz_retrieval,
+            antwortsprache=antwortsprache,
+            sprachquelle=sprachquelle,
         )
 
     # --- Generierung -------------------------------------------------------
@@ -580,6 +719,8 @@ def _beantworten(
             metric=entscheidung.metric_value,
             scores=scores,
             latency_retrieval=latenz_retrieval,
+            antwortsprache=antwortsprache,
+            sprachquelle=sprachquelle,
             latency_generation=latenz_generierung,
             prompt_tokens=ergebnis.prompt_tokens,
             completion_tokens=ergebnis.completion_tokens,
@@ -594,6 +735,8 @@ def _beantworten(
             metric=entscheidung.metric_value,
             scores=scores,
             latency_retrieval=latenz_retrieval,
+            antwortsprache=antwortsprache,
+            sprachquelle=sprachquelle,
             latency_generation=latenz_generierung,
             prompt_tokens=ergebnis.prompt_tokens,
             completion_tokens=ergebnis.completion_tokens,
@@ -601,20 +744,29 @@ def _beantworten(
             lang=ergebnis.parsed.language,
         )
 
-    quellen, quellscores = _quellen_verdichten(
-        ergebnis.parsed.sources, treffer, ausgenommen=tenant.assistant_documents
-    )
-    # Nach beiden Toren und nur hier: Eine Eskalation traegt den Text des
-    # Mandanten, keinen Modelltext. Die Dateinamen stehen unter der Antwort,
-    # nicht in ihr.
-    dokumente = mandantendokumente(tenant_id, aktive_settings.tenants_dir)
-    text, entfernt = quellverweise_entfernen(
-        tenant_id, tenant, ergebnis.parsed.answer, ergebnis.parsed.language, dokumente
-    )
+    ausgeliefert = _belegt_aufbereiten(tenant_id, tenant, ergebnis.parsed, treffer, aktive_settings)
+
+    # --- Antwortsprache ----------------------------------------------------
+    # Eine vorgegebene Sprache wird nicht geprueft: Der erste Aufruf hatte sie
+    # schon, und ein zweiter mit derselben Vorgabe waere eine Wiederholung.
+    gehalten: bool | None = None
+    zweiter: _Nachforderung | None = None
+    if sprachquelle != SPRACHE_VORGEGEBEN:
+        gehalten = sprache_bestimmen(ausgeliefert.text) == antwortsprache
+        if not gehalten and sprachpruefung:
+            zweiter = _sprache_nachfordern(
+                tenant_id, tenant, aktives_llm, user_prompt, antwortsprache
+            )
+            if zweiter.belegt is not None:
+                ausgeliefert = _belegt_aufbereiten(
+                    tenant_id, tenant, zweiter.belegt, treffer, aktive_settings
+                )
+                gehalten = sprache_bestimmen(ausgeliefert.text) == antwortsprache
+
     return Answer(
-        text=text,
-        sources=quellen,
-        source_scores=quellscores,
+        text=ausgeliefert.text,
+        sources=ausgeliefert.sources,
+        source_scores=ausgeliefert.source_scores,
         escalated=False,
         escalation_reason=None,
         escalation_metric=entscheidung.metric_value,
@@ -624,6 +776,137 @@ def _beantworten(
         prompt_tokens=ergebnis.prompt_tokens,
         completion_tokens=ergebnis.completion_tokens,
         model=ergebnis.model,
-        lang=ergebnis.parsed.language,
+        lang=ausgeliefert.lang,
+        answer_language=antwortsprache,
+        answer_language_source=sprachquelle,
+        removed_references=ausgeliefert.removed_references,
+        language_kept=gehalten,
+        language_retry=zweiter is not None,
+        language_retry_result=zweiter.ergebnis if zweiter is not None else None,
+        latency_ms_language_retry=zweiter.latenz_ms if zweiter is not None else None,
+        language_retry_prompt_tokens=zweiter.prompt_tokens if zweiter is not None else None,
+        language_retry_completion_tokens=(
+            zweiter.completion_tokens if zweiter is not None else None
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _Belegt:
+    """Eine belegte Antwort des Modells, so aufbereitet, wie sie ausgeliefert wird."""
+
+    text: str
+    sources: list[str]
+    source_scores: list[float | None]
+    removed_references: int
+    # Die Selbstauskunft des Modells, Feld language seiner Struktur.
+    lang: str
+
+
+def _belegt_aufbereiten(
+    tenant_id: str,
+    tenant: TenantConfig,
+    belegt: GroundedAnswer,
+    treffer: list[SearchHit],
+    aktive_settings: Settings,
+) -> _Belegt:
+    """Quellen verdichten und Verweise aus dem Text nehmen, fuer eine belegte
+    Antwort, die erste wie die zweite.
+
+    Nach beiden Toren und nur hier: Eine Eskalation traegt den Text des
+    Mandanten, keinen Modelltext. Die Dateinamen stehen unter der Antwort, nicht
+    in ihr. Titel und Anfuehrungszeichen beim Entfernen folgen dem Feld language
+    des Modells, nicht der festgelegten Sprache.
+
+    `tenant_id` an erster Stelle, weil die Treffer und die Dokumentliste zu
+    diesem Mandanten gehoeren. Passt `tenant.slug` nicht, ist das ein Fehler im
+    Aufrufer.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    quellen, quellscores = _quellen_verdichten(
+        belegt.sources, treffer, ausgenommen=tenant.assistant_documents
+    )
+    dokumente = mandantendokumente(tenant_id, aktive_settings.tenants_dir)
+    text, entfernt = quellverweise_entfernen(
+        tenant_id, tenant, belegt.answer, belegt.language, dokumente
+    )
+    return _Belegt(
+        text=text,
+        sources=quellen,
+        source_scores=quellscores,
         removed_references=entfernt,
+        lang=belegt.language,
+    )
+
+
+@dataclass(frozen=True)
+class _Nachforderung:
+    """Was der zweite Aufruf ergeben hat."""
+
+    # "ersetzt", "eskaliert", "parsefehler", "nicht_erreichbar" oder "abgelehnt".
+    ergebnis: str
+    # Die belegte zweite Antwort, nur bei "ersetzt". Sonst bleibt die erste.
+    belegt: GroundedAnswer | None
+    latenz_ms: int
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+def _sprache_nachfordern(
+    tenant_id: str,
+    tenant: TenantConfig,
+    llm: LlmClient,
+    user_prompt: str,
+    antwortsprache: str,
+) -> _Nachforderung:
+    """Der zweite Aufruf, wenn die erste belegte Antwort die festgelegte
+    Sprache nicht haelt.
+
+    Derselbe Client und derselbe Userprompt, also dieselben Treffer und dieselbe
+    Frage. Nur der Systemprompt traegt die Fassung der Sprachregel fuer eine
+    vorgegebene Sprache; einen neuen Prompttext gibt es nicht.
+
+    Liefert er keine belegte Antwort, bleibt die erste: wenn er eskaliert, wenn
+    seine Struktur nicht lesbar ist, wenn der Anbieter ihn ablehnt oder nicht
+    erreichbar ist. Ein Fehler des Anbieters endet deshalb hier und nicht als
+    503 oder 502: Eine belegte Antwort liegt schon vor, nur nicht in der
+    festgelegten Sprache. Er folgt keinem Fehler und wiederholt keinen.
+
+    `tenant_id` an erster Stelle, weil der Userprompt die Chunks dieses
+    Mandanten traegt. Passt `tenant.slug` nicht, ist das ein Fehler im Aufrufer.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    system_prompt = build_system_prompt(tenant, antwortsprache)
+
+    start = time.perf_counter()
+    try:
+        ergebnis = llm.generate(system_prompt, user_prompt)
+    except (LlmNichtErreichbar, LlmAnfrageAbgelehnt) as fehler:
+        return _Nachforderung(
+            ergebnis=(
+                ZWEITER_NICHT_ERREICHBAR
+                if isinstance(fehler, LlmNichtErreichbar)
+                else ZWEITER_ABGELEHNT
+            ),
+            belegt=None,
+            latenz_ms=int((time.perf_counter() - start) * 1000),
+            prompt_tokens=None,
+            completion_tokens=None,
+        )
+    latenz = int((time.perf_counter() - start) * 1000)
+
+    if ergebnis.parsed is None:
+        code = ZWEITER_PARSEFEHLER
+    elif not ergebnis.parsed.answerable:
+        code = ZWEITER_ESKALIERT
+    else:
+        code = ZWEITER_ERSETZT
+    return _Nachforderung(
+        ergebnis=code,
+        belegt=ergebnis.parsed if code == ZWEITER_ERSETZT else None,
+        latenz_ms=latenz,
+        prompt_tokens=ergebnis.prompt_tokens,
+        completion_tokens=ergebnis.completion_tokens,
     )

@@ -34,7 +34,14 @@ from app.main import (
 from app.prompts import GroundedAnswer
 from app.tenants import load_tenant
 from app.texts import JAVASCRIPT_SCHLUESSEL, TEXTE
-from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, FakeUmformer, lege_mandant_an
+from tests.conftest import (
+    FAKE_DIMENSION,
+    FakeBackend,
+    FakeLlm,
+    FakeLlmFolge,
+    FakeUmformer,
+    lege_mandant_an,
+)
 
 ACME_TOKEN = "acme-token-1234567890"
 NORDWIND_TOKEN = "nordwind-token-123456"
@@ -95,7 +102,14 @@ def _umgebung(tmp_path: Path) -> tuple[Settings, E5Embeddings]:
     return settings, embeddings
 
 
-def gute_antwort(text: str = "Ja, 21 Kalendertage.") -> GroundedAnswer:
+# Eine Ersatzantwort, die der Erkenner der Antwortsprache eindeutig als Deutsch
+# erkennt. Eine Antwort, die er nicht erkennt, zaehlt als andere Sprache und
+# loest einen zweiten Aufruf aus; Tests, die etwas anderes pruefen, sollen davon
+# frei sein.
+GUTE_ANTWORT_DE = "Ja, das Rückgaberecht gilt 21 Kalendertage ab Erhalt der Ware."
+
+
+def gute_antwort(text: str = GUTE_ANTWORT_DE) -> GroundedAnswer:
     return GroundedAnswer(answerable=True, answer=text, sources=["doku.md"], language="de")
 
 
@@ -434,7 +448,7 @@ def test_chat_roundtrip(umgebung: tuple[Settings, E5Embeddings]) -> None:
 
     assert antwort.status_code == 200
     daten = antwort.json()
-    assert daten["text"] == "Ja, 21 Kalendertage."
+    assert daten["text"] == GUTE_ANTWORT_DE
     assert daten["escalated"] is False
     assert daten["sources"]
     assert daten["lang"] == "de"
@@ -1673,3 +1687,200 @@ def test_die_antwort_traegt_standalone_question_differs(
         json={"question": "how long does that take?", "history": verlauf},
     )
     assert echt.json()["standalone_question_differs"] is True
+
+
+# --- Antwortsprache im Ereignis ----------------------------------------------
+
+# Die acht Felder zur Antwortsprache, in jedem Ereignis chat.
+SPRACHFELDER = (
+    "antwortsprache",
+    "antwortsprache_quelle",
+    "sprache_gehalten",
+    "zweiter_aufruf",
+    "zweiter_aufruf_ergebnis",
+    "zweiter_aufruf_ms",
+    "zweiter_aufruf_prompt_tokens",
+    "zweiter_aufruf_completion_tokens",
+)
+
+SPRACHE_FRAGE_EN = "How long does standard delivery take?"
+SPRACHE_ANTWORT_EN = "Standard delivery takes three working days."
+SPRACHE_ANTWORT_DE = "Die Standardlieferung dauert drei Werktage."
+
+
+def _belegt(text: str, language: str) -> GroundedAnswer:
+    return GroundedAnswer(answerable=True, answer=text, sources=["doku.md"], language=language)
+
+
+def _sprachchat(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    llm: FakeLlmFolge,
+    question: str = SPRACHE_FRAGE_EN,
+    **rumpf: object,
+) -> tuple[int, dict[str, object], list[dict[str, object]], str]:
+    """Eine Frage an den englischen Mandanten: Status, Rumpf, Ereignisse, Log."""
+    client, _ = _client(umgebung, llm=llm)  # type: ignore[arg-type]
+    caplog.clear()
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(f"/t/{ENGLISCH_TOKEN}/chat", json={"question": question, **rumpf})
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    return antwort.status_code, antwort.json(), _ereignisse(caplog), log
+
+
+def test_das_ereignis_traegt_die_antwortsprache(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Die acht Felder stehen in jedem Ereignis chat: mit zweitem Aufruf, ohne
+    ihn und bei einer festen Antwort. Nur Codes, Wahrheitswerte und Zahlen,
+    kein Text von Frage oder Antwort."""
+    status, daten, ereignisse, log = _sprachchat(
+        umgebung,
+        caplog,
+        FakeLlmFolge(_belegt(SPRACHE_ANTWORT_DE, "en"), _belegt(SPRACHE_ANTWORT_EN, "en")),
+    )
+    assert status == 200
+    assert daten["text"] == SPRACHE_ANTWORT_EN
+    (chat,) = [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert isinstance(chat["zweiter_aufruf_ms"], int)
+    assert {feld: chat[feld] for feld in SPRACHFELDER} == {
+        "antwortsprache": "en",
+        "antwortsprache_quelle": "frage",
+        "sprache_gehalten": True,
+        "zweiter_aufruf": True,
+        "zweiter_aufruf_ergebnis": "ersetzt",
+        "zweiter_aufruf_ms": chat["zweiter_aufruf_ms"],
+        "zweiter_aufruf_prompt_tokens": 101,
+        "zweiter_aufruf_completion_tokens": 11,
+    }
+    assert (chat["prompt_tokens"], chat["completion_tokens"]) == (100, 10)
+    for text in (SPRACHE_FRAGE_EN, SPRACHE_ANTWORT_EN, SPRACHE_ANTWORT_DE):
+        assert text not in log
+
+    _, _, ereignisse, _ = _sprachchat(
+        umgebung, caplog, FakeLlmFolge(_belegt(SPRACHE_ANTWORT_EN, "en"))
+    )
+    (chat,) = [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert {feld: chat[feld] for feld in SPRACHFELDER} == {
+        "antwortsprache": "en",
+        "antwortsprache_quelle": "frage",
+        "sprache_gehalten": True,
+        "zweiter_aufruf": False,
+        "zweiter_aufruf_ergebnis": None,
+        "zweiter_aufruf_ms": None,
+        "zweiter_aufruf_prompt_tokens": None,
+        "zweiter_aufruf_completion_tokens": None,
+    }
+
+    _, _, ereignisse, _ = _sprachchat(umgebung, caplog, FakeLlmFolge(), question="Hi")
+    (chat,) = [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert chat["art"] == "greeting"
+    assert {feld: chat[feld] for feld in SPRACHFELDER} == {
+        "antwortsprache": "en",
+        "antwortsprache_quelle": "mandant",
+        "sprache_gehalten": None,
+        "zweiter_aufruf": False,
+        "zweiter_aufruf_ergebnis": None,
+        "zweiter_aufruf_ms": None,
+        "zweiter_aufruf_prompt_tokens": None,
+        "zweiter_aufruf_completion_tokens": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("vorgabe", "im_ereignis"),
+    [("fr", None), ("Deutsch bitte", None), ("de", "de")],
+)
+def test_eine_vorgegebene_sprache_ausserhalb_des_katalogs_steht_als_null(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    vorgabe: str,
+    im_ereignis: str | None,
+) -> None:
+    """response_language kommt vom Client. Im Ereignis steht es nur als Kuerzel
+    aus dem Katalog, sonst null; in der Antwort steht es, wie angefragt.
+    Gegenprobe: "de" bleibt "de"."""
+    status, daten, ereignisse, log = _sprachchat(
+        umgebung,
+        caplog,
+        FakeLlmFolge(_belegt(SPRACHE_ANTWORT_EN, "en")),
+        response_language=vorgabe,
+    )
+
+    assert status == 200
+    assert daten["answer_language"] == vorgabe
+    assert daten["answer_language_source"] == "vorgegeben"
+    (chat,) = [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert chat["antwortsprache"] == im_ereignis
+    assert chat["antwortsprache_quelle"] == "vorgegeben"
+    assert chat["sprache_gehalten"] is None
+    if vorgabe == "Deutsch bitte":
+        assert vorgabe not in log
+
+
+@pytest.mark.parametrize(
+    ("fehler", "code", "status_im_ersten"),
+    [
+        (LlmNichtErreichbar("zeitlimit"), "nicht_erreichbar", 503),
+        (LlmAnfrageAbgelehnt("inhaltsfilter"), "abgelehnt", 502),
+    ],
+)
+def test_ein_anbieterfehler_im_zweiten_aufruf_ergibt_200_mit_der_ersten_antwort(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    fehler: Exception,
+    code: str,
+    status_im_ersten: int,
+) -> None:
+    """Scheitert der zweite Aufruf am Anbieter, geht die erste belegte Antwort
+    mit 200 hinaus, und es gibt kein chat_abgebrochen. Gegenprobe: Derselbe
+    Fehler im ersten Aufruf bleibt 503 oder 502."""
+    status, daten, ereignisse, _ = _sprachchat(
+        umgebung, caplog, FakeLlmFolge(_belegt(SPRACHE_ANTWORT_DE, "de"), fehler)
+    )
+
+    assert status == 200
+    assert daten["text"] == SPRACHE_ANTWORT_DE
+    assert not [e for e in ereignisse if e["ereignis"] == "chat_abgebrochen"]
+    (chat,) = [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert chat["zweiter_aufruf"] is True
+    assert chat["zweiter_aufruf_ergebnis"] == code
+    assert chat["sprache_gehalten"] is False
+
+    status, _, ereignisse, _ = _sprachchat(umgebung, caplog, FakeLlmFolge(fehler))
+    assert status == status_im_ersten
+    assert [e["ereignis"] for e in ereignisse] == ["chat_abgebrochen"]
+
+
+@pytest.mark.parametrize(
+    ("language", "im_ereignis"),
+    [
+        ("I answered in English, as asked.", None),
+        ("EN", None),
+        ("eng", None),
+        ("", None),
+        ("en", "en"),
+        ("no", "no"),
+    ],
+)
+def test_lang_steht_im_ereignis_nur_als_kuerzel(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+    language: str,
+    im_ereignis: str | None,
+) -> None:
+    """Das Feld language schreibt das Modell, und es kann darin jeden Text
+    schreiben. Im Ereignis steht es nur als Kuerzel aus genau zwei
+    Kleinbuchstaben, sonst null; in der Antwort der Schnittstelle unveraendert.
+    Gegenprobe: "en" und "no" bleiben stehen."""
+    status, daten, ereignisse, log = _sprachchat(
+        umgebung, caplog, FakeLlmFolge(_belegt(SPRACHE_ANTWORT_EN, language))
+    )
+
+    assert status == 200
+    assert daten["lang"] == language
+    (chat,) = [e for e in ereignisse if e["ereignis"] == "chat"]
+    assert chat["lang"] == im_ereignis
+    if len(language) > 3:
+        assert language not in log

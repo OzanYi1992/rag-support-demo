@@ -557,6 +557,8 @@ def _antwort(text: str, eskaliert: bool, lang: str, kind: str = "rag") -> object
         completion_tokens=10,
         model="fake-model-2026",
         lang=lang,
+        answer_language=lang,
+        answer_language_source="frage",
         kind=kind,
     )
 

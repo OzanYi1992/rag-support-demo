@@ -517,14 +517,34 @@ def test_der_weg_ueber_suche_und_modell_prueft_den_mandanten(
             acme,
             "How long does delivery take?",
             None,
+            "en",
+            "frage",
+            True,
             settings,
             None,
             _Verboten("Modell"),  # type: ignore[arg-type]
             _Verboten("Embedder"),  # type: ignore[arg-type]
         )
-    llm = FakeLlm(parsed=_antwort_en())
+    llm = FakeLlm(
+        parsed=GroundedAnswer(
+            answerable=True,
+            answer="Die RMA-Nummer ist vierzehn Tage gueltig.",
+            sources=["doku.md"],
+            language="de",
+        )
+    )
     a = _beantworten(
-        "demo-acme", acme, "Wie lange gilt die RMA?", None, settings, None, llm, embeddings
+        "demo-acme",
+        acme,
+        "Wie lange gilt die RMA?",
+        None,
+        "de",
+        "frage",
+        True,
+        settings,
+        None,
+        llm,
+        embeddings,
     )
     assert a.kind == "rag"
     assert len(llm.calls) == 1
