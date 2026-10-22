@@ -1,10 +1,10 @@
 # Sprachfaelle demo-acme
 #
-# Wie eval/demo-fellgate/sprache.yaml, dort steht, was die Fassungen A und B
+# Wie eval/demo-fellgate/sprache.yaml, dort steht, was die Fassungen A, B und O
 # bedeuten.
 
 mandant: demo-acme
-stand: 2026-10-19
+stand: 2026-10-22
 
 faelle:
 
@@ -19,3 +19,7 @@ faelle:
     begruendung: >
       Englische Frage beim deutschen Mandanten, mit deutschem Korpus. Sie kam
       mit und ohne Verlauf in jedem Lauf deutsch zurueck.
+
+goldsatz:
+  laeufe: 5
+  erwartete_sprache: de

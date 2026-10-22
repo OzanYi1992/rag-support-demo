@@ -573,6 +573,35 @@ def _retrieval_teil(
     return erg, embedder, lokale_scores
 
 
+# Die Felder zur Antwortsprache je Lauf, unter den Namen des Ereignisses chat.
+# Sie sind die Entscheidung und das Urteil des Servers. Der Massstab fuer die
+# Antwortsprache in eval.run bleibt die Markerschaetzung, sprache_der_antwort:
+# Mit dem Erkenner entscheidet der Server ueber den zweiten Aufruf, und mit
+# demselben Werkzeug gemessen bestaetigte er sich selbst.
+SPRACHFELDER = (
+    "antwortsprache",
+    "antwortsprache_quelle",
+    "sprache_gehalten",
+    "zweiter_aufruf",
+    "zweiter_aufruf_ergebnis",
+    "zweiter_aufruf_ms",
+    "zweiter_aufruf_prompt_tokens",
+    "zweiter_aufruf_completion_tokens",
+)
+
+# Woher die Felder kommen: die Namen in Answer und in der Antwort der Route.
+_SPRACHFELDER_IN_ANSWER = {
+    "antwortsprache": "answer_language",
+    "antwortsprache_quelle": "answer_language_source",
+    "sprache_gehalten": "language_kept",
+    "zweiter_aufruf": "language_retry",
+    "zweiter_aufruf_ergebnis": "language_retry_result",
+    "zweiter_aufruf_ms": "latency_ms_language_retry",
+    "zweiter_aufruf_prompt_tokens": "language_retry_prompt_tokens",
+    "zweiter_aufruf_completion_tokens": "language_retry_completion_tokens",
+}
+
+
 @dataclass
 class _Sammler:
     """Was die Laeufe einer Frage ueber alle Laeufe sammeln."""
@@ -593,11 +622,13 @@ def _ein_aufruf(
     url_token: str | None,
     verlauf: list[Runde] | None,
     response_language: str | None = None,
+    sprachpruefung: bool = True,
 ) -> dict[str, Any]:
     """Ein Lauf, lokal ueber answer() oder gegen die deployte Instanz.
 
-    `response_language` gibt die Antwortsprache vor, nur lokal; ohne sie
-    antwortet das Modell in der Sprache, die es der Frage zuschreibt.
+    `response_language` gibt die Antwortsprache vor, nur lokal; ohne sie legt
+    der Server die Sprache selbst fest. `sprachpruefung=False` laesst den
+    zweiten Aufruf weg, nur lokal: Gegen eine Instanz entscheidet die Instanz.
 
     Gibt die Felder in einer Form zurueck, die fuer beide Wege gleich ist. Eine
     Instanz von vor einem Feld liefert es nicht; dann steht None.
@@ -610,6 +641,8 @@ def _ein_aufruf(
             raise ValueError("Cloud-Lauf ohne url_token.")
         if response_language is not None:
             raise ValueError("Eine vorgegebene Antwortsprache gibt es nur lokal.")
+        if not sprachpruefung:
+            raise ValueError("Ohne Sprachpruefung gibt es nur lokal.")
         daten = cloud_antwort(cloud, url_token, frage, verlauf)
         return {
             "eskaliert": daten["escalated"],
@@ -631,6 +664,7 @@ def _ein_aufruf(
             "umformung_ms": daten.get("latency_ms_rewrite"),
             "umformung_prompt_tokens": daten.get("rewrite_prompt_tokens"),
             "umformung_completion_tokens": daten.get("rewrite_completion_tokens"),
+            **{feld: daten.get(name) for feld, name in _SPRACHFELDER_IN_ANSWER.items()},
         }
     for versuch in range(1, AUSFALL_VERSUCHE + 1):
         try:
@@ -641,6 +675,7 @@ def _ein_aufruf(
                 settings=settings,
                 embeddings=embedder,
                 history=verlauf,
+                sprachpruefung=sprachpruefung,
             )
             break
         except LlmNichtErreichbar as fehler:
@@ -674,6 +709,7 @@ def _ein_aufruf(
         "umformung_ms": antwort.latency_ms_rewrite,
         "umformung_prompt_tokens": antwort.rewrite_prompt_tokens,
         "umformung_completion_tokens": antwort.rewrite_completion_tokens,
+        **{feld: getattr(antwort, name) for feld, name in _SPRACHFELDER_IN_ANSWER.items()},
     }
 
 
@@ -730,6 +766,14 @@ def _lauf_eintragen(
         "umformung_prompt_tokens": d["umformung_prompt_tokens"],
         "umformung_completion_tokens": d["umformung_completion_tokens"],
         "ausfall_wiederholt": d.get("ausfall_wiederholt", 0),
+        # Die Latenz JE LAUF. Die Einzelfelder der Frage tragen nur den ersten
+        # Lauf; ohne diese beiden liesse sich die Latenz nicht je Fassung oder
+        # nur fuer Laeufe mit zweitem Aufruf auswerten. Beide beschreiben den
+        # ersten Aufruf, die Umformung und den zweiten Aufruf tragen
+        # umformung_ms und zweiter_aufruf_ms.
+        "latenz_retrieval_ms": d["latenz_retrieval_ms"],
+        "latenz_generierung_ms": d["latenz_generierung_ms"],
+        **{feld: d.get(feld) for feld in SPRACHFELDER},
     }
 
     # Mit Verlauf sucht jeder Lauf mit seiner eigenen Frage. Ob die erwartete
@@ -802,6 +846,7 @@ def eine_frage(
     url_token: str | None = None,
     laeufe: int = 1,
     verlauf: list[Runde] | None = None,
+    sprachpruefung: bool = True,
 ) -> Frageergebnis:
     erg, embedder, lokale_scores = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
 
@@ -824,7 +869,16 @@ def eine_frage(
         # Minute - drei ueber dem Limit, und der Lauf stirbt nach etwa der Haelfte.
         if cloud is not None:
             time.sleep(CLOUD_PAUSE_S)
-        d = _ein_aufruf(slug, erg.frage, settings, embedder, cloud, url_token, verlauf)
+        d = _ein_aufruf(
+            slug,
+            erg.frage,
+            settings,
+            embedder,
+            cloud,
+            url_token,
+            verlauf,
+            sprachpruefung=sprachpruefung,
+        )
         if cloud is not None and lauf_nr == 0:
             erg.scores_wie_lokal, erg.score_abweichung_max = vergleiche_scores(
                 lokale_scores, d["scores"]
@@ -844,6 +898,7 @@ def gegenprobe_frage(
     laeufe: int,
     vorrunde: Runde,
     arme: tuple[str, ...] = ("A", "B"),
+    sprachpruefung: bool = True,
 ) -> tuple[Frageergebnis, Frageergebnis]:
     """Eine Goldfrage in zwei Fassungen, verschraenkt: A ohne Verlauf, B als
     zweite Runde nach einer fremden ersten.
@@ -875,7 +930,16 @@ def gegenprobe_frage(
             if arm not in arme:
                 continue
             erg, sammler, verlauf = fassungen[arm]
-            d = _ein_aufruf(slug, erg.frage, settings, embedder, None, None, verlauf)
+            d = _ein_aufruf(
+                slug,
+                erg.frage,
+                settings,
+                embedder,
+                None,
+                None,
+                verlauf,
+                sprachpruefung=sprachpruefung,
+            )
             _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
     if "A" in arme:
         _abschliessen(erg_a, sammler_a, mit_verlauf=False)
@@ -1068,6 +1132,7 @@ def fahre(
     baseline: bool,
     cloud: CloudZiel | None = None,
     laeufe: int = 1,
+    sprachpruefung: bool = True,
 ) -> dict[str, Any]:
     settings = Settings()
     tenant = load_tenant(slug, settings.tenants_dir)
@@ -1087,7 +1152,18 @@ def fahre(
     # Es steht weder im Kopf noch in einem Frageergebnis.
     url_token = tenant.url_token if cloud is not None else None
     ergebnisse = [
-        eine_frage(slug, f, settings, top_k, gesamt, nur_retrieval, cloud, url_token, laeufe)
+        eine_frage(
+            slug,
+            f,
+            settings,
+            top_k,
+            gesamt,
+            nur_retrieval,
+            cloud,
+            url_token,
+            laeufe,
+            sprachpruefung=sprachpruefung,
+        )
         for f in gold["fragen"]
     ]
 
@@ -1143,6 +1219,11 @@ def fahre(
             # Stichprobe von eins, und genau das hat die Zahlen aus EN-3 und
             # EN-6 entwertet (P-028, P-030).
             "laeufe_je_frage": laeufe,
+            # Ob der Server einen zweiten Aufruf machen durfte, wenn die Antwort
+            # die festgelegte Sprache nicht hielt. null, wo eval.run das nicht
+            # bestimmt: ohne Modell, und gegen eine deployte Instanz, die
+            # selbst entscheidet.
+            "sprachpruefung": None if nur_retrieval or cloud is not None else sprachpruefung,
             "laeufe_begruendung": (
                 "n>1 seit 2026-09-24. Die Generierung wuerfelt: Dieselbe Frage "
                 "lieferte bei identischem Retrieval verschiedene Antwortsprachen "
@@ -1322,7 +1403,12 @@ BEDEUTUNG_GEGENPROBE = (
 
 
 def fahre_verlauf(
-    slug: str, lauf: str, baseline: bool, mit_verlauf: bool, laeufe_kontrolle: int
+    slug: str,
+    lauf: str,
+    baseline: bool,
+    mit_verlauf: bool,
+    laeufe_kontrolle: int,
+    sprachpruefung: bool = True,
 ) -> dict[str, Any]:
     """Die Verlaufsfaelle eines Mandanten, mit Verlauf oder als Kontrolle ohne.
 
@@ -1343,7 +1429,17 @@ def fahre_verlauf(
         laeufe_je_fall[fall["id"]] = n
         verlauf = _runden(fall["verlauf"]) if mit_verlauf else None
         ergebnisse.append(
-            eine_frage(slug, eintrag, settings, top_k, gesamt, False, laeufe=n, verlauf=verlauf)
+            eine_frage(
+                slug,
+                eintrag,
+                settings,
+                top_k,
+                gesamt,
+                False,
+                laeufe=n,
+                verlauf=verlauf,
+                sprachpruefung=sprachpruefung,
+            )
         )
 
     kopf = _kopf_lokal(
@@ -1360,6 +1456,7 @@ def fahre_verlauf(
         BEDEUTUNG_VERLAUF if mit_verlauf else BEDEUTUNG_KONTROLLE,
     )
     kopf["laeufe_je_fall"] = laeufe_je_fall
+    kopf["sprachpruefung"] = sprachpruefung
     # YAML liest `stand: 2026-10-13` als Datum; die Ergebnisdatei ist JSON.
     kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
     if mit_verlauf:
@@ -1372,7 +1469,12 @@ def fahre_verlauf(
 
 
 def fahre_gegenprobe(
-    slug: str, lauf: str, baseline: bool, laeufe: int, nur_b: bool = False
+    slug: str,
+    lauf: str,
+    baseline: bool,
+    laeufe: int,
+    nur_b: bool = False,
+    sprachpruefung: bool = True,
 ) -> dict[str, Any]:
     """Die Goldfragen verschraenkt, A ohne und B mit fremder erster Runde.
 
@@ -1394,7 +1496,9 @@ def fahre_gegenprobe(
     arm_a: list[Frageergebnis] = []
     arm_b: list[Frageergebnis] = []
     for f in gold["fragen"]:
-        a, b = gegenprobe_frage(slug, f, settings, top_k, gesamt, laeufe, vorrunde, arme)
+        a, b = gegenprobe_frage(
+            slug, f, settings, top_k, gesamt, laeufe, vorrunde, arme, sprachpruefung
+        )
         if "A" in arme:
             arm_a.append(a)
         arm_b.append(b)
@@ -1413,6 +1517,7 @@ def fahre_gegenprobe(
         BEDEUTUNG_GEGENPROBE + (BEDEUTUNG_NUR_B if nur_b else ""),
     )
     kopf["fassungen"] = list(arme)
+    kopf["sprachpruefung"] = sprachpruefung
     kopf["vorrunde_frage"] = vorrunde.question
     kopf["b_eigenstaendig_gleich_getippt"] = _gleich_getippt(arm_b)
     return {
@@ -1424,22 +1529,62 @@ def fahre_gegenprobe(
     }
 
 
-# --- Sprache: vorgegebene Antwortsprache gegen die des Modells ----------------
+# --- Sprache: drei Wege zur Antwortsprache -----------------------------------
 #
 # Die Faelle stehen je Mandant in eval/<mandant>/sprache.yaml, ohne Verlauf.
-# Jede Frage laeuft in zwei Fassungen, verschraenkt wie die Gegenprobe: A ohne
-# response_language, wie die Seite heute fragt; B mit response_language gleich
-# der erwarteten Sprache. Die Datei von Fellgate traegt dazu die erwartete
-# Sprache je Goldfrage; gold.yaml bleibt, wie sie ist.
+# Jede Frage laeuft in zwei von drei Fassungen, verschraenkt wie die
+# Gegenprobe:
+#
+#   A  ohne response_language und ohne Sprachpruefung: so, wie die Seite fragte,
+#      bevor der Server die Sprache pruefte;
+#   B  mit response_language gleich der erwarteten Sprache;
+#   O  ohne response_language, mit Sprachpruefung und hoechstens einem zweiten
+#      Aufruf: der Weg der Seite heute.
+#
+# Die Dateien tragen dazu die erwartete Sprache je Goldfrage; gold.yaml bleibt,
+# wie sie ist.
+
+FASSUNGEN_SPRACHE = ("A", "B", "O")
+
+# Ueberschrift der zweiten Tabelle in der Ausgabe.
+UEBERSCHRIFT_FASSUNG = {
+    "A": "ohne Vorgabe und ohne Sprachpruefung",
+    "B": "mit vorgegebener Sprache",
+    "O": "ohne Vorgabe, mit Sprachpruefung",
+}
 
 BEDEUTUNG_SPRACHE = (
-    "Fragen ohne Verlauf in zwei Fassungen, verschraenkt: A ohne response_language, "
-    "B mit response_language gleich der erwarteten Sprache. fragen und "
-    "aggregiert_je_kategorie sind A, fragen_b und aggregiert_je_kategorie_b sind B. "
-    "sprache_der_antwort ist die Markerschaetzung von eval.run, lang die Angabe des "
-    "Modells. stelle_im_kontext je Lauf ist die der Frage; ohne Verlauf sucht jeder "
-    "Lauf mit derselben Frage."
+    "Fragen ohne Verlauf in zwei Fassungen, verschraenkt; welche, steht in fassungen. "
+    "A: ohne response_language und mit sprachpruefung=False, so wie die Seite fragte, "
+    "bevor der Server die Sprache pruefte. B: mit response_language gleich der "
+    "erwarteten Sprache. O: ohne response_language und mit Sprachpruefung, also "
+    "hoechstens einem zweiten Aufruf, wenn die belegte Antwort die festgelegte Sprache "
+    "nicht haelt; der Weg der Seite. Die erste Fassung steht unter fragen und "
+    "aggregiert_je_kategorie, die zweite unter fragen_<buchstabe> und "
+    "aggregiert_je_kategorie_<buchstabe>, klein geschrieben. sprache_der_antwort ist "
+    "die Markerschaetzung von eval.run und der Massstab fuer die Antwortsprache; "
+    "antwortsprache, antwortsprache_quelle und sprache_gehalten sind Entscheidung und "
+    "Urteil des Servers, lang die Angabe des Modells. Die Felder ohne zweiter_aufruf "
+    "im Namen beschreiben den ersten Aufruf, ausser antworttext, sources, "
+    "removed_references und lang, die zur ausgelieferten Antwort gehoeren. "
+    "stelle_im_kontext je Lauf ist die der Frage; ohne Verlauf sucht jeder Lauf mit "
+    "derselben Frage."
 )
+
+
+def _fassung_aufruf(fassung: str, sprache: str) -> tuple[str | None, bool]:
+    """Was eine Fassung an answer() gibt: vorgegebene Sprache und Sprachpruefung.
+
+    Bei B ist die Pruefung ohne Wirkung: Eine vorgegebene Sprache prueft der
+    Server nicht.
+    """
+    if fassung == "A":
+        return None, False
+    if fassung == "B":
+        return sprache, True
+    if fassung == "O":
+        return None, True
+    raise ValueError(f"Unbekannte Fassung: {fassung!r}")
 
 
 def pruefe_sprache(daten: dict[str, Any], quelle: str, gold_ids: set[str]) -> None:
@@ -1505,42 +1650,54 @@ def sprachprobe_frage(
     gesamtzahl: int,
     laeufe: int,
     sprache: str,
+    fassungen: tuple[str, str] = ("A", "B"),
 ) -> tuple[Frageergebnis, Frageergebnis]:
-    """Eine Frage in zwei Fassungen, verschraenkt: A ohne, B mit vorgegebener
-    Antwortsprache. Je Lauf einmal A und einmal B, die Reihenfolge wechselt.
+    """Eine Frage in zwei Fassungen, verschraenkt, Standard A und B. Je Lauf
+    einmal jede, die Reihenfolge wechselt von Lauf zu Lauf. Was die Fassungen
+    an answer() geben, steht in `_fassung_aufruf`.
 
     Ohne Verlauf sucht jeder Lauf mit derselben Frage. Die Stelle im Kontext ist
     deshalb je Lauf die der Frage und steht so in jedem Eintrag.
     """
-    erg_a, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
-    erg_a.erwartete_sprache = sprache
-    erg_b = copy.deepcopy(erg_a)
-    erg_a.arm, erg_b.arm = "A", "B"
-    erg_a.laeufe = erg_b.laeufe = laeufe
-    sammler_a, sammler_b = _Sammler(), _Sammler()
-    fassungen = {"A": (erg_a, sammler_a, None), "B": (erg_b, sammler_b, sprache)}
+    erste, zweite = fassungen
+    erg_1, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
+    erg_1.erwartete_sprache = sprache
+    erg_2 = copy.deepcopy(erg_1)
+    erg_1.arm, erg_2.arm = erste, zweite
+    erg_1.laeufe = erg_2.laeufe = laeufe
+    aufbau = {erste: (erg_1, _Sammler()), zweite: (erg_2, _Sammler())}
     for lauf_nr in range(laeufe):
-        for arm in ("A", "B") if lauf_nr % 2 == 0 else ("B", "A"):
-            erg, sammler, vorgabe = fassungen[arm]
-            d = _ein_aufruf(slug, erg.frage, settings, embedder, None, None, None, vorgabe)
+        for fassung in (erste, zweite) if lauf_nr % 2 == 0 else (zweite, erste):
+            erg, sammler = aufbau[fassung]
+            vorgabe, pruefung = _fassung_aufruf(fassung, sprache)
+            d = _ein_aufruf(
+                slug, erg.frage, settings, embedder, None, None, None, vorgabe, pruefung
+            )
             _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, None)
             gesprochen = erg.laeufe_einzeln[-1]["sprache_der_antwort"]
             erg.laeufe_einzeln[-1].update(
                 {
                     "response_language": vorgabe,
+                    "sprachpruefung": pruefung,
                     "erwartete_sprache": sprache,
                     "sprache_wie_erwartet": None if gesprochen is None else gesprochen == sprache,
                     "stelle_im_kontext": erg.antwort_im_kontext,
                 }
             )
-    _abschliessen(erg_a, sammler_a, mit_verlauf=False)
-    _abschliessen(erg_b, sammler_b, mit_verlauf=False)
-    return erg_a, erg_b
+    for erg, sammler in aufbau.values():
+        _abschliessen(erg, sammler, mit_verlauf=False)
+    return erg_1, erg_2
 
 
-def fahre_sprache(slug: str, lauf: str, baseline: bool, gold: bool) -> dict[str, Any]:
+def fahre_sprache(
+    slug: str,
+    lauf: str,
+    baseline: bool,
+    gold: bool,
+    fassungen: tuple[str, str] = ("A", "B"),
+) -> dict[str, Any]:
     """Die Sprachfaelle eines Mandanten, oder mit `gold` seinen Goldsatz, je in
-    den Fassungen A und B."""
+    zwei Fassungen, Standard A und B."""
     settings = Settings()
     daten = lade_sprache(slug)
     top_k, herkunft = _top_k_und_herkunft(settings, slug)
@@ -1558,14 +1715,14 @@ def fahre_sprache(slug: str, lauf: str, baseline: bool, gold: bool) -> dict[str,
     else:
         auftraege = [(f, f["erwartete_sprache"], int(f["laeufe"])) for f in daten["faelle"]]
 
-    arm_a: list[Frageergebnis] = []
-    arm_b: list[Frageergebnis] = []
+    arm_1: list[Frageergebnis] = []
+    arm_2: list[Frageergebnis] = []
     laeufe_je_frage: dict[str, int] = {}
     for eintrag, sprache, n in auftraege:
         laeufe_je_frage[eintrag["id"]] = n
-        a, b = sprachprobe_frage(slug, eintrag, settings, top_k, gesamt, n, sprache)
-        arm_a.append(a)
-        arm_b.append(b)
+        a, b = sprachprobe_frage(slug, eintrag, settings, top_k, gesamt, n, sprache, fassungen)
+        arm_1.append(a)
+        arm_2.append(b)
 
     kopf = _kopf_lokal(
         settings,
@@ -1581,14 +1738,15 @@ def fahre_sprache(slug: str, lauf: str, baseline: bool, gold: bool) -> dict[str,
         BEDEUTUNG_SPRACHE,
     )
     kopf["laeufe_je_fall"] = laeufe_je_frage
-    kopf["fassungen"] = ["A", "B"]
+    kopf["fassungen"] = list(fassungen)
     kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
+    zweite = fassungen[1].lower()
     return {
         "kopf": kopf,
-        "aggregiert_je_kategorie": aggregiere(arm_a, top_k, preise, settings.model_name),
-        "aggregiert_je_kategorie_b": aggregiere(arm_b, top_k, preise, settings.model_name),
-        "fragen": [asdict(e) for e in arm_a],
-        "fragen_b": [asdict(e) for e in arm_b],
+        "aggregiert_je_kategorie": aggregiere(arm_1, top_k, preise, settings.model_name),
+        f"aggregiert_je_kategorie_{zweite}": aggregiere(arm_2, top_k, preise, settings.model_name),
+        "fragen": [asdict(e) for e in arm_1],
+        f"fragen_{zweite}": [asdict(e) for e in arm_2],
     }
 
 
@@ -1858,7 +2016,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--sprache",
         action="store_true",
-        help="Sprachfaelle aus eval/<mandant>/sprache.yaml, A ohne und B mit vorgegebener Sprache",
+        help="Sprachfaelle aus eval/<mandant>/sprache.yaml, in zwei Fassungen, siehe --fassungen",
+    )
+    p.add_argument(
+        "--fassungen",
+        default=None,
+        help=(
+            "mit --sprache: genau zwei der Fassungen A, B und O, durch Komma getrennt, "
+            "Standard A,B. A ohne Vorgabe und ohne Sprachpruefung, B mit vorgegebener "
+            "Sprache, O ohne Vorgabe mit Sprachpruefung"
+        ),
+    )
+    p.add_argument(
+        "--ohne-sprachpruefung",
+        action="store_true",
+        help=(
+            "Goldsatz, --verlauf und --gegenprobe ohne zweiten Aufruf zur Antwortsprache; "
+            "die Sprache wird trotzdem festgelegt und beurteilt"
+        ),
     )
     p.add_argument(
         "--gold",
@@ -1883,6 +2058,21 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--sprache ist ein eigener Lauf, ohne --verlauf und --gegenprobe.")
     if args.verlauf and args.gegenprobe:
         p.error("--verlauf und --gegenprobe sind zwei getrennte Laeufe.")
+    if args.fassungen is not None and not args.sprache:
+        p.error("--fassungen gilt nur zusammen mit --sprache.")
+    fassungen = tuple((args.fassungen or "A,B").split(","))
+    if (
+        len(fassungen) != 2
+        or len(set(fassungen)) != 2
+        or not set(fassungen) <= set(FASSUNGEN_SPRACHE)
+    ):
+        p.error("--fassungen verlangt genau zwei verschiedene der Buchstaben A, B und O, etwa A,O.")
+    if args.ohne_sprachpruefung and (args.sprache or args.base_url or args.retrieval_only):
+        p.error(
+            "--ohne-sprachpruefung gilt fuer Goldsatz, --verlauf und --gegenprobe. Bei "
+            "--sprache sagt es die Fassung, gegen eine Instanz entscheidet die Instanz, "
+            "und --retrieval-only ruft kein Modell."
+        )
     if gespraech and (args.retrieval_only or args.base_url or args.top_k is not None):
         p.error(
             "--verlauf, --gegenprobe und --sprache laufen lokal mit Modell und mit dem "
@@ -1938,15 +2128,27 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         for slug in slugs:
+            pruefung = not args.ohne_sprachpruefung
             if args.verlauf:
                 bericht = fahre_verlauf(
-                    slug, args.lauf, args.baseline, not args.kontrolle, args.laeufe
+                    slug, args.lauf, args.baseline, not args.kontrolle, args.laeufe, pruefung
                 )
             elif args.sprache:
-                bericht = fahre_sprache(slug, args.lauf, args.baseline, args.gold)
+                bericht = fahre_sprache(
+                    slug,
+                    args.lauf,
+                    args.baseline,
+                    args.gold,
+                    (fassungen[0], fassungen[1]),
+                )
             elif args.gegenprobe:
                 bericht = fahre_gegenprobe(
-                    slug, args.lauf, args.baseline, args.laeufe, nur_b=args.nur_b
+                    slug,
+                    args.lauf,
+                    args.baseline,
+                    args.laeufe,
+                    nur_b=args.nur_b,
+                    sprachpruefung=pruefung,
                 )
             else:
                 bericht = fahre(
@@ -1960,6 +2162,7 @@ def main(argv: list[str] | None = None) -> int:
                     # deterministisch, und n Laeufe davon kosten Zeit ohne
                     # Erkenntnis.
                     1 if args.retrieval_only else args.laeufe,
+                    sprachpruefung=pruefung,
                 )
             pruefe_kopf(bericht)
             stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
@@ -1967,18 +2170,21 @@ def main(argv: list[str] | None = None) -> int:
             datei.write_text(json.dumps(bericht, ensure_ascii=False, indent=2), encoding="utf-8")
             if bericht["kopf"].get("fassungen") != ["B"]:
                 print(tabelle(bericht))
-            if "aggregiert_je_kategorie_b" in bericht:
-                print(
-                    "\nFassung B, mit vorgegebener Sprache:"
+            zweite = next((k for k in bericht if k.startswith("aggregiert_je_kategorie_")), None)
+            if zweite is not None:
+                buchstabe = zweite.removeprefix("aggregiert_je_kategorie_")
+                titel = (
+                    UEBERSCHRIFT_FASSUNG[buchstabe.upper()]
                     if args.sprache
-                    else "\nFassung B, nach der fremden ersten Runde:"
+                    else "nach der fremden ersten Runde"
                 )
+                print(f"\nFassung {buchstabe.upper()}, {titel}:")
                 print(
                     tabelle(
                         {
                             **bericht,
-                            "aggregiert_je_kategorie": bericht["aggregiert_je_kategorie_b"],
-                            "fragen": bericht["fragen_b"],
+                            "aggregiert_je_kategorie": bericht[zweite],
+                            "fragen": bericht[f"fragen_{buchstabe}"],
                         }
                     )
                 )

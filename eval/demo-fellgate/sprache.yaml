@@ -1,15 +1,22 @@
 # Sprachfaelle demo-fellgate
 #
-# Fragen ohne Verlauf, je in zwei Fassungen verschraenkt: A ohne
-# response_language, wie die Seite heute fragt; B mit response_language gleich
-# der erwarteten Sprache. Gemessen wird, ob eine vom Server vorgegebene Sprache
-# die Antwortsprache haelt, und ob sie dabei das Tor verschiebt.
+# Fragen ohne Verlauf, je in zwei von drei Fassungen verschraenkt; welche beiden,
+# sagt eval.run --fassungen:
+#
+#   A  ohne response_language und ohne Sprachpruefung, so wie die Seite fragte,
+#      bevor der Server die Sprache pruefte;
+#   B  mit response_language gleich der erwarteten Sprache;
+#   O  ohne response_language, mit Sprachpruefung und hoechstens einem zweiten
+#      Aufruf: der Weg der Seite.
+#
+# Gemessen wird, ob die Antwortsprache haelt, und ob sich dabei das Tor
+# verschiebt.
 #
 # Der Abschnitt goldsatz traegt die erwartete Sprache je Goldfrage. gold.yaml
 # bleibt, wie sie ist: Dort ist die Sprache keine Angabe der Frage.
 
 mandant: demo-fellgate
-stand: 2026-10-19
+stand: 2026-10-22
 
 faelle:
 
@@ -49,6 +56,21 @@ faelle:
       Aus dem Telefontest, einmal deutsch und ohne Beleg beantwortet. Der Korpus
       nennt keine Pullover; die ehrliche Antwort ist die Eskalation. Gemessen
       wird hier die Sprache, die Eskalation nur gezaehlt.
+
+  - id: sprache-fell-04
+    kategorie: sprache
+    frage: "Leverer dere til Norge?"
+    erwartete_sprache: en
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    laeufe: 20
+    begruendung: >
+      Norwegische Frage beim englischen Mandanten. Norwegisch steht nicht im
+      Katalog; die Frage gilt als nicht erkennbar, und es gilt die Sprache des
+      Mandanten, Englisch. Belegt in where-we-ship.md wie sprache-fell-01. Ein
+      Erkenner, der nur zwischen Deutsch und Englisch waehlt, hielte sie mit
+      0,887 fuer Deutsch.
 
 goldsatz:
   laeufe: 5

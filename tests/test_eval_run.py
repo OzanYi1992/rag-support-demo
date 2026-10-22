@@ -11,7 +11,9 @@ Zwei Zusicherungen werden hier durchgesetzt, nicht behauptet (P-009, P-010):
 
 from __future__ import annotations
 
+import copy
 import json
+import pathlib
 
 import httpx
 import pytest
@@ -963,14 +965,9 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
         assert bericht["kopf"]["fassungen"] == ["A", "B"]
         assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 17
     if modus == "sprache":
-        assert [f["id"] for f in bericht["fragen"]] == [
-            "sprache-fell-01",
-            "sprache-fell-02",
-            "sprache-fell-03",
-        ]
-        assert bericht["kopf"]["laeufe_je_fall"] == dict.fromkeys(
-            ["sprache-fell-01", "sprache-fell-02", "sprache-fell-03"], 20
-        )
+        faelle = ["sprache-fell-01", "sprache-fell-02", "sprache-fell-03", "sprache-fell-04"]
+        assert [f["id"] for f in bericht["fragen"]] == faelle
+        assert bericht["kopf"]["laeufe_je_fall"] == dict.fromkeys(faelle, 20)
     if modus == "sprache_gold":
         assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 17
         assert set(bericht["kopf"]["laeufe_je_fall"].values()) == {5}
@@ -983,8 +980,9 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
             }
         )
     if modus.startswith("sprache"):
-        assert bericht["kopf"]["falldatei_stand"] == "2026-10-19"
+        assert bericht["kopf"]["falldatei_stand"] == "2026-10-22"
         assert bericht["kopf"]["fassungen"] == ["A", "B"]
+        assert "sprachpruefung" not in bericht["kopf"]
     elif not modus.startswith("gegenprobe"):
         assert bericht["kopf"]["falldatei_stand"] == "2026-10-13"
 
@@ -1051,8 +1049,8 @@ def _sprachdateien() -> list[tuple[str, dict[str, object], set[str]]]:
 
 
 def test_die_sprachdateien_sind_gueltig_und_verankert() -> None:
-    """Drei Dateien, fuenf Faelle, jede Textstelle woertlich im Korpus, und die
-    Ausnahmen im Goldsatz gibt es in gold.yaml."""
+    """Drei Dateien, sechs Faelle, jede Textstelle woertlich im Korpus, jede
+    Datei mit Goldsatz, und die Ausnahmen im Goldsatz gibt es in gold.yaml."""
     import pathlib
 
     from eval.run import EVAL_DIR, goldsprachen, pruefe_sprache
@@ -1070,11 +1068,17 @@ def test_die_sprachdateien_sind_gueltig_und_verankert() -> None:
             faelle += 1
             text = (docs / f["erwartete_quelle"]).read_text(encoding="utf-8")
             assert f["erwartete_textstelle"] in text, (f["id"], f["erwartete_textstelle"])
-    assert faelle == 5
-    fellgate = next(d for q, d, _ in dateien if "demo-fellgate" in q)
-    assert goldsprachen(fellgate) == dict.fromkeys(
+    assert faelle == 6
+    je_mandant = {str(d["mandant"]): d for _, d, _ in dateien}
+    assert goldsprachen(je_mandant["demo-fellgate"]) == dict.fromkeys(
         ["fell-05", "fell-06", "fell-07", "fell-08", "fell-14"], "de"
     )
+    assert goldsprachen(je_mandant["demo-acme"]) == {}
+    assert goldsprachen(je_mandant["demo-nordwind"]) == dict.fromkeys(["nord-07", "nord-08"], "en")
+    for slug, standard in (("demo-fellgate", "en"), ("demo-acme", "de"), ("demo-nordwind", "de")):
+        gold = je_mandant[slug]["goldsatz"]
+        assert (gold["laeufe"], gold["erwartete_sprache"]) == (5, standard), slug  # type: ignore[index]
+        assert str(je_mandant[slug]["stand"]) == "2026-10-22", slug
 
 
 @pytest.mark.parametrize(
@@ -1157,3 +1161,305 @@ def test_sprachprobe_wechselt_die_reihenfolge_und_nur_b_gibt_die_sprache_vor(
     assert [lauf["sprache_wie_erwartet"] for lauf in a.laeufe_einzeln] == [False] * 3
     assert [lauf["sprache_wie_erwartet"] for lauf in b.laeufe_einzeln] == [True] * 3
     assert all("stelle_im_kontext" in lauf for lauf in a.laeufe_einzeln + b.laeufe_einzeln)
+
+
+# --- Fassungen A, B und O, Sprachpruefung, Felder je Lauf -------------------
+
+
+def _sprachfall() -> dict[str, object]:
+    return {
+        "id": "sprache-test",
+        "kategorie": "sprache",
+        "frage": "How long is the return window?",
+        "erwartete_quelle": "returns-and-exchanges.md",
+        "erwartete_textstelle": None,
+        "erwartet_eskalation": False,
+    }
+
+
+def test_sprachprobe_mit_a_und_o_gibt_nur_o_die_sprachpruefung(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A und O fragen beide ohne Vorgabe; nur O darf nachfragen. Verschraenkt
+    wie bisher, und jeder Eintrag sagt, wie er gefragt hat."""
+    from eval.run import sprachprobe_frage
+
+    folge: list[tuple[object, object]] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        folge.append((kwargs.get("response_language"), kwargs.get("sprachpruefung")))
+        return _antwort("The return window is 30 days from delivery.", False, "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+
+    a, o = sprachprobe_frage(  # type: ignore[arg-type]
+        "demo-test", _sprachfall(), None, 2, 10, 3, "en", ("A", "O")
+    )
+
+    assert folge == [
+        (None, False),
+        (None, True),
+        (None, True),
+        (None, False),
+        (None, False),
+        (None, True),
+    ]
+    assert (a.arm, o.arm) == ("A", "O")
+    assert [lauf["sprachpruefung"] for lauf in a.laeufe_einzeln] == [False] * 3
+    assert [lauf["sprachpruefung"] for lauf in o.laeufe_einzeln] == [True] * 3
+    assert all(lauf["response_language"] is None for lauf in a.laeufe_einzeln + o.laeufe_einzeln)
+
+
+def test_fassung_b_gibt_die_sprache_vor_auch_als_zweite(monkeypatch: pytest.MonkeyPatch) -> None:
+    from eval.run import sprachprobe_frage
+
+    folge: list[object] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        folge.append(kwargs.get("response_language"))
+        return _antwort("The return window is 30 days from delivery.", False, "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+
+    o, b = sprachprobe_frage(  # type: ignore[arg-type]
+        "demo-test", _sprachfall(), None, 2, 10, 2, "en", ("O", "B")
+    )
+    assert folge == [None, "en", "en", None]
+    assert (o.arm, b.arm) == ("O", "B")
+
+
+def test_die_zweite_fassung_steht_unter_ihrem_buchstaben(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A,O schreibt fragen und fragen_o, kein fragen_b. Der Kopf nennt die
+    Fassungen, und metrik_bedeutung beschreibt alle drei."""
+    from app.config import Settings
+    from eval import run
+
+    settings = Settings(openai_api_key="platzhalter", openai_model="platzhalter")
+    monkeypatch.setattr(run, "Settings", lambda: settings)
+    monkeypatch.setattr(run, "_chunkzahl", lambda s, slug: 41)
+    monkeypatch.setattr(run, "_git_commit", lambda: "abc1234")
+    gesehen: list[object] = []
+
+    def probe(slug: str, e: dict, *args: object) -> tuple[Frageergebnis, Frageergebnis]:
+        gesehen.append(args[-1])
+        erg = Frageergebnis(
+            id=e["id"],
+            kategorie=e["kategorie"],
+            frage=e["frage"],
+            erwartete_quelle=e.get("erwartete_quelle"),
+            erwartete_textstelle=e.get("erwartete_textstelle"),
+            erwartet_eskalation=bool(e.get("erwartet_eskalation")),
+            laeufe=1,
+        )
+        return erg, copy.deepcopy(erg)
+
+    monkeypatch.setattr(run, "sprachprobe_frage", probe)
+
+    bericht = run.fahre_sprache("demo-fellgate", "T", False, gold=False, fassungen=("A", "O"))
+
+    assert set(gesehen) == {("A", "O")}
+    assert bericht["kopf"]["fassungen"] == ["A", "O"]
+    assert "fragen_o" in bericht and "aggregiert_je_kategorie_o" in bericht
+    assert "fragen_b" not in bericht and "aggregiert_je_kategorie_b" not in bericht
+    assert len(bericht["fragen"]) == len(bericht["fragen_o"]) == 4
+    bedeutung = bericht["kopf"]["metrik_bedeutung"]
+    for teil in ("A: ", "B: ", "O: ", "fragen_<buchstabe>", "Markerschaetzung"):
+        assert teil in bedeutung
+    json.loads(json.dumps(bericht, ensure_ascii=False))
+    pruefe_kopf(bericht)
+
+
+@pytest.mark.parametrize(
+    "argumente",
+    [
+        ["demo-fellgate", "--fassungen", "A,O"],
+        ["demo-fellgate", "--sprache", "--fassungen", "A"],
+        ["demo-fellgate", "--sprache", "--fassungen", "A,A"],
+        ["demo-fellgate", "--sprache", "--fassungen", "A,B,O"],
+        ["demo-fellgate", "--sprache", "--fassungen", "A,X"],
+        ["demo-fellgate", "--sprache", "--fassungen", "a,o"],
+        ["demo-fellgate", "--sprache", "--ohne-sprachpruefung"],
+        ["demo-fellgate", "--ohne-sprachpruefung", "--base-url", "https://x.invalid"],
+        ["demo-fellgate", "--ohne-sprachpruefung", "--retrieval-only"],
+    ],
+)
+def test_falsche_fassungen_und_schalter_sind_ein_fehler(
+    argumente: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        main(argumente)
+    fehler = capsys.readouterr().err
+    assert "--fassungen" in fehler or "--ohne-sprachpruefung" in fehler
+
+
+class _Halt(Exception):
+    """Haelt main() nach dem Aufruf des Modus an, bevor etwas geschrieben wird."""
+
+
+@pytest.mark.parametrize(
+    ("argumente", "modus", "erwartet"),
+    [
+        (["--verlauf"], "fahre_verlauf", True),
+        (["--verlauf", "--ohne-sprachpruefung"], "fahre_verlauf", False),
+        (["--gegenprobe", "--ohne-sprachpruefung"], "fahre_gegenprobe", False),
+        (["--ohne-sprachpruefung"], "fahre", False),
+        ([], "fahre", True),
+        (["--sprache"], "fahre_sprache", ("A", "B")),
+        (["--sprache", "--fassungen", "A,O"], "fahre_sprache", ("A", "O")),
+    ],
+)
+def test_main_reicht_fassungen_und_sprachpruefung_durch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    argumente: list[str],
+    modus: str,
+    erwartet: object,
+) -> None:
+    from eval import run
+
+    gesehen: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def anhalten(*args: object, **kwargs: object) -> object:
+        gesehen.append((args, kwargs))
+        raise _Halt
+
+    monkeypatch.setattr(run, modus, anhalten)
+    monkeypatch.setattr(run, "ERGEBNIS_DIR", tmp_path)
+    with pytest.raises(_Halt):
+        run.main(["demo-fellgate", *argumente])
+
+    args, kwargs = gesehen[0]
+    wert = kwargs["sprachpruefung"] if "sprachpruefung" in kwargs else args[-1]
+    assert wert == erwartet
+
+
+def test_der_kopf_traegt_die_sprachpruefung(monkeypatch: pytest.MonkeyPatch) -> None:
+    """true oder false, wo eval.run sie bestimmt; null ohne Modell."""
+    from app.config import Settings
+    from eval import run
+
+    settings = Settings(openai_api_key="platzhalter", openai_model="platzhalter")
+    monkeypatch.setattr(run, "Settings", lambda: settings)
+    monkeypatch.setattr(run, "_chunkzahl", lambda s, slug: 41)
+    monkeypatch.setattr(run, "_git_commit", lambda: "abc1234")
+    gesehen: list[object] = []
+
+    def ohne_modell(slug: str, eintrag: dict, *args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs.get("sprachpruefung"))
+        return Frageergebnis(
+            id=eintrag["id"],
+            kategorie=eintrag["kategorie"],
+            frage=eintrag["frage"],
+            erwartete_quelle=eintrag.get("erwartete_quelle"),
+            erwartete_textstelle=eintrag.get("erwartete_textstelle"),
+            erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
+            laeufe=1,
+        )
+
+    monkeypatch.setattr(run, "eine_frage", ohne_modell)
+
+    aus = run.fahre_verlauf("demo-fellgate", "T", False, True, 1, sprachpruefung=False)
+    assert aus["kopf"]["sprachpruefung"] is False
+    assert set(gesehen) == {False}
+
+    gesehen.clear()
+    an = run.fahre_verlauf("demo-fellgate", "T", False, True, 1)
+    assert an["kopf"]["sprachpruefung"] is True
+    assert set(gesehen) == {True}
+
+    gold = run.fahre("demo-fellgate", None, False, "T", False, laeufe=1, sprachpruefung=False)
+    assert gold["kopf"]["sprachpruefung"] is False
+    nur = run.fahre("demo-fellgate", None, True, "T", False)
+    assert nur["kopf"]["sprachpruefung"] is None
+
+
+def test_eine_frage_gibt_die_sprachpruefung_an_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    gesehen: list[object] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs.get("sprachpruefung"))
+        return _antwort("30 days.", False, "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "How long is the return window?"}
+
+    eine_frage("demo-test", eintrag, None, 2, 10, False, laeufe=2, sprachpruefung=False)  # type: ignore[arg-type]
+    eine_frage("demo-test", eintrag, None, 2, 10, False, laeufe=1)  # type: ignore[arg-type]
+    assert gesehen == [False, False, True]
+
+
+def test_jeder_lauf_traegt_sprachfelder_und_latenz(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Die acht Felder unter den Namen des Ereignisses und die Latenz je Lauf,
+    lokal aus Answer."""
+    from eval.run import SPRACHFELDER
+
+    zweiter = _antwort("The return window is 30 days.", False, "en").model_copy(  # type: ignore[attr-defined]
+        update={
+            "answer_language": "en",
+            "answer_language_source": "mandant",
+            "language_kept": True,
+            "language_retry": True,
+            "language_retry_result": "ersetzt",
+            "latency_ms_language_retry": 77,
+            "language_retry_prompt_tokens": 1500,
+            "language_retry_completion_tokens": 40,
+        }
+    )
+    monkeypatch.setattr("eval.run.answer", lambda *a, **k: zweiter)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "How long is the return window?"}
+
+    erg = eine_frage("demo-test", eintrag, None, 2, 10, False, laeufe=1)  # type: ignore[arg-type]
+
+    lauf = erg.laeufe_einzeln[0]
+    assert {feld: lauf[feld] for feld in SPRACHFELDER} == {
+        "antwortsprache": "en",
+        "antwortsprache_quelle": "mandant",
+        "sprache_gehalten": True,
+        "zweiter_aufruf": True,
+        "zweiter_aufruf_ergebnis": "ersetzt",
+        "zweiter_aufruf_ms": 77,
+        "zweiter_aufruf_prompt_tokens": 1500,
+        "zweiter_aufruf_completion_tokens": 40,
+    }
+    assert (lauf["latenz_retrieval_ms"], lauf["latenz_generierung_ms"]) == (3, 50)
+
+
+def test_eine_alte_instanz_liefert_die_sprachfelder_als_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gegen eine Instanz ohne die Felder steht None, ueber .get(). Gegenprobe:
+    Eine Instanz mit den Feldern liefert sie unter den Namen des Ereignisses."""
+    from eval.run import SPRACHFELDER, _ein_aufruf
+
+    alt = {
+        "escalated": False,
+        "escalation_reason": None,
+        "text": "30 days.",
+        "retrieval_scores": [0.9],
+        "latency_ms_retrieval": 3,
+        "latency_ms_generation": 50,
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "model": "fake-model-2026",
+    }
+    antworten = iter([alt, {**alt, "answer_language": "en", "language_retry": False}])
+    monkeypatch.setattr("eval.run.cloud_antwort", lambda *a: next(antworten))
+
+    d = _ein_aufruf("demo-test", "Frage?", None, None, object(), "token", None)  # type: ignore[arg-type]
+    assert all(d[feld] is None for feld in SPRACHFELDER)
+
+    d = _ein_aufruf("demo-test", "Frage?", None, None, object(), "token", None)  # type: ignore[arg-type]
+    assert (d["antwortsprache"], d["zweiter_aufruf"]) == ("en", False)
+
+    with pytest.raises(ValueError, match="nur lokal"):
+        _ein_aufruf(  # type: ignore[arg-type]
+            "demo-test", "Frage?", None, None, object(), "token", None, sprachpruefung=False
+        )
