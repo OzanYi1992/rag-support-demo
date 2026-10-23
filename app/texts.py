@@ -304,6 +304,9 @@ VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
 #
 # Dazu Fragen danach, wer den Assistenten gebaut hat und woher er kommt
 # (identity), und Bitten um Hilfe oder um die Unterlagen selbst (capabilities).
+# Die Bitten um die Unterlagen in mehreren Wortlauten, weil das Modell eine
+# solche Frage sonst aus dem Kontext beantwortet und die Dokumente aufzaehlt,
+# die gerade darin liegen.
 # Bewusst NICHT in den Listen: "where are you from", "where do you come from"
 # und "woher kommst du". In einem Shop meinen sie oft den Haendler, und die
 # Unterlagen beantworten das, etwa mit dem Lager in Schweden.
@@ -389,6 +392,11 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "welche dokumente haben sie",
             "welche unterlagen haben sie",
             "zeig mir alle dokumente",
+            "gib mir alle dokumente",
+            "gib mir alle unterlagen",
+            "zeig mir alle unterlagen",
+            "welche doku hast du",
+            "zeig mir alles was du hast",
         ),
         identitaet=(
             "bist du ein bot",
@@ -489,6 +497,15 @@ KURZFORMELN: dict[str, Kurzformeln] = {
             "what documents do you have",
             "which documents do you have",
             "what are your sources",
+            "give me all documents you have",
+            "give me all the documents you have",
+            "give me all the docs you have",
+            "show me all you have",
+            "show me all documents",
+            "show me all your documents",
+            "what docs do you have",
+            "list your documents",
+            "list all documents",
         ),
         identitaet=(
             "are you a bot",

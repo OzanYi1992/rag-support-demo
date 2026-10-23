@@ -718,8 +718,8 @@ _ASSISTENTENFRAGEN = [
 
 
 def test_die_listen_fuer_fragen_nach_dem_assistenten_sind_vollstaendig() -> None:
-    """64 Formeln fuer capabilities und 57 fuer identity, ueber beide Sprachen."""
-    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "capabilities") == 64
+    """78 Formeln fuer capabilities und 57 fuer identity, ueber beide Sprachen."""
+    assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "capabilities") == 78
     assert sum(1 for _, art, _ in _ASSISTENTENFRAGEN if art == "identity") == 57
     # Echte Umlaute in den deutschen Listen, nicht die Umschreibung.
     deutsch = " ".join(f for s, _, f in _ASSISTENTENFRAGEN if s == "de")
@@ -801,12 +801,38 @@ _NEU_NACH_DEM_TELEFONTEST = {
 }
 
 
+# Die Bitten um die Unterlagen, die nach den Telefontests vom 2026-10-20 und
+# 2026-10-22 dazukamen, am Ende der Listen fuer capabilities.
+_NEU_FUER_DIE_UNTERLAGEN = {
+    "en": (
+        "give me all documents you have",
+        "give me all the documents you have",
+        "give me all the docs you have",
+        "show me all you have",
+        "show me all documents",
+        "show me all your documents",
+        "what docs do you have",
+        "list your documents",
+        "list all documents",
+    ),
+    "de": (
+        "gib mir alle dokumente",
+        "gib mir alle unterlagen",
+        "zeig mir alle unterlagen",
+        "welche doku hast du",
+        "zeig mir alles was du hast",
+    ),
+}
+
+
 def test_die_eintraege_nach_dem_telefontest_stehen_woertlich_in_den_listen() -> None:
     """Am Ende der bestehenden Listen, Zeichen fuer Zeichen, "können" mit echtem
     Umlaut. Herkunft und Ort gehoeren bewusst nicht dazu: "where are you from"
     meint im Shop oft den Haendler."""
     for (sprache, art), neu in _NEU_NACH_DEM_TELEFONTEST.items():
         liste = getattr(KURZFORMELN[sprache], art)
+        if art == "faehigkeiten":
+            liste = liste[: -len(_NEU_FUER_DIE_UNTERLAGEN[sprache])]
         assert liste[-len(neu) :] == neu, (sprache, art)
     assert "können sie mir helfen" in KURZFORMELN["de"].faehigkeiten
     for sprache in ("en", "de"):
@@ -831,6 +857,42 @@ def test_die_fragen_aus_dem_telefontest_bekommen_eine_feste_antwort(eingabe: str
     """Die Eingaben, die am 2026-10-19 mit dem Verweis an den Support
     eskalierten. "What is you origin" trifft ueber die Toleranz."""
     assert kurzformel_erkennen(eingabe) == art
+
+
+def test_die_bitten_um_die_unterlagen_stehen_woertlich_am_ende_der_listen() -> None:
+    for sprache, neu in _NEU_FUER_DIE_UNTERLAGEN.items():
+        assert KURZFORMELN[sprache].faehigkeiten[-len(neu) :] == neu, sprache
+        assert not set(neu) & set(KURZFORMELN[sprache].identitaet), sprache
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        # Die Wortlaute aus den Telefontests vom 2026-10-20 und 2026-10-22.
+        "Give me all the Doku you have",
+        "Give me all documents you have",
+        "Give me all the documents you have",
+        # Ozans Beispiele. "Doku" liegt zu "docs" im Abstand 2, "Docu" im
+        # Abstand 1; bei 29 Zeichen sind beide in der Toleranz.
+        "Give me all the Docu you have",
+        "Show me all you have",
+        "show me all you have?",
+        "What docs do you have?",
+        "Zeig mir alles, was du hast!",
+        "Welche Doku hast du?",
+        "Gib mir alle Unterlagen.",
+    ],
+)
+def test_bitten_um_die_unterlagen_bekommen_die_feste_antwort(eingabe: str) -> None:
+    assert kurzformel_erkennen(eingabe) == "capabilities", eingabe
+
+
+def test_doku_und_docu_liegen_in_der_toleranz() -> None:
+    """Die beiden Abstaende, auf denen der Test oben beruht, nachgerechnet."""
+    formel = normalisieren("give me all the docs you have")
+    assert levenshtein_abstand(normalisieren("Give me all the Doku you have"), formel) == 2
+    assert levenshtein_abstand(normalisieren("Give me all the Docu you have"), formel) == 1
+    assert tippfehler_toleranz(len(formel)) == 2
 
 
 @pytest.mark.parametrize(
@@ -964,7 +1026,32 @@ _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT = [
     "wer hat das zelt gebaut",
     "woher kommt die ware",
     "ich habe eine frage zu meiner bestellung",
+    # Fachfragen, die wie eine Bitte um die Unterlagen klingen.
+    "what documents do i need for a return",
+    "which documents do i need to send",
+    "show me all boots you have",
+    "show me what you have in size 42",
+    "give me all the sizes you have",
+    "give me all the details of my order",
+    "list all countries you ship to",
+    "welche unterlagen brauche ich für eine reklamation",
+    "zeig mir alle zelte",
+    "gib mir alle infos zur lieferung",
 ]
+
+
+def _sprachfragen() -> list[str]:
+    """Die Fragen der Sprachfaelle aller Mandanten."""
+    import yaml
+
+    eval_dir = Path(__file__).resolve().parents[1] / "eval"
+    fragen: list[str] = []
+    for datei in sorted(eval_dir.glob("*/sprache.yaml")):
+        fragen += [f["frage"] for f in yaml.safe_load(datei.read_text(encoding="utf-8"))["faelle"]]
+    return fragen
+
+
+_SPRACHFRAGEN = _sprachfragen()
 
 
 def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
@@ -973,11 +1060,16 @@ def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
     assert len(_KONTROLLFRAGEN) == 11
     # Neun Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
     assert len(_VERLAUFSFRAGEN) == 10
+    assert len(_SPRACHFRAGEN) == len(set(_SPRACHFRAGEN)) > 0
 
 
 @pytest.mark.parametrize(
     "eingabe",
-    _GOLDFRAGEN + _KONTROLLFRAGEN + _VERLAUFSFRAGEN + _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT,
+    _GOLDFRAGEN
+    + _KONTROLLFRAGEN
+    + _VERLAUFSFRAGEN
+    + _SPRACHFRAGEN
+    + _ECHTE_FRAGEN_MIT_AEHNLICHEM_WORTLAUT,
 )
 def test_keine_echte_frage_wird_als_kurzformel_erkannt(eingabe: str) -> None:
     """Der Pflichttest gegen Fehltreffer. Eine Fachfrage, die hier traefe,
