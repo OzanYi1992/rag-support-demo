@@ -34,6 +34,7 @@ from app.llm import (
     build_umformer,
 )
 from app.prompts import (
+    UMFORMUNG_AKTUELL,
     GroundedAnswer,
     Runde,
     antwortmodell_fuer,
@@ -409,11 +410,16 @@ def eigenstaendige_frage(
     verlauf: list[Runde],
     frage: str,
     umformer: Umformer,
+    fassung: str = UMFORMUNG_AKTUELL,
 ) -> Umformung:
     """Formt eine Folgefrage zu einer Frage um, die ohne den Verlauf verstaendlich ist.
 
     `tenant_id` an erster Stelle, weil der Verlauf Mandanteninhalt ist. Passt
     `tenant.slug` nicht, ist das ein Fehler im Aufrufer.
+
+    `fassung` ist der Wortlaut des Umformungsprompts, siehe
+    `umformungsprompts_bauen`; anders als die Voreinstellung nur fuer die
+    Messung.
 
     Ist die Umformung unbrauchbar, gilt die getippte Frage, und die Tore
     entscheiden wie ohne Verlauf. Unbrauchbar heisst: keine lesbare Struktur,
@@ -426,7 +432,7 @@ def eigenstaendige_frage(
     """
     if tenant.slug != tenant_id:
         raise ValueError("tenant passt nicht zur tenant_id.")
-    system_prompt, user_prompt = umformungsprompts_bauen(tenant_id, tenant, verlauf, frage)
+    system_prompt, user_prompt = umformungsprompts_bauen(tenant_id, tenant, verlauf, frage, fassung)
 
     start = time.perf_counter()
     try:
@@ -521,6 +527,7 @@ def answer(
     history: list[Runde] | None = None,
     umformer: Umformer | None = None,
     sprachpruefung: bool = True,
+    umformungsfassung: str = UMFORMUNG_AKTUELL,
 ) -> Answer:
     """Beantwortet eine Frage fuer genau einen Mandanten.
 
@@ -561,6 +568,9 @@ def answer(
     `sprachpruefung=False` nur fuer Messungen: Die Sprache wird festgelegt und
     die Antwort beurteilt, aber es gibt keinen zweiten Aufruf. So laesst sich
     der Weg ohne Nachforderung neben dem mit ihr messen.
+
+    `umformungsfassung` ebenfalls nur fuer Messungen: der Wortlaut des
+    Umformungsprompts, alt gegen neu. Die Seite benutzt die Voreinstellung.
 
     `strategy`, `llm`, `umformer` und `embeddings` sind injizierbar, damit Tests
     ohne Netz und ohne Schluessel auskommen. Keines davon hat einen
@@ -610,7 +620,9 @@ def answer(
             schema=umformungsmodell_fuer(tenant.language),
         )
     )
-    umformung = eigenstaendige_frage(tenant_id, tenant, verlauf, question, aktiver_umformer)
+    umformung = eigenstaendige_frage(
+        tenant_id, tenant, verlauf, question, aktiver_umformer, umformungsfassung
+    )
     felder = umformung.als_felder(len(verlauf), question)
 
     art = kurzformel_erkennen(umformung.suchfrage)

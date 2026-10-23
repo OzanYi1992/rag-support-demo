@@ -8,6 +8,8 @@ einem Interessenten.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -16,6 +18,9 @@ import pytest
 from app.prompts import (
     _REGELWERK,
     _UMFORMUNG,
+    _UMFORMUNG_FASSUNGEN,
+    UMFORMUNG_AKTUELL,
+    UMFORMUNGSFASSUNGEN,
     GroundedAnswer,
     antwortmodell_fuer,
     umformungsmodell_fuer,
@@ -1139,9 +1144,9 @@ def test_die_antworten_auf_fragen_nach_dem_assistenten_im_katalog() -> None:
 # --- Gespraech: Umformungsprompt und Anzeige ----------------------------------
 
 
-def _umformungstexte(sprache: str) -> dict[str, str]:
+def _umformungstexte(sprache: str, fassung: str = UMFORMUNG_AKTUELL) -> dict[str, str]:
     """Alle Zeichenketten, die bei der Umformung an das Modell gehen."""
-    umformung = _UMFORMUNG[sprache]
+    umformung = _UMFORMUNG_FASSUNGEN[fassung][sprache]
     schema = umformungsmodell_fuer(sprache).model_json_schema()
     return {
         "system": umformung.system,
@@ -1154,6 +1159,8 @@ def _umformungstexte(sprache: str) -> dict[str, str]:
 def test_umformung_deckt_dieselben_sprachen_ab_wie_das_regelwerk() -> None:
     """Sonst liefe eine Sprache erst bei der ersten Folgefrage in einen KeyError."""
     assert set(_UMFORMUNG) == set(_REGELWERK) == set(TEXTE)
+    for fassung in UMFORMUNGSFASSUNGEN:
+        assert set(_UMFORMUNG_FASSUNGEN[fassung]) == set(TEXTE), fassung
     assert set(UMFORMUNGSBESCHREIBUNGEN) == set(TEXTE)
 
 
@@ -1162,17 +1169,18 @@ def test_umformungsprompt_traegt_nur_marker_seiner_sprache() -> None:
     Funktionswoerter einer anderen Sprache, und ausser im Deutschen keine
     deutschen Zeichen. Derselbe Fehler wie beim Antwortschema: Ein Prompt in der
     falschen Sprache kippt die Sprache der Antwort, gemessen."""
-    for sprache in VERFUEGBARE_SPRACHEN:
-        texte = _umformungstexte(sprache)
-        for name, text in texte.items():
-            assert text.strip(), (sprache, name)
-            for fremde in VERFUEGBARE_SPRACHEN:
-                if fremde == sprache:
-                    continue
-                treffer = _marker_treffer(text, fremde)
-                assert not treffer, f"Umformung {sprache!r}, {name!r}: {treffer}"
-            if sprache != "de":
-                assert not set(text) & _DEUTSCHE_ZEICHEN, (sprache, name)
+    for fassung in UMFORMUNGSFASSUNGEN:
+        for sprache in VERFUEGBARE_SPRACHEN:
+            texte = _umformungstexte(sprache, fassung)
+            for name, text in texte.items():
+                assert text.strip(), (fassung, sprache, name)
+                for fremde in VERFUEGBARE_SPRACHEN:
+                    if fremde == sprache:
+                        continue
+                    treffer = _marker_treffer(text, fremde)
+                    assert not treffer, f"Umformung {fassung} {sprache!r}, {name!r}: {treffer}"
+                if sprache != "de":
+                    assert not set(text) & _DEUTSCHE_ZEICHEN, (fassung, sprache, name)
 
 
 def test_umformungsprompt_marker_gegenprobe() -> None:
@@ -1193,7 +1201,7 @@ def test_gespraechstexte_im_katalog() -> None:
     assert "neues_gespraech" not in JAVASCRIPT_SCHLUESSEL
 
 
-# Der Wortlaut der Regeln 2 und 3 des Umformungsprompts, entschieden nach dem
+# Der Wortlaut der Regeln 2 und 3 der zweiten Fassung, entschieden nach dem
 # Telefontest: Eine Rueckfrage wie "Sure?" wirkt fuer sich verstaendlich, braucht
 # aber ihren Bezug. Und die Umformung haengte den Firmennamen an Fragen, die ihn
 # nicht brauchten.
@@ -1222,22 +1230,108 @@ _UMFORMUNG_REGELN_2_UND_3 = {
 
 
 def test_umformungsprompt_regeln_2_und_3_im_wortlaut() -> None:
-    """Regel 2 und 3 je Sprache Zeichen fuer Zeichen, dahinter die bisherigen
-    Regeln 3 und 4 als 4 und 5. Der Prompt endet mit Regel 5; Kopf und Regel 1
-    bleiben, wie sie waren."""
-    assert set(_UMFORMUNG_REGELN_2_UND_3) == set(_UMFORMUNG)
+    """Zweite Fassung: Regel 2 und 3 je Sprache Zeichen fuer Zeichen, dahinter
+    die Regeln 4 und 5. Der Prompt endet mit Regel 5; Kopf und Regel 1 bleiben,
+    wie sie waren."""
+    zweite = _UMFORMUNG_FASSUNGEN["2"]
+    assert set(_UMFORMUNG_REGELN_2_UND_3) == set(zweite)
     for sprache, regeln in _UMFORMUNG_REGELN_2_UND_3.items():
-        system = _UMFORMUNG[sprache].system
+        system = zweite[sprache].system
         assert system.endswith(regeln), sprache
         assert system.count("\n2. ") == 1 and system.count("\n6. ") == 0, sprache
         assert max(len(zeile) for zeile in system.splitlines()) <= 80, sprache
-    assert _UMFORMUNG["en"].system.startswith(
+    assert zweite["en"].system.startswith(
         "You rewrite the last question of a conversation so that it can be understood\n"
         "without the conversation.\n\n"
         "1. Use the conversation only to find out what the last question refers to. The\n"
     )
-    assert _UMFORMUNG["de"].system.startswith(
+    assert zweite["de"].system.startswith(
         "Du formulierst die letzte Frage eines Gespraechs so um, dass sie ohne das\n"
         "Gespraech verstaendlich ist.\n\n"
         "1. Nutze das Gespraech nur, um herauszufinden, worauf sich die letzte Frage\n"
     )
+
+
+def test_die_zweite_fassung_ist_zeichengleich_mit_dem_gemessenen_stand() -> None:
+    """Der Bezug der Messung alt gegen neu: sha256 des Systemprompts der zweiten
+    Fassung, wie er seit dem 2026-10-19 an das Modell ging, je Sprache."""
+    erwartet = {
+        "de": "75adae39bb1ec527b762d833527983591deab7a6e5570acadcad3b02ae372918",
+        "en": "55c666633fb77e34dc4683bb323a5bbb2bc7bf162e27f39c8f913f686919c565",
+    }
+    for sprache, wert in erwartet.items():
+        system = _UMFORMUNG_FASSUNGEN["2"][sprache].system
+        assert hashlib.sha256(system.encode()).hexdigest() == wert, sprache
+
+
+# Die beiden neuen Regeln der dritten Fassung und die beiden verschobenen, je
+# Sprache. Nach den Telefontests: Ein Bezugswort in einer vollstaendigen Frage
+# blieb offen, und eine Eingabe ohne Bezug bekam eine fruehere Frage.
+_UMFORMUNG_REGELN_4_BIS_7 = {
+    "en": (
+        '4. A word such as "that", "this", "it", "there" or "the same" that points to\n'
+        "   something earlier in the conversation makes the last question incomplete,\n"
+        "   even if it is a complete sentence. Replace the word with what it points to.\n"
+        "5. If the last question can be understood on its own, return it unchanged.\n"
+        "6. If the last question does not refer to the conversation, or cannot be\n"
+        "   understood even with it, take nothing from the conversation. Never return an\n"
+        "   earlier question of the conversation in its place.\n"
+        "7. Write the question in the language of the last question.\n"
+    ),
+    "de": (
+        '4. Ein Wort wie "das", "dies", "dort", "dahin" oder "dasselbe", das auf etwas\n'
+        "   Frueheres im Gespraech zeigt, macht die letzte Frage unvollstaendig, auch\n"
+        "   wenn sie ein vollstaendiger Satz ist. Ersetze das Wort durch das, worauf es\n"
+        "   zeigt.\n"
+        "5. Ist die letzte Frage fuer sich verstaendlich, gib sie unveraendert zurueck.\n"
+        "6. Bezieht sich die letzte Frage nicht auf das Gespraech, oder ist sie auch mit\n"
+        "   ihm nicht verstaendlich, uebernimm nichts aus dem Gespraech. Gib nie eine\n"
+        "   fruehere Frage des Gespraechs an ihrer Stelle zurueck.\n"
+        "7. Schreibe die Frage in der Sprache der letzten Frage.\n"
+    ),
+}
+
+
+def test_die_dritte_fassung_im_wortlaut() -> None:
+    """Kopf und Regeln 1 bis 3 Zeichen fuer Zeichen wie in der zweiten Fassung,
+    dahinter die Regeln 4 bis 7. Die alte Regel 4 steht als 5, die alte Regel 5
+    als 7, im Wortlaut gleich. "es" steht nicht in der deutschen Liste."""
+    assert UMFORMUNG_AKTUELL == "3"
+    assert _UMFORMUNG == _UMFORMUNG_FASSUNGEN["3"]
+    assert UMFORMUNGSFASSUNGEN == ("2", "3")
+    for sprache, regeln in _UMFORMUNG_REGELN_4_BIS_7.items():
+        dritte = _UMFORMUNG_FASSUNGEN["3"][sprache].system
+        zweite = _UMFORMUNG_FASSUNGEN["2"][sprache].system
+        kopf = zweite[: zweite.index("\n4. ") + 1]
+        assert dritte == kopf + regeln, sprache
+        assert dritte.count("\n7. ") == 1 and dritte.count("\n8. ") == 0, sprache
+        assert max(len(zeile) for zeile in dritte.splitlines()) <= 80, sprache
+        alt_4 = zweite.split("\n4. ")[1].split("\n")[0]
+        alt_5 = zweite.split("\n5. ")[1].split("\n")[0]
+        assert f"\n5. {alt_4}\n" in dritte and dritte.endswith(f"\n7. {alt_5}\n"), sprache
+        assert _UMFORMUNG_FASSUNGEN["2"][sprache].rahmen == _UMFORMUNG[sprache].rahmen
+    assert '"es"' not in _UMFORMUNG_FASSUNGEN["3"]["de"].system
+
+
+def test_regelwerk_und_schema_der_antwort_bleiben_zeichengleich() -> None:
+    """Nur die Umformung hat einen neuen Wortlaut. Regelwerk, Rahmen und
+    Strukturschema der Antwort, je Sprache als sha256, wie vor der dritten
+    Fassung."""
+    erwartet = {
+        "de": (
+            "82d964a6b466225260f84cf9cbd121d5a86214d2ae7a42483ba1155b72122794",
+            "1adb71456e6920ca3eb1a22898fd9b009f824fdecf1d1c7d658928c919a04e13",
+        ),
+        "en": (
+            "9f4aa2ac67cd5af98d974076ecdf6b6edfe126a6ba4b9bf4b041aacc9caffb84",
+            "6b3c91f170df665633444c2e043cd8db3f625b92a6fbd3cfe024cc82adebd7a2",
+        ),
+    }
+    for sprache, (regeln_wert, schema_wert) in erwartet.items():
+        r = _REGELWERK[sprache]
+        teile = [r.basis, r.sprache_folgt_frage, r.sprache_vorgegeben, r.zusatz, *r.rahmen]
+        schema = json.dumps(
+            antwortmodell_fuer(sprache).model_json_schema(), sort_keys=True, ensure_ascii=False
+        )
+        assert hashlib.sha256("\x00".join(teile).encode()).hexdigest() == regeln_wert, sprache
+        assert hashlib.sha256(schema.encode()).hexdigest() == schema_wert, sprache
