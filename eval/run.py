@@ -48,11 +48,11 @@ from app.escalation import (
     REASON_NO_HITS,
 )
 from app.llm import LlmNichtErreichbar
-from app.prompts import Runde
+from app.prompts import UMFORMUNG_AKTUELL, UMFORMUNGSFASSUNGEN, Runde
 from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, answer
 from app.search import search_tenant
 from app.tenants import load_tenant
-from app.texts import VERFUEGBARE_SPRACHEN, passt_zur_sprache
+from app.texts import VERFUEGBARE_SPRACHEN, normalisieren, passt_zur_sprache
 
 EVAL_DIR = PROJEKTWURZEL / "eval"
 ERGEBNIS_DIR = EVAL_DIR / "results"
@@ -251,6 +251,9 @@ class Frageergebnis:
     erwartete_sprache: str | None = None
     erwartete_art: str | None = None
     arm: str | None = None
+    # Die Fassung des Umformungsprompts, wenn zwei verschraenkt liefen; sonst
+    # None, und es galt die Fassung der Seite.
+    umformung_fassung: str | None = None
 
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
@@ -623,12 +626,15 @@ def _ein_aufruf(
     verlauf: list[Runde] | None,
     response_language: str | None = None,
     sprachpruefung: bool = True,
+    umformungsfassung: str = UMFORMUNG_AKTUELL,
 ) -> dict[str, Any]:
     """Ein Lauf, lokal ueber answer() oder gegen die deployte Instanz.
 
     `response_language` gibt die Antwortsprache vor, nur lokal; ohne sie legt
     der Server die Sprache selbst fest. `sprachpruefung=False` laesst den
     zweiten Aufruf weg, nur lokal: Gegen eine Instanz entscheidet die Instanz.
+    `umformungsfassung` waehlt den Wortlaut des Umformungsprompts, ebenfalls
+    nur lokal.
 
     Gibt die Felder in einer Form zurueck, die fuer beide Wege gleich ist. Eine
     Instanz von vor einem Feld liefert es nicht; dann steht None.
@@ -643,6 +649,8 @@ def _ein_aufruf(
             raise ValueError("Eine vorgegebene Antwortsprache gibt es nur lokal.")
         if not sprachpruefung:
             raise ValueError("Ohne Sprachpruefung gibt es nur lokal.")
+        if umformungsfassung != UMFORMUNG_AKTUELL:
+            raise ValueError("Eine andere Fassung der Umformung gibt es nur lokal.")
         daten = cloud_antwort(cloud, url_token, frage, verlauf)
         return {
             "eskaliert": daten["escalated"],
@@ -659,6 +667,9 @@ def _ein_aufruf(
             "sources": daten.get("sources"),
             "removed_references": daten.get("removed_references"),
             "eigenstaendige_frage": daten.get("standalone_question"),
+            "eigenstaendig_weicht_ab": daten.get("standalone_question_differs"),
+            "ersetzt": daten.get("replaced_reason"),
+            "umformung_fassung": None,
             "umformung": daten.get("rewrite_status"),
             "umformung_grund": daten.get("rewrite_reason"),
             "umformung_ms": daten.get("latency_ms_rewrite"),
@@ -676,6 +687,7 @@ def _ein_aufruf(
                 embeddings=embedder,
                 history=verlauf,
                 sprachpruefung=sprachpruefung,
+                umformungsfassung=umformungsfassung,
             )
             break
         except LlmNichtErreichbar as fehler:
@@ -704,6 +716,10 @@ def _ein_aufruf(
         "sources": list(antwort.sources),
         "removed_references": antwort.removed_references,
         "eigenstaendige_frage": antwort.standalone_question,
+        "eigenstaendig_weicht_ab": antwort.standalone_question_differs,
+        "ersetzt": antwort.replaced_reason,
+        # Nur mit Verlauf: Ohne ihn gibt es keine Umformung.
+        "umformung_fassung": umformungsfassung if verlauf else None,
         "umformung": antwort.rewrite_status,
         "umformung_grund": antwort.rewrite_reason,
         "umformung_ms": antwort.latency_ms_rewrite,
@@ -760,9 +776,12 @@ def _lauf_eintragen(
         "sprache_der_eigenstaendigen_frage": _rate_sprache(eigenstaendig)
         if eigenstaendig
         else None,
+        "eigenstaendig_weicht_ab": d.get("eigenstaendig_weicht_ab"),
+        "umformung_fassung": d.get("umformung_fassung"),
         "umformung": d["umformung"],
         "umformung_grund": d["umformung_grund"],
         "umformung_ms": d["umformung_ms"],
+        "ersetzt": d.get("ersetzt"),
         "umformung_prompt_tokens": d["umformung_prompt_tokens"],
         "umformung_completion_tokens": d["umformung_completion_tokens"],
         "ausfall_wiederholt": d.get("ausfall_wiederholt", 0),
@@ -780,6 +799,9 @@ def _lauf_eintragen(
     # Stelle im Kontext lag, wird deshalb je Lauf mit genau dieser Frage
     # nachgesehen, nicht mit der getippten.
     if verlauf is not None:
+        eintrag["eigenstaendig_wiederholt_fruehere_frage"] = _wiederholt_fruehere_frage(
+            erg.frage, eigenstaendig, verlauf
+        )
         stelle = None
         if erg.erwartete_textstelle and d["kind"] == "rag":
             suchfrage = eigenstaendig or erg.frage
@@ -802,6 +824,26 @@ def _lauf_eintragen(
         erg.prompt_tokens = d["prompt_tokens"]
         erg.completion_tokens = d["completion_tokens"]
         erg.modell = d["modell"]
+
+
+def _wiederholt_fruehere_frage(
+    getippt: str, eigenstaendig: str | None, verlauf: list[Runde]
+) -> bool | None:
+    """Ob die eigenstaendige Frage eine fruehere Frage des Verlaufs wiederholt,
+    statt die getippte zu klaeren: in der Normalform der Seite gleich einer
+    frueheren Frage, beantwortet oder nicht, und verschieden von der getippten.
+    None ohne eigenstaendige Frage.
+
+    Weiter als die Pruefung des Servers, die nur unbeantwortete Runden kennt:
+    Eine Rueckfrage wie "Sure?" wird hier mitgezaehlt, wenn sie die vorige Frage
+    zurueckgibt. Die Auswertung trennt das nach Fall.
+    """
+    if eigenstaendig is None:
+        return None
+    normal = normalisieren(eigenstaendig)
+    if normal == normalisieren(getippt):
+        return False
+    return any(normalisieren(runde.question) == normal for runde in verlauf)
 
 
 def _abschliessen(erg: Frageergebnis, sammler: _Sammler, mit_verlauf: bool) -> None:
@@ -946,6 +988,55 @@ def gegenprobe_frage(
     if "B" in arme:
         _abschliessen(erg_b, sammler_b, mit_verlauf=True)
     return erg_a, erg_b
+
+
+def umformungsfassungen_frage(
+    slug: str,
+    eintrag: dict[str, Any],
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    laeufe: int,
+    verlauf: list[Runde],
+    fassungen: tuple[str, str],
+    sprachpruefung: bool = True,
+    arm: str | None = None,
+) -> tuple[Frageergebnis, Frageergebnis]:
+    """Eine Frage mit Verlauf in zwei Fassungen des Umformungsprompts,
+    verschraenkt: je Lauf einmal jede, die Reihenfolge wechselt von Lauf zu
+    Lauf. Sonst ist alles gleich, Verlauf, Antwortprompt und Sprachpruefung.
+
+    So verschiebt eine Aenderung beim Anbieter waehrend der Messung beide
+    Fassungen gleich und erscheint nicht als Wirkung des Wortlauts. `arm`
+    traegt in der Gegenprobe "B".
+    """
+    erste, zweite = fassungen
+    erg_1, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
+    erg_2 = copy.deepcopy(erg_1)
+    erg_1.umformung_fassung, erg_2.umformung_fassung = erste, zweite
+    for erg in (erg_1, erg_2):
+        erg.arm = arm
+        erg.laeufe = laeufe
+        erg.verlauf_runden = len(verlauf)
+    aufbau = {erste: (erg_1, _Sammler()), zweite: (erg_2, _Sammler())}
+    for lauf_nr in range(laeufe):
+        for fassung in (erste, zweite) if lauf_nr % 2 == 0 else (zweite, erste):
+            erg, sammler = aufbau[fassung]
+            d = _ein_aufruf(
+                slug,
+                erg.frage,
+                settings,
+                embedder,
+                None,
+                None,
+                verlauf,
+                sprachpruefung=sprachpruefung,
+                umformungsfassung=fassung,
+            )
+            _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
+    for erg, sammler in aufbau.values():
+        _abschliessen(erg, sammler, mit_verlauf=True)
+    return erg_1, erg_2
 
 
 def _rate_sprache(text: str) -> str | None:
@@ -1379,6 +1470,19 @@ def _gleich_getippt(ergebnisse: list[Frageergebnis]) -> str:
     return f"{gleich}/{len(umgeformt)}"
 
 
+def _weicht_ab(ergebnisse: list[Frageergebnis]) -> str:
+    """Wie oft die eigenstaendige Frage sich in der Normalform der Seite von der
+    getippten unterschied, also eine Zeile "Verstanden als" ergab."""
+    umgeformt = [
+        lauf
+        for e in ergebnisse
+        for lauf in e.laeufe_einzeln
+        if lauf.get("eigenstaendige_frage") is not None
+    ]
+    abweichend = sum(1 for lauf in umgeformt if lauf.get("eigenstaendig_weicht_ab"))
+    return f"{abweichend}/{len(umgeformt)}"
+
+
 BEDEUTUNG_VERLAUF = (
     "Folgefragen mit eingefrorenem Verlauf. rang und rang_chunk sind die der "
     "GETIPPTEN Folgefrage und sagen deshalb wenig; je Lauf steht in "
@@ -1393,6 +1497,17 @@ BEDEUTUNG_KONTROLLE = (
 BEDEUTUNG_NUR_B = (
     " IN DIESEM LAUF NUR FASSUNG B: fragen und aggregiert_je_kategorie sind leer, "
     "der Bezug fuer A ist eine fruehere Ergebnisdatei."
+)
+BEDEUTUNG_UMFORMUNGSFASSUNGEN = (
+    " MIT ZWEI FASSUNGEN DER UMFORMUNG, verschraenkt, je Lauf einmal jede, die "
+    "Reihenfolge wechselnd; welche, steht in umformung_fassungen. Die erste steht "
+    "unter fragen{arm} und aggregiert_je_kategorie{arm}, die zweite unter "
+    "fragen{arm}_u<fassung> und aggregiert_je_kategorie{arm}_u<fassung>. Je Lauf: "
+    "umformung_fassung; eigenstaendig_weicht_ab, ob die Zeile 'Verstanden als' "
+    "erschiene; eigenstaendig_wiederholt_fruehere_frage, ob die eigenstaendige Frage "
+    "in der Normalform einer frueheren Frage des Verlaufs gleicht und sich von der "
+    "getippten unterscheidet; umformung_grund fruehere_frage, wenn der Server sie "
+    "deshalb verworfen hat."
 )
 BEDEUTUNG_GEGENPROBE = (
     "Goldfragen verschraenkt in zwei Fassungen: A ohne Verlauf, B als zweite "
@@ -1409,12 +1524,18 @@ def fahre_verlauf(
     mit_verlauf: bool,
     laeufe_kontrolle: int,
     sprachpruefung: bool = True,
+    umformungsfassungen: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Die Verlaufsfaelle eines Mandanten, mit Verlauf oder als Kontrolle ohne.
 
     Mit Verlauf nimmt jeder Fall seine Laufzahl aus der Datei. Die Kontrolle
     stellt dieselben Folgefragen ohne Verlauf, je `laeufe_kontrolle` mal.
+
+    Mit `umformungsfassungen` laeuft jeder Fall in beiden Fassungen des
+    Umformungsprompts, verschraenkt, je mit seiner Laufzahl; nur mit Verlauf.
     """
+    if umformungsfassungen is not None and not mit_verlauf:
+        raise ValueError("Zwei Fassungen der Umformung gibt es nur mit Verlauf.")
     settings = Settings()
     daten = lade_verlauf(slug, eingefroren=mit_verlauf)
     top_k, herkunft = _top_k_und_herkunft(settings, slug)
@@ -1422,12 +1543,28 @@ def fahre_verlauf(
     preise = _preise()
 
     ergebnisse: list[Frageergebnis] = []
+    zweite_fassung: list[Frageergebnis] = []
     laeufe_je_fall: dict[str, int] = {}
     for fall in daten["faelle"]:
         eintrag = {**fall, "frage": fall["folgefrage"]}
         n = fall["laeufe"] if mit_verlauf else laeufe_kontrolle
         laeufe_je_fall[fall["id"]] = n
         verlauf = _runden(fall["verlauf"]) if mit_verlauf else None
+        if umformungsfassungen is not None and verlauf is not None:
+            erste, zweite = umformungsfassungen_frage(
+                slug,
+                eintrag,
+                settings,
+                top_k,
+                gesamt,
+                n,
+                verlauf,
+                umformungsfassungen,
+                sprachpruefung,
+            )
+            ergebnisse.append(erste)
+            zweite_fassung.append(zweite)
+            continue
         ergebnisse.append(
             eine_frage(
                 slug,
@@ -1453,7 +1590,8 @@ def fahre_verlauf(
         herkunft,
         gesamt,
         preise,
-        BEDEUTUNG_VERLAUF if mit_verlauf else BEDEUTUNG_KONTROLLE,
+        (BEDEUTUNG_VERLAUF if mit_verlauf else BEDEUTUNG_KONTROLLE)
+        + (BEDEUTUNG_UMFORMUNGSFASSUNGEN.format(arm="") if umformungsfassungen else ""),
     )
     kopf["laeufe_je_fall"] = laeufe_je_fall
     kopf["sprachpruefung"] = sprachpruefung
@@ -1461,11 +1599,22 @@ def fahre_verlauf(
     kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
     if mit_verlauf:
         kopf["eigenstaendig_gleich_getippt"] = _gleich_getippt(ergebnisse)
-    return {
+        kopf["eigenstaendig_weicht_ab"] = _weicht_ab(ergebnisse)
+    bericht: dict[str, Any] = {
         "kopf": kopf,
         "aggregiert_je_kategorie": aggregiere(ergebnisse, top_k, preise, settings.model_name),
         "fragen": [asdict(e) for e in ergebnisse],
     }
+    if umformungsfassungen is not None:
+        endung = f"_u{umformungsfassungen[1]}"
+        kopf["umformung_fassungen"] = list(umformungsfassungen)
+        kopf[f"eigenstaendig_gleich_getippt{endung}"] = _gleich_getippt(zweite_fassung)
+        kopf[f"eigenstaendig_weicht_ab{endung}"] = _weicht_ab(zweite_fassung)
+        bericht[f"aggregiert_je_kategorie{endung}"] = aggregiere(
+            zweite_fassung, top_k, preise, settings.model_name
+        )
+        bericht[f"fragen{endung}"] = [asdict(e) for e in zweite_fassung]
+    return bericht
 
 
 def fahre_gegenprobe(
@@ -1475,11 +1624,17 @@ def fahre_gegenprobe(
     laeufe: int,
     nur_b: bool = False,
     sprachpruefung: bool = True,
+    umformungsfassungen: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Die Goldfragen verschraenkt, A ohne und B mit fremder erster Runde.
 
     Mit `nur_b` laeuft nur Fassung B, etwa nach einer Aenderung, die nur den Weg
     mit Verlauf betrifft. Dann ist eine fruehere Messung der Bezug fuer A.
+
+    Mit `umformungsfassungen` laeuft ebenfalls nur B, in beiden Fassungen des
+    Umformungsprompts, verschraenkt: A ohne Verlauf beruehrt die Umformung
+    nicht. Die erste Fassung steht unter fragen_b, die zweite unter
+    fragen_b_u<fassung>.
     """
     settings = Settings()
     gold = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
@@ -1492,10 +1647,27 @@ def fahre_gegenprobe(
     gesamt = _chunkzahl(settings, slug)
     preise = _preise()
 
-    arme = ("B",) if nur_b else ("A", "B")
+    arme = ("B",) if nur_b or umformungsfassungen is not None else ("A", "B")
     arm_a: list[Frageergebnis] = []
     arm_b: list[Frageergebnis] = []
+    arm_b_zweite: list[Frageergebnis] = []
     for f in gold["fragen"]:
+        if umformungsfassungen is not None:
+            b, b_zweite = umformungsfassungen_frage(
+                slug,
+                f,
+                settings,
+                top_k,
+                gesamt,
+                laeufe,
+                [vorrunde],
+                umformungsfassungen,
+                sprachpruefung,
+                arm="B",
+            )
+            arm_b.append(b)
+            arm_b_zweite.append(b_zweite)
+            continue
         a, b = gegenprobe_frage(
             slug, f, settings, top_k, gesamt, laeufe, vorrunde, arme, sprachpruefung
         )
@@ -1514,19 +1686,32 @@ def fahre_gegenprobe(
         herkunft,
         gesamt,
         preise,
-        BEDEUTUNG_GEGENPROBE + (BEDEUTUNG_NUR_B if nur_b else ""),
+        BEDEUTUNG_GEGENPROBE
+        + (BEDEUTUNG_NUR_B if "A" not in arme else "")
+        + (BEDEUTUNG_UMFORMUNGSFASSUNGEN.format(arm="_b") if umformungsfassungen else ""),
     )
     kopf["fassungen"] = list(arme)
     kopf["sprachpruefung"] = sprachpruefung
     kopf["vorrunde_frage"] = vorrunde.question
     kopf["b_eigenstaendig_gleich_getippt"] = _gleich_getippt(arm_b)
-    return {
+    kopf["b_eigenstaendig_weicht_ab"] = _weicht_ab(arm_b)
+    bericht: dict[str, Any] = {
         "kopf": kopf,
         "aggregiert_je_kategorie": aggregiere(arm_a, top_k, preise, settings.model_name),
         "aggregiert_je_kategorie_b": aggregiere(arm_b, top_k, preise, settings.model_name),
         "fragen": [asdict(e) for e in arm_a],
         "fragen_b": [asdict(e) for e in arm_b],
     }
+    if umformungsfassungen is not None:
+        endung = f"_u{umformungsfassungen[1]}"
+        kopf["umformung_fassungen"] = list(umformungsfassungen)
+        kopf[f"b_eigenstaendig_gleich_getippt{endung}"] = _gleich_getippt(arm_b_zweite)
+        kopf[f"b_eigenstaendig_weicht_ab{endung}"] = _weicht_ab(arm_b_zweite)
+        bericht[f"aggregiert_je_kategorie_b{endung}"] = aggregiere(
+            arm_b_zweite, top_k, preise, settings.model_name
+        )
+        bericht[f"fragen_b{endung}"] = [asdict(e) for e in arm_b_zweite]
+    return bericht
 
 
 # --- Sprache: drei Wege zur Antwortsprache -----------------------------------
@@ -1954,6 +2139,22 @@ def tabelle(bericht: dict[str, Any]) -> str:
     return "\n".join(z)
 
 
+def _ueberschrift(endung: str, sprache: bool) -> str:
+    """Die Ueberschrift einer weiteren Tabelle, aus der Endung ihres Schluessels:
+    "b", "o", "u3" oder "b_u3"."""
+    if sprache:
+        return f"Fassung {endung.upper()}, {UEBERSCHRIFT_FASSUNG[endung.upper()]}"
+    teile = []
+    for teil in endung.split("_"):
+        if teil == "b":
+            teile.append("Fassung B, nach der fremden ersten Runde")
+        elif teil.startswith("u"):
+            teile.append(f"Umformung in Fassung {teil.removeprefix('u')}")
+        else:
+            teile.append(f"Fassung {teil.upper()}")
+    return ", ".join(teile)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m eval.run")
     g = p.add_mutually_exclusive_group(required=True)
@@ -2045,6 +2246,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="mit --gegenprobe: nur Fassung B; der Bezug fuer A ist eine fruehere Datei",
     )
+    p.add_argument(
+        "--umformung-fassungen",
+        default=None,
+        help=(
+            "mit --verlauf oder --gegenprobe: genau zwei Fassungen des Umformungsprompts, "
+            "durch Komma getrennt, etwa 2,3; verschraenkt, die Gegenprobe dann nur mit B"
+        ),
+    )
     args = p.parse_args(argv)
 
     gespraech = args.verlauf or args.gegenprobe or args.sprache
@@ -2060,6 +2269,20 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--verlauf und --gegenprobe sind zwei getrennte Laeufe.")
     if args.fassungen is not None and not args.sprache:
         p.error("--fassungen gilt nur zusammen mit --sprache.")
+    umformungsfassungen: tuple[str, str] | None = None
+    if args.umformung_fassungen is not None:
+        if not (args.verlauf or args.gegenprobe) or args.kontrolle or args.nur_b:
+            p.error(
+                "--umformung-fassungen gilt nur mit --verlauf oder --gegenprobe, ohne "
+                "--kontrolle und ohne --nur-b."
+            )
+        teile = tuple(args.umformung_fassungen.split(","))
+        if len(teile) != 2 or len(set(teile)) != 2 or not set(teile) <= set(UMFORMUNGSFASSUNGEN):
+            p.error(
+                "--umformung-fassungen verlangt genau zwei verschiedene der Fassungen "
+                f"{', '.join(UMFORMUNGSFASSUNGEN)}, etwa 2,3."
+            )
+        umformungsfassungen = (teile[0], teile[1])
     fassungen = tuple((args.fassungen or "A,B").split(","))
     if (
         len(fassungen) != 2
@@ -2131,7 +2354,13 @@ def main(argv: list[str] | None = None) -> int:
             pruefung = not args.ohne_sprachpruefung
             if args.verlauf:
                 bericht = fahre_verlauf(
-                    slug, args.lauf, args.baseline, not args.kontrolle, args.laeufe, pruefung
+                    slug,
+                    args.lauf,
+                    args.baseline,
+                    not args.kontrolle,
+                    args.laeufe,
+                    sprachpruefung=pruefung,
+                    umformungsfassungen=umformungsfassungen,
                 )
             elif args.sprache:
                 bericht = fahre_sprache(
@@ -2149,6 +2378,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.laeufe,
                     nur_b=args.nur_b,
                     sprachpruefung=pruefung,
+                    umformungsfassungen=umformungsfassungen,
                 )
             else:
                 bericht = fahre(
@@ -2170,21 +2400,15 @@ def main(argv: list[str] | None = None) -> int:
             datei.write_text(json.dumps(bericht, ensure_ascii=False, indent=2), encoding="utf-8")
             if bericht["kopf"].get("fassungen") != ["B"]:
                 print(tabelle(bericht))
-            zweite = next((k for k in bericht if k.startswith("aggregiert_je_kategorie_")), None)
-            if zweite is not None:
-                buchstabe = zweite.removeprefix("aggregiert_je_kategorie_")
-                titel = (
-                    UEBERSCHRIFT_FASSUNG[buchstabe.upper()]
-                    if args.sprache
-                    else "nach der fremden ersten Runde"
-                )
-                print(f"\nFassung {buchstabe.upper()}, {titel}:")
+            for weitere in [k for k in bericht if k.startswith("aggregiert_je_kategorie_")]:
+                endung = weitere.removeprefix("aggregiert_je_kategorie_")
+                print(f"\n{_ueberschrift(endung, args.sprache)}:")
                 print(
                     tabelle(
                         {
                             **bericht,
-                            "aggregiert_je_kategorie": bericht[zweite],
-                            "fragen": bericht[f"fragen_{buchstabe}"],
+                            "aggregiert_je_kategorie": bericht[weitere],
+                            "fragen": bericht[f"fragen_{endung}"],
                         }
                     )
                 )

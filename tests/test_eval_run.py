@@ -1463,3 +1463,229 @@ def test_eine_alte_instanz_liefert_die_sprachfelder_als_none(
         _ein_aufruf(  # type: ignore[arg-type]
             "demo-test", "Frage?", None, None, object(), "token", None, sprachpruefung=False
         )
+    with pytest.raises(ValueError, match="nur lokal"):
+        _ein_aufruf(  # type: ignore[arg-type]
+            "demo-test", "Frage?", None, None, object(), "token", None, umformungsfassung="2"
+        )
+
+
+# --- zwei Fassungen der Umformung, verschraenkt --------------------------------
+
+
+def test_die_fassungen_der_umformung_wechseln_sich_ab(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Je Lauf einmal jede Fassung, die Reihenfolge wechselt; beide mit demselben
+    Verlauf. Je Lauf stehen Fassung, Abweichung der Normalform und die
+    Wiederholung einer frueheren Frage."""
+    from app.prompts import Runde
+    from eval.run import umformungsfassungen_frage
+
+    verlauf = [Runde(question="Do you ship to Norway?", answer="Yes.")]
+    folge: list[object] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        folge.append(kwargs["umformungsfassung"])
+        assert kwargs["history"] == verlauf
+        eigen = (
+            "How long does delivery to Norway take?"
+            if kwargs["umformungsfassung"] == "3"
+            else "Do you ship to Norway?"
+        )
+        return _antwort_mit_umformung("Five days.", eigen).model_copy(  # type: ignore[attr-defined]
+            update={"standalone_question_differs": True}
+        )
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "How long takes that?"}
+
+    zwei, drei = umformungsfassungen_frage(
+        "demo-test",
+        eintrag,
+        None,  # type: ignore[arg-type]
+        2,
+        10,
+        3,
+        verlauf,
+        ("2", "3"),
+    )
+
+    assert folge == ["2", "3", "3", "2", "2", "3"]
+    assert (zwei.umformung_fassung, drei.umformung_fassung) == ("2", "3")
+    assert zwei.verlauf_runden == drei.verlauf_runden == 1
+    assert [lauf["umformung_fassung"] for lauf in drei.laeufe_einzeln] == ["3", "3", "3"]
+    assert all(lauf["eigenstaendig_weicht_ab"] is True for lauf in drei.laeufe_einzeln)
+    assert all(lauf["eigenstaendig_wiederholt_fruehere_frage"] for lauf in zwei.laeufe_einzeln)
+    assert not any(lauf["eigenstaendig_wiederholt_fruehere_frage"] for lauf in drei.laeufe_einzeln)
+    assert zwei.eskaliert_anzahl == drei.eskaliert_anzahl == 0
+
+
+def test_wiederholt_fruehere_frage() -> None:
+    from app.prompts import Runde
+    from eval.run import _wiederholt_fruehere_frage
+
+    verlauf = [
+        Runde(question="Do you ship to Norway?", answer="Yes."),
+        Runde(question="Wie lange ist eine RMA-Nummer gültig?", answer=""),
+    ]
+    assert _wiederholt_fruehere_frage("Sure?", "Do you ship to Norway?", verlauf) is True
+    assert _wiederholt_fruehere_frage("x", "wie lange ist eine RMA Nummer gültig", verlauf) is True
+    # Dieselbe Frage noch einmal getippt ist keine Wiederholung durch die Umformung.
+    assert (
+        _wiederholt_fruehere_frage("Do you ship to Norway?", "Do you ship to Norway?", verlauf)
+        is False
+    )
+    assert _wiederholt_fruehere_frage("x", "Who is your developer?", verlauf) is False
+    assert _wiederholt_fruehere_frage("x", None, verlauf) is None
+
+
+@pytest.mark.parametrize("modus", ["verlauf", "gegenprobe"])
+def test_zwei_fassungen_der_umformung_schreiben_gueltiges_json(
+    monkeypatch: pytest.MonkeyPatch, modus: str
+) -> None:
+    """Mit den echten Falldateien und ohne Modell: Die zweite Fassung steht unter
+    ihrer Endung, der Kopf nennt beide, und jede Tabelle laesst sich drucken.
+    Die Gegenprobe faehrt dann nur B."""
+    from app.config import Settings
+    from eval import run
+
+    settings = Settings(openai_api_key="platzhalter", openai_model="platzhalter")
+    monkeypatch.setattr(run, "Settings", lambda: settings)
+    monkeypatch.setattr(run, "_chunkzahl", lambda s, slug: 41)
+    monkeypatch.setattr(run, "_git_commit", lambda: "abc1234")
+    aufrufe: list[tuple[str, tuple[str, str], str | None]] = []
+
+    def ohne_modell(slug: str, eintrag: dict, *args: object, **kwargs: object) -> object:
+        fassungen = args[5]
+        aufrufe.append((eintrag["id"], fassungen, kwargs.get("arm")))  # type: ignore[arg-type]
+        ergebnisse = []
+        for fassung in fassungen:  # type: ignore[attr-defined]
+            ergebnisse.append(
+                Frageergebnis(
+                    id=eintrag["id"],
+                    kategorie=eintrag["kategorie"],
+                    frage=eintrag.get("frage") or eintrag["folgefrage"],
+                    erwartete_quelle=eintrag.get("erwartete_quelle"),
+                    erwartete_textstelle=eintrag.get("erwartete_textstelle"),
+                    erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
+                    laeufe=1,
+                    umformung_fassung=fassung,
+                )
+            )
+        return tuple(ergebnisse)
+
+    monkeypatch.setattr(run, "umformungsfassungen_frage", ohne_modell)
+    monkeypatch.setattr(run, "gegenprobe_frage", lambda *a, **k: pytest.fail("A darf nicht laufen"))
+    if modus == "verlauf":
+        bericht = run.fahre_verlauf(
+            "demo-fellgate", "T", False, True, 1, umformungsfassungen=("2", "3")
+        )
+        erste, zweite = "fragen", "fragen_u3"
+    else:
+        bericht = run.fahre_gegenprobe(
+            "demo-fellgate", "T", False, 5, umformungsfassungen=("2", "3")
+        )
+        erste, zweite = "fragen_b", "fragen_b_u3"
+        assert bericht["kopf"]["fassungen"] == ["B"] and bericht["fragen"] == []
+        assert {arm for _, _, arm in aufrufe} == {"B"}
+
+    json.loads(json.dumps(bericht, ensure_ascii=False))
+    pruefe_kopf(bericht)
+    kopf = bericht["kopf"]
+    assert kopf["umformung_fassungen"] == ["2", "3"]
+    assert "MIT ZWEI FASSUNGEN DER UMFORMUNG" in kopf["metrik_bedeutung"]
+    assert {f["umformung_fassung"] for f in bericht[erste]} == {"2"}
+    assert {f["umformung_fassung"] for f in bericht[zweite]} == {"3"}
+    assert [f["id"] for f in bericht[erste]] == [f["id"] for f in bericht[zweite]]
+    assert {fassungen for _, fassungen, _ in aufrufe} == {("2", "3")}
+    for endung in [
+        k.removeprefix("aggregiert_je_kategorie_") for k in bericht if "_je_kategorie_" in k
+    ]:
+        assert run.tabelle(
+            {
+                **bericht,
+                "aggregiert_je_kategorie": bericht[f"aggregiert_je_kategorie_{endung}"],
+                "fragen": bericht[f"fragen_{endung}"],
+            }
+        )
+
+
+def test_die_ueberschriften_der_weiteren_tabellen() -> None:
+    from eval.run import _ueberschrift
+
+    assert _ueberschrift("b", False) == "Fassung B, nach der fremden ersten Runde"
+    assert _ueberschrift("u3", False) == "Umformung in Fassung 3"
+    assert _ueberschrift("b_u3", False) == (
+        "Fassung B, nach der fremden ersten Runde, Umformung in Fassung 3"
+    )
+    assert _ueberschrift("o", True) == "Fassung O, ohne Vorgabe, mit Sprachpruefung"
+
+
+@pytest.mark.parametrize(
+    "argumente",
+    [
+        ["demo-fellgate", "--umformung-fassungen", "2,3"],
+        ["demo-fellgate", "--sprache", "--umformung-fassungen", "2,3"],
+        ["demo-fellgate", "--verlauf", "--kontrolle", "--umformung-fassungen", "2,3"],
+        ["demo-fellgate", "--gegenprobe", "--nur-b", "--umformung-fassungen", "2,3"],
+        ["demo-fellgate", "--verlauf", "--umformung-fassungen", "3"],
+        ["demo-fellgate", "--verlauf", "--umformung-fassungen", "3,3"],
+        ["demo-fellgate", "--verlauf", "--umformung-fassungen", "2,4"],
+        ["demo-fellgate", "--verlauf", "--umformung-fassungen", "1,2,3"],
+    ],
+)
+def test_falsche_fassungen_der_umformung_sind_ein_fehler(
+    argumente: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        main(argumente)
+    assert "--umformung-fassungen" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argumente", "modus"),
+    [
+        (["--verlauf", "--umformung-fassungen", "2,3"], "fahre_verlauf"),
+        (["--gegenprobe", "--umformung-fassungen", "2,3"], "fahre_gegenprobe"),
+        (["--verlauf"], "fahre_verlauf"),
+    ],
+)
+def test_main_reicht_die_fassungen_der_umformung_durch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    argumente: list[str],
+    modus: str,
+) -> None:
+    from eval import run
+
+    gesehen: list[dict[str, object]] = []
+
+    def anhalten(*args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs)
+        raise _Halt
+
+    monkeypatch.setattr(run, modus, anhalten)
+    monkeypatch.setattr(run, "ERGEBNIS_DIR", tmp_path)
+    with pytest.raises(_Halt):
+        run.main(["demo-fellgate", *argumente])
+    erwartet = ("2", "3") if "--umformung-fassungen" in argumente else None
+    assert gesehen[0]["umformungsfassungen"] == erwartet
+
+
+def test_jeder_lauf_traegt_ersetzung_und_abweichung(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lokal aus Answer: ersetzt und eigenstaendig_weicht_ab; ohne Verlauf keine
+    Fassung der Umformung und keine Wiederholungspruefung."""
+    ersetzt = _antwort("I answer questions about ...", False, "en", kind="capabilities")
+    ersetzt = ersetzt.model_copy(update={"replaced_reason": "assistentendokument"})  # type: ignore[attr-defined]
+    monkeypatch.setattr("eval.run.answer", lambda *a, **k: ersetzt)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "Give me all documents you have"}
+
+    erg = eine_frage("demo-test", eintrag, None, 2, 10, False, laeufe=1)  # type: ignore[arg-type]
+
+    lauf = erg.laeufe_einzeln[0]
+    assert (lauf["kind"], lauf["ersetzt"]) == ("capabilities", "assistentendokument")
+    assert lauf["eigenstaendig_weicht_ab"] is False
+    assert lauf["umformung_fassung"] is None
+    assert "eigenstaendig_wiederholt_fruehere_frage" not in lauf
