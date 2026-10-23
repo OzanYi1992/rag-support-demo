@@ -1621,6 +1621,29 @@ def test_verworfene_umformung_steht_im_ereignis(
     assert chats[0]["umformung_grund"] == grund
 
 
+def test_eine_wiederholte_unbeantwortete_frage_steht_im_ereignis(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ueber die Route: verworfen mit dem Grund fruehere_frage, ohne Zeile
+    "Verstanden als", und weder die getippte noch die fruehere Frage im Log."""
+    umformer = FakeUmformer("Wie lange gilt die RMA?")
+    client, llm = _client(umgebung, umformer=umformer)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(
+            f"/t/{ACME_TOKEN}/chat",
+            json={"question": "werisn dein entwikla", "history": [_runde(antwort="")]},
+        )
+    assert antwort.status_code == 200
+    daten = antwort.json()
+    assert daten["standalone_question"] is None and daten["standalone_question_differs"] is False
+    assert llm.calls[0][1].endswith("Frage: werisn dein entwikla")
+    (chat,) = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
+    assert (chat["umformung"], chat["umformung_grund"]) == ("verworfen", "fruehere_frage")
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert "werisn" not in log and "RMA" not in log
+
+
 def test_umformer_nicht_erreichbar_wird_503(
     umgebung: tuple[Settings, E5Embeddings], caplog: pytest.LogCaptureFixture
 ) -> None:

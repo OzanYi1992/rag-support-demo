@@ -276,6 +276,113 @@ def test_abgelehnte_umformung_faellt_auf_die_originalfrage_zurueck(
     assert a.standalone_question is None
 
 
+# Der Verlauf vor "heinis your developer" im Telefontest am 2026-10-22: zwei
+# eskalierte Runden um eine beantwortete.
+VERLAUF_TELEFON = [
+    Runde(question="Is there a warranty on a repair you have carried out?", answer=""),
+    Runde(
+        question="When do I get my money back after the return has been checked?",
+        answer="For a card refund, you get the money back 5 working days after we process it.",
+    ),
+    Runde(question="Wie lange ist eine RMA-Nummer gültig?", answer=""),
+]
+
+
+@pytest.mark.parametrize(
+    "eigenstaendig",
+    [
+        "Wie lange ist eine RMA-Nummer gültig?",
+        # Nur Schreibweise und Satzzeichen anders: dieselbe Normalform.
+        "wie lange ist eine RMA Nummer gültig",
+        "Is there a warranty on a repair you have carried out?",
+    ],
+)
+def test_eine_wiederholte_unbeantwortete_frage_wird_verworfen(
+    umgebung: tuple[Settings, E5Embeddings], gesucht: list[str], eigenstaendig: str
+) -> None:
+    """Die Umformung gibt eine fruehere, eskalierte Frage zurueck: verworfen mit
+    dem Grund fruehere_frage. Gesucht und geantwortet wird mit der getippten
+    Frage, und es gibt keine Zeile "Understood as"."""
+    settings, embeddings = umgebung
+    llm = FakeLlm(parsed=_antwort_en())
+
+    a = answer(
+        "demo-englisch",
+        "heinis your developer",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+        history=VERLAUF_TELEFON,
+        umformer=FakeUmformer(eigenstaendig),
+    )
+
+    assert gesucht == ["heinis your developer"]
+    assert llm.calls[0][1].endswith("Question: heinis your developer")
+    assert (a.rewrite_status, a.rewrite_reason) == ("verworfen", "fruehere_frage")
+    assert a.standalone_question is None and a.standalone_question_differs is False
+    # Der Aufruf fand statt: Tokens und Latenz der Umformung stehen da.
+    assert (a.rewrite_prompt_tokens, a.rewrite_completion_tokens) == (211, 17)
+
+
+@pytest.mark.parametrize(
+    ("getippt", "verlauf", "eigenstaendig"),
+    [
+        # Eine Rueckfrage nach einer beantworteten Runde: Regel 3 fuehrt auf
+        # die vorige Frage zurueck, und das ist richtig.
+        ("Sure?", VERLAUF, "Do you ship to Norway?"),
+        # Dieselbe Frage noch einmal getippt, nach ihrer Eskalation.
+        (
+            "Is there a warranty on a repair you have carried out?",
+            VERLAUF_TELEFON,
+            "Is there a warranty on a repair you have carried out?",
+        ),
+        # Gleich einer beantworteten frueheren Frage: nicht diese Regel.
+        (
+            "heinis your developer",
+            VERLAUF_TELEFON,
+            "When do I get my money back after the return has been checked?",
+        ),
+        # Eine neue Frage, die keiner frueheren gleicht.
+        ("heinis your developer", VERLAUF_TELEFON, "Who is your developer?"),
+    ],
+)
+def test_sonst_bleibt_die_umformung(
+    umgebung: tuple[Settings, E5Embeddings],
+    gesucht: list[str],
+    getippt: str,
+    verlauf: list[Runde],
+    eigenstaendig: str,
+) -> None:
+    settings, embeddings = umgebung
+    a = answer(
+        "demo-englisch",
+        getippt,
+        settings=settings,
+        embeddings=embeddings,
+        llm=FakeLlm(parsed=_antwort_en()),
+        history=verlauf,
+        umformer=FakeUmformer(eigenstaendig),
+    )
+    assert (a.rewrite_status, a.rewrite_reason) == ("umgeformt", None)
+    assert a.standalone_question == eigenstaendig
+    # "Who is your developer?" ist eine feste Antwort, ohne Suche.
+    assert gesucht == ([] if a.kind == "identity" else [eigenstaendig])
+
+
+def test_die_pruefung_auf_fruehere_fragen_prueft_den_mandanten(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    from app.rag import _wiederholt_unbeantwortete_frage
+
+    settings, _ = umgebung
+    acme = load_tenant("demo-acme", settings.tenants_dir)
+    with pytest.raises(ValueError):
+        _wiederholt_unbeantwortete_frage("demo-englisch", acme, VERLAUF_TELEFON, "x?", "y?")
+    assert _wiederholt_unbeantwortete_frage(
+        "demo-acme", acme, VERLAUF_TELEFON, "x?", "Wie lange ist eine RMA-Nummer gültig?"
+    )
+
+
 def test_umformer_nicht_erreichbar_geht_als_umformung_weiter(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:

@@ -82,6 +82,7 @@ VERWORFEN_PARSEFEHLER = "parsefehler"
 VERWORFEN_LEER = "leer"
 VERWORFEN_ZU_LANG = "zu_lang"
 VERWORFEN_ABGELEHNT = "abgelehnt"
+VERWORFEN_FRUEHERE_FRAGE = "fruehere_frage"
 
 # Laenger darf eine eigenstaendige Frage nicht sein; dieselbe Grenze wie fuer
 # die getippte Frage.
@@ -191,7 +192,7 @@ class Answer(BaseModel):
     # Wie viele fruehere Runden die Anfrage mitbrachte.
     history_turns: int = 0
     # "keine", "umgeformt" oder "verworfen", und bei "verworfen" der Grund:
-    # "parsefehler", "leer", "zu_lang" oder "abgelehnt".
+    # "parsefehler", "leer", "zu_lang", "abgelehnt" oder "fruehere_frage".
     rewrite_status: str = UMFORMUNG_KEINE
     rewrite_reason: str | None = None
     # Der zweite Aufruf, getrennt von dem der Antwort. Alle None, wenn nicht
@@ -427,6 +428,10 @@ def eigenstaendige_frage(
     Aufruf ab, etwa sein Inhaltsfilter. Der Verlauf kann den Text enthalten,
     den der Filter ablehnt, die getippte Frage nicht.
 
+    Verworfen wird auch eine eigenstaendige Frage, die eine fruehere,
+    unbeantwortete Frage des Verlaufs wiederholt, siehe
+    `_wiederholt_unbeantwortete_frage`.
+
     Ist der Anbieter nicht erreichbar, geht `LlmNichtErreichbar` weiter, mit
     `aufruf="umformung"`: Er ist dann fuer die Antwort ebenso wenig erreichbar.
     """
@@ -460,6 +465,8 @@ def eigenstaendige_frage(
         grund = VERWORFEN_LEER
     elif len(neu) > UMFORMUNG_MAX_ZEICHEN:
         grund = VERWORFEN_ZU_LANG
+    elif _wiederholt_unbeantwortete_frage(tenant_id, tenant, verlauf, frage, neu):
+        grund = VERWORFEN_FRUEHERE_FRAGE
     else:
         grund = None
 
@@ -472,6 +479,43 @@ def eigenstaendige_frage(
         prompt_tokens=ergebnis.prompt_tokens,
         completion_tokens=ergebnis.completion_tokens,
         modell=ergebnis.model,
+    )
+
+
+def _wiederholt_unbeantwortete_frage(
+    tenant_id: str,
+    tenant: TenantConfig,
+    verlauf: list[Runde],
+    getippt: str,
+    eigenstaendig: str,
+) -> bool:
+    """Ob die eigenstaendige Frage eine fruehere Frage wiederholt, deren Runde
+    eskaliert ist, statt die getippte Frage zu klaeren.
+
+    Wahr nur, wenn beides gilt, verglichen in der Normalform von
+    `normalisieren`:
+
+      - Sie unterscheidet sich von der getippten Frage, ergaebe also eine
+        Zeile "Verstanden als". Wer eine Frage wiederholt, bekommt sie zurueck,
+        und das ist richtig.
+      - Sie gleicht einer frueheren Frage mit leerer Antwort.
+
+    Warum nur unbeantwortete Runden: Eine Rueckfrage wie "Sure?" wird zu einer
+    Frage nach der Aussage der vorigen Antwort und gleicht dann oft der
+    vorigen Frage. Eine eskalierte Runde hat keine Aussage; eine Rueckfrage
+    kann also nie zu Recht auf sie zurueckfuehren. Am Telefon wurde so aus
+    "heinis your developer" die vorige, unbeantwortete Frage.
+
+    `tenant_id` an erster Stelle, weil der Verlauf Mandanteninhalt ist. Passt
+    `tenant.slug` nicht, ist das ein Fehler im Aufrufer.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    normal = normalisieren(eigenstaendig)
+    if normal == normalisieren(getippt):
+        return False
+    return any(
+        not runde.answer.strip() and normalisieren(runde.question) == normal for runde in verlauf
     )
 
 
