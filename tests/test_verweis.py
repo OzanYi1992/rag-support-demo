@@ -27,9 +27,10 @@ from app.verweis import (
     Mandantendokumente,
     ist_assistentendokument,
     mandantendokumente,
+    nennt_assistentendokument,
     quellverweise_entfernen,
 )
-from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm
+from tests.conftest import FAKE_DIMENSION, FakeBackend, FakeLlm, FakeLlmFolge
 
 ABOUT = "about-this-assistant.md"
 ZWEITES = "how-this-assistant-works.md"
@@ -343,12 +344,22 @@ def test_kein_dokumentname_im_ausgelieferten_text(
     umgebung: tuple[Settings, E5Embeddings], modelltext: str, erwartet: str, anzahl: int
 ) -> None:
     """Ueber answer(): Kein Name eines Dokuments des Mandanten steht im Text, und
-    alles andere ist Zeichen fuer Zeichen das, was das Modell geschrieben hat."""
+    alles andere ist Zeichen fuer Zeichen das, was das Modell geschrieben hat.
+
+    Bliebe nach der Entfernung der Titel des Assistentendokuments stehen, wird
+    die ganze Antwort durch die feste Antwort "capabilities" ersetzt: Der Titel
+    erreicht den Kunden nie. Die Entfernung selbst prueft fuer diese Formen
+    `test_zweimal_angewendet_wie_einmal` an der Funktion."""
     a = _antwort(umgebung, modelltext)
 
     assert not _NAME_IRGENDWIE.search(a.text), a.text
-    assert a.text == erwartet
-    assert a.removed_references == anzahl
+    if TITEL_EN in erwartet:
+        assert (a.kind, a.replaced_reason) == ("capabilities", "assistentendokument")
+        assert a.text.startswith("I answer questions about shipping, returns and payment")
+        assert a.removed_references == 0
+    else:
+        assert a.text == erwartet
+        assert a.removed_references == anzahl
     _sauber(a.text)
 
 
@@ -396,6 +407,135 @@ def test_eine_eskalierte_antwort_bleibt_unveraendert(
     assert a.escalation_reason == REASON_NOT_GROUNDED
     assert a.text == ESKALATION
     assert a.removed_references == 0
+
+
+# --- eine Antwort, die das Assistentendokument nennt ---------------------------
+
+# Die Aufzaehlung aus dem Telefontest am 2026-10-22, mit den Dateinamen, wie das
+# Modell sie schrieb, auf die Dokumente dieses Testmandanten umgestellt.
+AUFZAEHLUNG = "The documents provided are: doku.md, about-this-assistant.md and made-up.md."
+
+
+def _belegt(text: str, sprache: str = "en") -> GroundedAnswer:
+    return GroundedAnswer(answerable=True, answer=text, sources=[FACH], language=sprache)
+
+
+def test_eine_aufzaehlung_mit_dem_assistentendokument_wird_die_feste_antwort(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Ueber answer(): kein Titel, kein Name, keine Quelle, ein Aufruf. Tokens,
+    Latenz und Modell sind die des Aufrufs, der stattfand."""
+    settings, embeddings = umgebung
+    llm = FakeLlmFolge(_belegt(AUFZAEHLUNG))
+    a = answer("demo-assist", FRAGE, settings=settings, embeddings=embeddings, llm=llm)
+
+    assert len(llm.calls) == 1
+    assert (a.kind, a.replaced_reason, a.escalated) == (
+        "capabilities",
+        "assistentendokument",
+        False,
+    )
+    assert a.text == (
+        "I answer questions about shipping, returns and payment, based on the documents "
+        "stored for demo-assist. What would you like to know?"
+    )
+    assert "About This Assistant" not in a.text and not _NAME_IRGENDWIE.search(a.text)
+    assert (a.sources, a.source_scores, a.removed_references) == ([], [], 0)
+    assert (a.prompt_tokens, a.completion_tokens, a.model) == (100, 10, "fake-model-2026")
+    assert a.latency_ms_generation is not None and a.retrieval_scores
+    assert (a.answer_language, a.answer_language_source, a.lang) == ("en", "mandant", "en")
+    assert a.language_retry is False and a.language_kept is None
+
+
+def test_eine_aufzaehlung_wird_ohne_zweiten_aufruf_ersetzt(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Auch in der falschen Sprache: Die feste Antwort steht in der Sprache des
+    Mandanten, ein zweiter Aufruf waere verschwendet."""
+    settings, embeddings = umgebung
+    deutsch = "Die Unterlagen sind: doku.md und about-this-assistant.md, und die sagen nichts."
+    llm = FakeLlmFolge(_belegt(deutsch, "de"))
+    a = answer("demo-assist", FRAGE, settings=settings, embeddings=embeddings, llm=llm)
+    assert len(llm.calls) == 1
+    assert (a.kind, a.replaced_reason, a.language_retry) == (
+        "capabilities",
+        "assistentendokument",
+        False,
+    )
+
+
+def test_nennt_erst_die_zweite_antwort_das_dokument_wird_sie_ersetzt(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die erste Antwort haelt die Sprache nicht, die zweite ersetzt sie und
+    nennt das Dokument: feste Antwort, mit den Feldern beider Aufrufe."""
+    settings, embeddings = umgebung
+    llm = FakeLlmFolge(
+        _belegt("Die Lieferung dauert drei Werktage, und das gilt für alle Pakete.", "de"),
+        _belegt(AUFZAEHLUNG),
+    )
+    a = answer("demo-assist", FRAGE, settings=settings, embeddings=embeddings, llm=llm)
+    assert len(llm.calls) == 2
+    assert (a.kind, a.replaced_reason) == ("capabilities", "assistentendokument")
+    assert (a.language_retry, a.language_retry_result) == (True, "ersetzt")
+    assert (a.prompt_tokens, a.language_retry_prompt_tokens) == (100, 101)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Zwei Fachdokumente im Satz und eine erfundene Quelle: kein Grund.
+        "Delivery takes three days. The sources are doku.md and made-up.md.",
+        # Eine Angabe mit dem Assistentendokument faellt ganz weg und laesst
+        # keinen Titel zurueck.
+        "Delivery takes three days. [Source: about-this-assistant.md]",
+    ],
+)
+def test_ohne_titel_des_assistentendokuments_bleibt_die_antwort(
+    umgebung: tuple[Settings, E5Embeddings], text: str
+) -> None:
+    settings, embeddings = umgebung
+    llm = FakeLlmFolge(_belegt(text))
+    a = answer("demo-assist", FRAGE, settings=settings, embeddings=embeddings, llm=llm)
+    assert (a.kind, a.replaced_reason) == ("rag", None)
+    assert a.text.startswith("Delivery takes three days.")
+
+
+def test_das_ereignis_traegt_die_ersetzung_als_code(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ueber die Route: `ersetzt` steht in jedem Ereignis chat, als Code oder
+    null, und weder der Modelltext noch ein Titel steht im Log."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    settings, embeddings = umgebung
+    ereignisse: list[dict[str, object]] = []
+    for text in (AUFZAEHLUNG, "Delivery takes three days. [doku.md]"):
+        app = create_app(settings, llm=FakeLlmFolge(_belegt(text)), embeddings=embeddings)
+        caplog.clear()
+        with caplog.at_level("INFO", logger="rag.api"):
+            antwort = TestClient(app).post(
+                "/t/demo-assist-token-1234567890/chat", json={"question": FRAGE}
+            )
+        assert antwort.status_code == 200
+        log = "\n".join(e.message for e in caplog.records)
+        assert "documents provided" not in log and "About This Assistant" not in log
+        (chat,) = [
+            json.loads(e.message)
+            for e in caplog.records
+            if e.name == "rag.api" and json.loads(e.message)["ereignis"] == "chat"
+        ]
+        ereignisse.append(chat)
+    assert [(e["art"], e["ersetzt"]) for e in ereignisse] == [
+        ("capabilities", "assistentendokument"),
+        ("rag", None),
+    ]
+    assert ereignisse[0]["prompt_tokens"] == 100 and ereignisse[0]["tenant_id"] == "demo-assist"
 
 
 # --- die Funktion direkt -----------------------------------------------------
@@ -499,6 +639,58 @@ def test_die_funktion_prueft_den_mandanten() -> None:
     with pytest.raises(ValueError):
         quellverweise_entfernen("demo-assist", _tenant(), "x", "en", _dokumente("demo-anderer"))
     assert _entfernen("x") == ("x", 0)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Der Wortlaut aus dem Telefontest am 2026-10-22, nach der Entfernung.
+        "The documents provided are: “Our Range”, “Frequently Asked Questions”, "
+        "“About This Assistant”, and “Returns and Exchanges”.",
+        "You have these documents in the context: “Shipping” and “About This Assistant”.",
+        # Die Ueberschrift der Datei, ohne Ruecksicht auf die Schreibung.
+        "Questions about this assistant are answered in the documents.",
+        "ABOUT THIS ASSISTANT: it answers from the documents.",
+        # Ein zweites Assistentendokument mit eigener Ueberschrift.
+        "See “How this assistant works”.",
+        # Der Katalogtitel der anderen Sprache.
+        "Laut „Über den Assistenten“ helfe ich bei Versand.",
+        "Laut über den Assistenten helfe ich bei Versand.",
+    ],
+)
+def test_nennt_assistentendokument(text: str) -> None:
+    assert nennt_assistentendokument("demo-assist", _tenant(), text, _dokumente())
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Delivery takes three days.",
+        # Zwei Fachtitel als Quellenangabe im Satz, wie in richtigen Antworten
+        # vom 2026-10-22: kein Grund zu ersetzen.
+        "Zone C covers every other country. The relevant sources are “Shipping” and “Returns”.",
+        "This assistant answers from the stored documents.",
+        "",
+    ],
+)
+def test_nennt_kein_assistentendokument(text: str) -> None:
+    assert not nennt_assistentendokument("demo-assist", _tenant(), text, _dokumente())
+
+
+def test_ohne_assistentendokument_nennt_der_text_keines() -> None:
+    """Ein Mandant ohne Assistentendokument: Auch der Katalogtitel zaehlt dann
+    nicht, es gibt kein Dokument, das er bezeichnen koennte."""
+    tenant = _tenant().model_copy(update={"assistant_documents": []})
+    assert not nennt_assistentendokument(
+        "demo-assist", tenant, "See “About This Assistant”.", _dokumente()
+    )
+
+
+def test_nennt_assistentendokument_prueft_den_mandanten() -> None:
+    with pytest.raises(ValueError):
+        nennt_assistentendokument("demo-anderer", _tenant(), "x", _dokumente("demo-anderer"))
+    with pytest.raises(ValueError):
+        nennt_assistentendokument("demo-assist", _tenant(), "x", _dokumente("demo-anderer"))
 
 
 def test_ist_assistentendokument() -> None:

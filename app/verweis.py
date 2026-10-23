@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.tenants import TenantConfig, dokumentordner
-from app.texts import texte_fuer
+from app.texts import VERFUEGBARE_SPRACHEN, texte_fuer
 
 # Welche Dateien ein Dokument sind: dieselben, die der Ingest liest.
 DOKUMENTMUSTER = "*.md"
@@ -283,6 +283,47 @@ def quellverweise_entfernen(
     if not neu.strip():
         return text, 0
     return neu, anzahl
+
+
+def nennt_assistentendokument(
+    tenant_id: str,
+    tenant: TenantConfig,
+    text: str,
+    dokumente: Mandantendokumente,
+) -> bool:
+    """Ob der Text das Dokument ueber den Assistenten beim Titel nennt.
+
+    Aufzurufen mit dem Text, den der Kunde saehe, also nach
+    `quellverweise_entfernen`. Ein Name in einer Angabe ist dann weg; einer im
+    Fliesstext ist nach Regel 4 durch den Titel ersetzt und wird hier gefunden.
+
+    Gesucht wird ohne Ruecksicht auf Gross- und Kleinschreibung nach der
+    Ueberschrift jedes Assistentendokuments und nach dessen Titel im Katalog,
+    in jeder Sprache und ohne Anfuehrungszeichen. Ein Mandant ohne
+    Assistentendokument nennt nie eines.
+
+    Warum der Titel genuegt: Das Dokument ist nie Quelle einer Fachantwort.
+    Steht es im Text, spricht die Antwort ueber die Unterlagen oder ueber den
+    Assistenten, meist als Aufzaehlung der Dokumente im Kontext. Zwei Titel von
+    Fachdokumenten dagegen stehen auch in richtigen Antworten, als Quellenangabe
+    im Satz.
+
+    `tenant_id` an erster Stelle: Der Text ist aus den Dokumenten dieses
+    Mandanten erzeugt. Passen Mandant oder Dokumentliste nicht zu ihr, ist das
+    ein Fehler im Aufrufer.
+    """
+    if tenant.slug != tenant_id or dokumente.tenant_id != tenant_id:
+        raise ValueError("tenant oder Dokumentliste passt nicht zur tenant_id.")
+    assistent = list(tenant.assistant_documents)
+    if not assistent or not text:
+        return False
+    titel = {t for n, t in dokumente.titel.items() if ist_assistentendokument(n, assistent)}
+    titel |= {
+        texte_fuer(sprache).assistentendokument_titel.strip("„“”\"'")
+        for sprache in VERFUEGBARE_SPRACHEN
+    }
+    klein = text.casefold()
+    return any(t.strip() and t.strip().casefold() in klein for t in titel)
 
 
 def _angaben_bearbeiten(

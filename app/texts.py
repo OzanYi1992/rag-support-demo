@@ -306,7 +306,9 @@ VERFUEGBARE_SPRACHEN: tuple[str, ...] = tuple(sorted(TEXTE))
 # (identity), und Bitten um Hilfe oder um die Unterlagen selbst (capabilities).
 # Die Bitten um die Unterlagen in mehreren Wortlauten, weil das Modell eine
 # solche Frage sonst aus dem Kontext beantwortet und die Dokumente aufzaehlt,
-# die gerade darin liegen.
+# die gerade darin liegen. Was die Listen nicht treffen, faengt die Pruefung
+# der Antwort in app/rag.py: Nennt sie das Dokument ueber den Assistenten,
+# kommt dieselbe feste Antwort.
 # Bewusst NICHT in den Listen: "where are you from", "where do you come from"
 # und "woher kommst du". In einem Shop meinen sie oft den Haendler, und die
 # Unterlagen beantworten das, etwa mit dem Lager in Schweden.

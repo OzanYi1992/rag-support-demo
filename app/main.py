@@ -728,6 +728,9 @@ def create_app(
             "chat",
             tenant.slug,
             art=ergebnis.kind,
+            # Ein Code, sonst null: Eine belegte Antwort wurde durch eine feste
+            # ersetzt, etwa weil sie das Dokument ueber den Assistenten nannte.
+            ersetzt=ergebnis.replaced_reason,
             verweise_entfernt=ergebnis.removed_references,
             escalated=ergebnis.escalated,
             escalation_reason=ergebnis.escalation_reason,

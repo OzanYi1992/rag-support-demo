@@ -57,7 +57,12 @@ from app.texts import (
     normalisieren,
     texte_fuer,
 )
-from app.verweis import ist_assistentendokument, mandantendokumente, quellverweise_entfernen
+from app.verweis import (
+    ist_assistentendokument,
+    mandantendokumente,
+    nennt_assistentendokument,
+    quellverweise_entfernen,
+)
 
 REASON_NOT_GROUNDED = "not_grounded"
 REASON_UNPARSEABLE = "generation_unparseable"
@@ -94,6 +99,9 @@ ZWEITER_ESKALIERT = "eskaliert"
 ZWEITER_PARSEFEHLER = "parsefehler"
 ZWEITER_NICHT_ERREICHBAR = "nicht_erreichbar"
 ZWEITER_ABGELEHNT = "abgelehnt"
+
+# Warum eine belegte Antwort durch eine feste ersetzt wurde.
+ERSETZT_ASSISTENTENDOKUMENT = "assistentendokument"
 
 
 class Answer(BaseModel):
@@ -160,6 +168,13 @@ class Answer(BaseModel):
     # oder durch den Titel des Dokuments ersetzt wurden. Eine Zahl, kein Text:
     # Sie geht ins Ereignis.
     removed_references: int = 0
+
+    # Warum eine belegte Antwort des Modells durch eine feste ersetzt wurde,
+    # als Code, sonst None. "assistentendokument": Der Text nannte das Dokument
+    # ueber den Assistenten beim Titel. Ausgeliefert wird dann die Antwort auf
+    # "Was kannst du?", mit `kind` "capabilities"; Tokens, Latenz und Modell
+    # sind die des Aufrufs, der stattfand.
+    replaced_reason: str | None = None
 
     # --- Gespraech ---------------------------------------------------------
     # Die Frage, mit der gesucht und geantwortet wurde, wenn eine Folgefrage
@@ -746,6 +761,26 @@ def _beantworten(
 
     ausgeliefert = _belegt_aufbereiten(tenant_id, tenant, ergebnis.parsed, treffer, aktive_settings)
 
+    # Die Felder des ersten Aufrufs, fuer die Antwort aus den Unterlagen und
+    # fuer eine feste Antwort, die sie ersetzt.
+    aufruf: dict[str, object] = {
+        "escalation_metric": entscheidung.metric_value,
+        "retrieval_scores": scores,
+        "latency_ms_retrieval": latenz_retrieval,
+        "latency_ms_generation": latenz_generierung,
+        "prompt_tokens": ergebnis.prompt_tokens,
+        "completion_tokens": ergebnis.completion_tokens,
+        "model": ergebnis.model,
+    }
+
+    # --- Das Dokument ueber den Assistenten im Text --------------------------
+    # Nennt die Antwort es beim Titel, spricht sie ueber die Unterlagen oder
+    # den Assistenten, meist als Aufzaehlung der Dokumente im Kontext. Dann
+    # kommt die feste Antwort auf "Was kannst du?", ohne zweiten Aufruf: Die
+    # Sprache einer festen Antwort ist die des Mandanten.
+    if ausgeliefert.nennt_assistentendokument:
+        return _durch_faehigkeiten_ersetzt(tenant_id, tenant, aufruf)
+
     # --- Antwortsprache ----------------------------------------------------
     # Eine vorgegebene Sprache wird nicht geprueft: Der erste Aufruf hatte sie
     # schon, und ein zweiter mit derselben Vorgabe waere eine Wiederholung.
@@ -763,31 +798,48 @@ def _beantworten(
                 )
                 gehalten = sprache_bestimmen(ausgeliefert.text) == antwortsprache
 
+    zweiter_felder: dict[str, object] = {
+        "language_retry": zweiter is not None,
+        "language_retry_result": zweiter.ergebnis if zweiter is not None else None,
+        "latency_ms_language_retry": zweiter.latenz_ms if zweiter is not None else None,
+        "language_retry_prompt_tokens": zweiter.prompt_tokens if zweiter is not None else None,
+        "language_retry_completion_tokens": (
+            zweiter.completion_tokens if zweiter is not None else None
+        ),
+    }
+    if ausgeliefert.nennt_assistentendokument:
+        # Die zweite Antwort ersetzte die erste und nennt das Dokument.
+        return _durch_faehigkeiten_ersetzt(tenant_id, tenant, {**aufruf, **zweiter_felder})
+
     return Answer(
         text=ausgeliefert.text,
         sources=ausgeliefert.sources,
         source_scores=ausgeliefert.source_scores,
         escalated=False,
         escalation_reason=None,
-        escalation_metric=entscheidung.metric_value,
-        retrieval_scores=scores,
-        latency_ms_retrieval=latenz_retrieval,
-        latency_ms_generation=latenz_generierung,
-        prompt_tokens=ergebnis.prompt_tokens,
-        completion_tokens=ergebnis.completion_tokens,
-        model=ergebnis.model,
+        **aufruf,
         lang=ausgeliefert.lang,
         answer_language=antwortsprache,
         answer_language_source=sprachquelle,
         removed_references=ausgeliefert.removed_references,
         language_kept=gehalten,
-        language_retry=zweiter is not None,
-        language_retry_result=zweiter.ergebnis if zweiter is not None else None,
-        latency_ms_language_retry=zweiter.latenz_ms if zweiter is not None else None,
-        language_retry_prompt_tokens=zweiter.prompt_tokens if zweiter is not None else None,
-        language_retry_completion_tokens=(
-            zweiter.completion_tokens if zweiter is not None else None
-        ),
+        **zweiter_felder,
+    )
+
+
+def _durch_faehigkeiten_ersetzt(
+    tenant_id: str, tenant: TenantConfig, aufruf: dict[str, object]
+) -> Answer:
+    """Die feste Antwort "capabilities" an Stelle einer belegten Antwort, die
+    das Dokument ueber den Assistenten nennt.
+
+    Text, Sprache und leere Quellen wie bei jeder festen Antwort; `aufruf`
+    traegt Scores, Latenz, Tokens und Modell der Aufrufe, die stattfanden.
+    `tenant_id` an erster Stelle wie bei `kurzformel_beantworten`, das hier
+    den Mandanten prueft.
+    """
+    return kurzformel_beantworten(tenant_id, tenant, ART_FAEHIGKEITEN).model_copy(
+        update={**aufruf, "replaced_reason": ERSETZT_ASSISTENTENDOKUMENT}
     )
 
 
@@ -801,6 +853,9 @@ class _Belegt:
     removed_references: int
     # Die Selbstauskunft des Modells, Feld language seiner Struktur.
     lang: str
+    # Ob der Text das Dokument ueber den Assistenten beim Titel nennt. Dann
+    # wird er nicht ausgeliefert, siehe `_beantworten`.
+    nennt_assistentendokument: bool
 
 
 def _belegt_aufbereiten(
@@ -837,6 +892,7 @@ def _belegt_aufbereiten(
         source_scores=quellscores,
         removed_references=entfernt,
         lang=belegt.language,
+        nennt_assistentendokument=nennt_assistentendokument(tenant_id, tenant, text, dokumente),
     )
 
 
