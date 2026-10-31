@@ -1289,12 +1289,31 @@ def test_die_zweite_fassung_steht_unter_ihrem_buchstaben(monkeypatch: pytest.Mon
     ],
 )
 def test_falsche_fassungen_und_schalter_sind_ein_fehler(
-    argumente: list[str], capsys: pytest.CaptureFixture[str]
+    argumente: list[str], capsys: pytest.CaptureFixture[str], kein_messlauf: None
 ) -> None:
     with pytest.raises(SystemExit):
         main(argumente)
     fehler = capsys.readouterr().err
     assert "--fassungen" in fehler or "--ohne-sprachpruefung" in fehler
+
+
+@pytest.fixture
+def kein_messlauf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fuer Tests, die einen Fehler beim Pruefen der Schalter erwarten: Kommt
+    main() doch bis zu einem Modus, faellt der Test, statt echte Modellaufrufe
+    zu machen.
+
+    Am 2026-10-31 wurde "2,4" als ungueltiger Wert gefuehrt, und mit der
+    vierten Fassung wurde er gueltig. main() fuhr daraufhin einen echten
+    Verlaufslauf gegen den Anbieter, bis er von Hand abgebrochen wurde.
+    """
+    from eval import run
+
+    def nie(*args: object, **kwargs: object) -> object:
+        pytest.fail("main() hat einen Messlauf gestartet, statt die Schalter abzulehnen.")
+
+    for modus in ("fahre", "fahre_verlauf", "fahre_gegenprobe", "fahre_sprache"):
+        monkeypatch.setattr(run, modus, nie)
 
 
 class _Halt(Exception):
@@ -1631,12 +1650,12 @@ def test_die_ueberschriften_der_weiteren_tabellen() -> None:
         ["demo-fellgate", "--gegenprobe", "--nur-b", "--umformung-fassungen", "2,3"],
         ["demo-fellgate", "--verlauf", "--umformung-fassungen", "3"],
         ["demo-fellgate", "--verlauf", "--umformung-fassungen", "3,3"],
-        ["demo-fellgate", "--verlauf", "--umformung-fassungen", "2,4"],
+        ["demo-fellgate", "--verlauf", "--umformung-fassungen", "2,5"],
         ["demo-fellgate", "--verlauf", "--umformung-fassungen", "1,2,3"],
     ],
 )
 def test_falsche_fassungen_der_umformung_sind_ein_fehler(
-    argumente: list[str], capsys: pytest.CaptureFixture[str]
+    argumente: list[str], capsys: pytest.CaptureFixture[str], kein_messlauf: None
 ) -> None:
     with pytest.raises(SystemExit):
         main(argumente)

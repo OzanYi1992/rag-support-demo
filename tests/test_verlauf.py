@@ -599,17 +599,17 @@ def test_umformungsprompt_im_rahmen_der_mandantensprache(
 
 
 @pytest.mark.parametrize("slug", ["demo-englisch", "demo-acme"])
-def test_answer_formt_mit_der_dritten_fassung_um(
+def test_answer_formt_mit_der_vierten_fassung_um(
     umgebung: tuple[Settings, E5Embeddings], slug: str
 ) -> None:
-    """Die Seite benutzt die dritte Fassung, in der Sprache des Mandanten. Die
-    zweite erreicht den Umformer nur, wenn sie ausdruecklich verlangt wird, mit
-    demselben Userprompt."""
+    """Die Seite benutzt die vierte Fassung, in der Sprache des Mandanten. Die
+    zweite und die dritte erreichen den Umformer nur, wenn sie ausdruecklich
+    verlangt werden, mit demselben Userprompt."""
     settings, embeddings = umgebung
     sprache = load_tenant(slug, settings.tenants_dir).language
     systeme: dict[str, str] = {}
     users: dict[str, str] = {}
-    for fassung in (None, "2", "3"):
+    for fassung in (None, "2", "3", "4"):
         umformer = FakeUmformer("How long does delivery to Norway take?")
         extra = {} if fassung is None else {"umformungsfassung": fassung}
         answer(
@@ -623,10 +623,11 @@ def test_answer_formt_mit_der_dritten_fassung_um(
             **extra,  # type: ignore[arg-type]
         )
         ((systeme[str(fassung)], users[str(fassung)]),) = umformer.calls
-    assert systeme["None"] == systeme["3"] == _UMFORMUNG_FASSUNGEN["3"][sprache].system
+    assert systeme["None"] == systeme["4"] == _UMFORMUNG_FASSUNGEN["4"][sprache].system
     assert systeme["2"] == _UMFORMUNG_FASSUNGEN["2"][sprache].system
-    assert systeme["2"] != systeme["3"]
-    assert users["None"] == users["2"] == users["3"]
+    assert systeme["3"] == _UMFORMUNG_FASSUNGEN["3"][sprache].system
+    assert len({systeme["2"], systeme["3"], systeme["4"]}) == 3
+    assert users["None"] == users["2"] == users["3"] == users["4"]
 
 
 def test_eine_unbekannte_fassung_ist_ein_fehler_vor_jedem_aufruf(
@@ -638,7 +639,7 @@ def test_eine_unbekannte_fassung_ist_ein_fehler_vor_jedem_aufruf(
     with pytest.raises(ValueError, match="Fassung"):
         eigenstaendige_frage("demo-englisch", englisch, VERLAUF, "x?", nie, "1")
     with pytest.raises(ValueError, match="Fassung"):
-        umformungsprompts_bauen("demo-englisch", englisch, VERLAUF, "x?", "4")
+        umformungsprompts_bauen("demo-englisch", englisch, VERLAUF, "x?", "5")
     assert nie.calls == []
 
 

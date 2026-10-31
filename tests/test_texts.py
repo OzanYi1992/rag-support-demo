@@ -1296,9 +1296,6 @@ def test_die_dritte_fassung_im_wortlaut() -> None:
     """Kopf und Regeln 1 bis 3 Zeichen fuer Zeichen wie in der zweiten Fassung,
     dahinter die Regeln 4 bis 7. Die alte Regel 4 steht als 5, die alte Regel 5
     als 7, im Wortlaut gleich. "es" steht nicht in der deutschen Liste."""
-    assert UMFORMUNG_AKTUELL == "3"
-    assert _UMFORMUNG == _UMFORMUNG_FASSUNGEN["3"]
-    assert UMFORMUNGSFASSUNGEN == ("2", "3")
     for sprache, regeln in _UMFORMUNG_REGELN_4_BIS_7.items():
         dritte = _UMFORMUNG_FASSUNGEN["3"][sprache].system
         zweite = _UMFORMUNG_FASSUNGEN["2"][sprache].system
@@ -1311,6 +1308,51 @@ def test_die_dritte_fassung_im_wortlaut() -> None:
         assert f"\n5. {alt_4}\n" in dritte and dritte.endswith(f"\n7. {alt_5}\n"), sprache
         assert _UMFORMUNG_FASSUNGEN["2"][sprache].rahmen == _UMFORMUNG[sprache].rahmen
     assert '"es"' not in _UMFORMUNG_FASSUNGEN["3"]["de"].system
+
+
+def test_die_dritte_fassung_ist_zeichengleich_mit_dem_gemessenen_stand() -> None:
+    """Der Bezug der Messung vom 2026-10-31: sha256 des Systemprompts der
+    dritten Fassung, je Sprache."""
+    erwartet = {
+        "de": "b7ba3b4ab312c88e795687dd280f8e46181601a91200d8a3635d4082d37b4162",
+        "en": "2d3d4065bab5149e51483e6f1583e0d21b048ceac78146fe282b3934c8e8e790",
+    }
+    for sprache, wert in erwartet.items():
+        system = _UMFORMUNG_FASSUNGEN["3"][sprache].system
+        assert hashlib.sha256(system.encode()).hexdigest() == wert, sprache
+
+
+def test_die_vierte_fassung_ist_die_dritte_ohne_regel_6() -> None:
+    """Die Fassung der Seite. Kopf und Regeln 1 bis 5 Zeichen fuer Zeichen wie in
+    der dritten Fassung, dahinter deren Regel 7 als Regel 6. Keine Regel ueber
+    Fragen ohne Bezug, keine ueber fruehere Fragen."""
+    assert UMFORMUNG_AKTUELL == "4"
+    assert _UMFORMUNG == _UMFORMUNG_FASSUNGEN["4"]
+    assert UMFORMUNGSFASSUNGEN == ("2", "3", "4")
+    for sprache in ("de", "en"):
+        dritte = _UMFORMUNG_FASSUNGEN["3"][sprache].system
+        vierte = _UMFORMUNG_FASSUNGEN["4"][sprache].system
+        bis_regel_5 = dritte[: dritte.index("\n6. ") + 1]
+        regel_7 = dritte[dritte.index("\n7. ") + len("\n7. ") :]
+        assert vierte == bis_regel_5 + "6. " + regel_7, sprache
+        assert vierte.count("\n6. ") == 1 and vierte.count("\n7. ") == 0, sprache
+        assert max(len(zeile) for zeile in vierte.splitlines()) <= 80, sprache
+        assert (
+            _UMFORMUNG_FASSUNGEN["4"][sprache].rahmen == _UMFORMUNG_FASSUNGEN["2"][sprache].rahmen
+        )
+    assert _UMFORMUNG_FASSUNGEN["4"]["en"].system.endswith(
+        "5. If the last question can be understood on its own, return it unchanged.\n"
+        "6. Write the question in the language of the last question.\n"
+    )
+    assert _UMFORMUNG_FASSUNGEN["4"]["de"].system.endswith(
+        "5. Ist die letzte Frage fuer sich verstaendlich, gib sie unveraendert zurueck.\n"
+        "6. Schreibe die Frage in der Sprache der letzten Frage.\n"
+    )
+    for wort in ("earlier question", "fruehere Frage"):
+        assert (
+            wort
+            not in _UMFORMUNG_FASSUNGEN["4"]["en"].system + _UMFORMUNG_FASSUNGEN["4"]["de"].system
+        )
 
 
 def test_regelwerk_und_schema_der_antwort_bleiben_zeichengleich() -> None:
