@@ -20,9 +20,15 @@
 # Faelle mit erwartete_art fragen nach dem Assistenten selbst. Sie messen, ob
 # die Umformung die Frage erkennbar laesst, sodass die feste Antwort greift.
 # Jede feste Antwort in einem anderen Fall ist ein Befund.
+#
+# verlauf-11 bis -17 stammen aus dem Telefontest am 2026-10-22. Ihre Antworten
+# im Verlauf stehen wortgleich so, wie die Seite sie zeigte. Zwei zeigte sie
+# gekuerzt, am Satzende; eingefroren ist der sichtbare Teil, eine Folge ganzer
+# Saetze. Die Runden stehen einzeln als Anker, damit jeder Fall genau dieselben
+# Saetze sieht, auch in anderer Reihenfolge.
 
 mandant: demo-fellgate
-stand: 2026-10-13
+stand: 2026-10-23
 
 # Die erste Runde der Gegenprobe B. Eine Frage, die mit keiner Goldfrage etwas
 # zu tun hat: Jede Goldfrage wird in B als zweite Runde nach ihr gestellt.
@@ -168,3 +174,141 @@ faelle:
       Wie verlauf-08, mit einer anderen ersten Runde und einer laengeren
       Rueckfrage. Die vorige Antwort nennt eine Zahl; die Rueckfrage muss sie
       wiederfinden, ohne sie zu beantworten.
+
+  # --- aus dem Telefontest am 2026-10-22 ------------------------------------
+  # Ein Bezug wie "that" in einer Folgefrage, nach einer und nach zwei Runden,
+  # ungrammatisch und grammatisch: zwei mal zwei Faelle mit derselben
+  # Norwegen-Antwort, dazu der Ablauf vom Telefon mit drei Runden.
+
+  - id: verlauf-11
+    kategorie: bezug
+    verlauf:
+      - &telefon_norwegen
+        question: "do you ship to Norway"
+        answer: "Yes, we deliver to Norway. Norway is Zone B, and Zone B applies to mainland Denmark, Finland and Norway."
+    folgefrage: "How long takes that?"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Telefontest, Eingaben 1 und 3, mit einer Runde. "that" steht fuer die
+      Lieferung nach Norwegen; die eigenstaendige Frage muss Norwegen nennen.
+      Ungrammatisch getippt, wie am Telefon.
+
+  - id: verlauf-12
+    kategorie: bezug
+    verlauf:
+      - *telefon_norwegen
+      - &telefon_sure
+        question: "Sure?"
+        answer: "Yes, we deliver to Norway. Norway is in Zone B, and the standard delivery time to Zone B is 5 working days. Shipping below 60 euro to Zone B is 11.90 euro, and shipping from 60 euro is 6.90 euro."
+    folgefrage: "How long takes that?"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Telefontest, Eingaben 1 bis 3, wie am Telefon mit zwei Runden. Am
+      Telefon wurde daraus "How long does that take?", und die Frage
+      eskalierte. Die Antwort auf "Sure?" ist gekuerzt, wie angezeigt.
+
+  - id: verlauf-13
+    kategorie: bezug
+    verlauf:
+      - *telefon_norwegen
+      - *telefon_sure
+      - question: "How long takes that?"
+        answer: ""
+    folgefrage: "how long does that take"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Telefontest, Eingaben 1 bis 4. Die dritte Runde ist eskaliert; die
+      Folgefrage wiederholt sie grammatisch. Auch hier zeigt "that" auf die
+      Lieferung nach Norwegen, nicht auf die eskalierte Runde.
+
+  - id: verlauf-14
+    kategorie: bezug
+    verlauf:
+      - *telefon_norwegen
+    folgefrage: "how long does that take"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Wie verlauf-11, grammatisch getippt. Mit verlauf-11, -12 und -15 trennt
+      der Fall, ob die zweite Runde oder die Grammatik den Bezug kostet.
+
+  - id: verlauf-15
+    kategorie: bezug
+    verlauf:
+      - *telefon_norwegen
+      - *telefon_sure
+    folgefrage: "how long does that take"
+    erwartete_quelle: where-we-ship.md
+    erwartete_textstelle: "Mainland Denmark, Finland and Norway | 5 working days"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Wie verlauf-12, grammatisch getippt.
+
+  # Eine unverstaendliche Eingabe nach drei Runden. Am Telefon wurde aus ihr
+  # die vorige, unbeantwortete Frage. Bestanden heisst: Die eigenstaendige
+  # Frage ist keine fruehere Frage des Verlaufs, und keine Antwort gehoert zu
+  # einem frueheren Thema. Das Ziel ist die feste Antwort identity; eine
+  # Eskalation ohne "Understood as" ist hinnehmbar. erwartete_art und
+  # erwartet_eskalation tragen das Ziel, der Bericht zaehlt die Ausgaenge
+  # getrennt.
+
+  - id: verlauf-16
+    kategorie: unverstaendlich
+    verlauf:
+      - &telefon_garantie
+        question: "Is there a warranty on a repair you have carried out?"
+        answer: ""
+      - &telefon_geld
+        question: "When do I get my money back after the return has been checked?"
+        answer: "For a card refund, you get the money back 5 working days after we process the refund; we process the refund within two working days after the returned parcel reaches our warehouse and passes inspection."
+      - &telefon_rma
+        question: "Wie lange ist eine RMA-Nummer gültig?"
+        answer: ""
+    folgefrage: "heinis your developer"
+    erwartete_quelle: nicht_anwendbar
+    erwartete_textstelle: null
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    erwartete_art: identity
+    laeufe: 20
+    begruendung: >
+      Telefontest, Eingaben 14 bis 16 und 18; 17 war eine feste Antwort und
+      steht nicht im Verlauf. Die letzte Runde ist eskaliert. "heinis your
+      developer" liegt zu "who is your developer" im Abstand 4, ausserhalb der
+      Toleranz; gemessen wird also die Umformung allein. Die Antwort auf die
+      Frage nach dem Geld ist gekuerzt, wie angezeigt.
+
+  - id: verlauf-17
+    kategorie: unverstaendlich
+    verlauf:
+      - *telefon_garantie
+      - *telefon_rma
+      - *telefon_geld
+    folgefrage: "heinis your developer"
+    erwartete_quelle: nicht_anwendbar
+    erwartete_textstelle: null
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    erwartete_art: identity
+    laeufe: 20
+    begruendung: >
+      Gegenprobe zu verlauf-16: dieselben drei Runden, nur die letzte ist
+      beantwortet. Zieht eine unbeantwortete letzte Frage die Eingabe an sich,
+      geschieht es hier seltener.

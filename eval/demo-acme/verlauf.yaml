@@ -7,7 +7,7 @@
 #   answer: ""     die Runde ist eskaliert
 
 mandant: demo-acme
-stand: 2026-10-13
+stand: 2026-10-23
 
 faelle:
 
@@ -42,3 +42,46 @@ faelle:
       Eine deutsche Rueckfrage beim deutschen Mandanten. Der Verlauf ist der von
       verlauf-acme-01, ueber den Anker, damit beide Faelle denselben Verlauf
       sehen. Die Umformung soll daraus eine Frage nach der Pruefdauer machen.
+
+  # --- Bezug und unverstaendliche Eingabe, auf Deutsch ------------------------
+  # Wie verlauf-11 und verlauf-16 bei Fellgate. Die Antworten im Verlauf sind
+  # wortgleich die ersten Laeufe der Fassung O von O1G vom 2026-10-22, also
+  # ueber answer() erzeugt; die Fragen wortgleich die Goldfragen.
+
+  - id: verlauf-acme-02
+    kategorie: bezug
+    verlauf:
+      - question: "Ab welchem Netto-Bestellwert liefern Sie im Inland versandkostenfrei?"
+        answer: "Ab einem Netto-Bestellwert von 250 Euro liefern wir innerhalb des Inlands versandkostenfrei."
+    folgefrage: "Und was kostet das, wenn ich darunter liege?"
+    erwartete_quelle: versand-und-lieferzeiten.md
+    erwartete_textstelle: "Unterhalb dieser Grenze berechnen wir eine Versandpauschale"
+    erwartet_eskalation: false
+    erwartete_sprache: de
+    laeufe: 20
+    begruendung: >
+      Eine grammatisch vollstaendige deutsche Folgefrage mit zwei Bezuegen:
+      "das" ist der Versand, "darunter" die Grenze von 250 Euro. Die
+      eigenstaendige Frage muss beides aufloesen, sonst findet die Suche die
+      Pauschale nicht.
+
+  - id: verlauf-acme-03
+    kategorie: unverstaendlich
+    verlauf:
+      - question: "Wie lange ist eine RMA-Nummer gueltig?"
+        answer: "Eine RMA-Nummer ist 21 Kalendertage gueltig. Innerhalb dieser Frist muss die Ware bei ACME eingehen; nach Ablauf verfaellt die Nummer und muss neu beantragt werden."
+      - question: "Welcher Zuschlag faellt beim Versand von Gefahrgut an?"
+        answer: ""
+    folgefrage: "werisn dein entwikla"
+    erwartete_quelle: nicht_anwendbar
+    erwartete_textstelle: null
+    erwartet_eskalation: false
+    erwartete_sprache: de
+    erwartete_art: identity
+    laeufe: 20
+    begruendung: >
+      Eine unverstaendliche Eingabe nach einer eskalierten letzten Runde, wie
+      verlauf-16 bei Fellgate. Abstand 5 zu "wer ist dein entwickler",
+      ausserhalb der Toleranz. Bestanden heisst: keine fruehere Frage als
+      eigenstaendige Frage und keine Antwort zu einem frueheren Thema; das
+      Ziel ist identity, eine Eskalation ohne Zeile ist hinnehmbar.
