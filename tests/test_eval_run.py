@@ -673,14 +673,14 @@ def _falldateien() -> list[tuple[str, dict[str, object]]]:
 
 def test_die_falldateien_sind_gueltig() -> None:
     """Beide Falldateien bestehen die Pruefung, mit eingefrorenen Antworten:
-    16 Faelle bei Fellgate und 4 bei Acme."""
+    18 Faelle bei Fellgate und 4 bei Acme."""
     dateien = _falldateien()
     assert len(dateien) == 2, "Es sollten zwei Falldateien geprueft worden sein."
     faelle = 0
     for quelle, daten in dateien:
         pruefe_verlauf(daten, quelle, eingefroren=True)
         faelle += len(daten["faelle"])  # type: ignore[arg-type]
-    assert faelle == 20
+    assert faelle == 22
 
 
 def test_jede_textstelle_der_falldateien_steht_woertlich_im_korpus() -> None:
@@ -705,7 +705,7 @@ def test_jede_textstelle_der_falldateien_steht_woertlich_im_korpus() -> None:
             datei = docs / quelle
             if not datei.is_file() or stelle not in datei.read_text(encoding="utf-8"):
                 fehlend.append(f"{f['id']}: {stelle!r} steht nicht in {quelle}")
-    assert geprueft == 14, f"{geprueft} Textstellen geprueft, erwartet 14"
+    assert geprueft == 15, f"{geprueft} Textstellen geprueft, erwartet 15"
     assert not fehlend, "\n".join(fehlend)
 
 
@@ -960,17 +960,17 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
     if modus == "gegenprobe_nur_b":
         assert bericht["kopf"]["fassungen"] == ["B"]
         assert bericht["fragen"] == [] and bericht["aggregiert_je_kategorie"] == {}
-        assert len(bericht["fragen_b"]) == 22
+        assert len(bericht["fragen_b"]) == 23
         assert "NUR FASSUNG B" in bericht["kopf"]["metrik_bedeutung"]
     if modus == "gegenprobe":
         assert bericht["kopf"]["fassungen"] == ["A", "B"]
-        assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 22
+        assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 23
     if modus == "sprache":
         faelle = ["sprache-fell-01", "sprache-fell-02", "sprache-fell-03", "sprache-fell-04"]
         assert [f["id"] for f in bericht["fragen"]] == faelle
         assert bericht["kopf"]["laeufe_je_fall"] == dict.fromkeys(faelle, 20)
     if modus == "sprache_gold":
-        assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 22
+        assert len(bericht["fragen"]) == len(bericht["fragen_b"]) == 23
         assert set(bericht["kopf"]["laeufe_je_fall"].values()) == {5}
     if modus.startswith(("gegenprobe", "sprache")):
         assert run.tabelle(
@@ -985,7 +985,7 @@ def test_die_gespraechsmodi_schreiben_gueltiges_json(
         assert bericht["kopf"]["fassungen"] == ["A", "B"]
         assert "sprachpruefung" not in bericht["kopf"]
     elif not modus.startswith("gegenprobe"):
-        assert bericht["kopf"]["falldatei_stand"] == "2026-10-23"
+        assert bericht["kopf"]["falldatei_stand"] == "2026-11-02"
 
 
 def test_ein_ausfall_des_anbieters_wird_wiederholt_und_gezaehlt(

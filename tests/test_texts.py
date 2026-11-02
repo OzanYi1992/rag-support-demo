@@ -1060,11 +1060,11 @@ _SPRACHFRAGEN = _sprachfragen()
 
 
 def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
-    """Gegenprobe gegen einen blinden Test unten: 50 Goldfragen, 12 Kontrollfragen."""
-    assert len(_GOLDFRAGEN) == 50
+    """Gegenprobe gegen einen blinden Test unten: 51 Goldfragen, 12 Kontrollfragen."""
+    assert len(_GOLDFRAGEN) == 51
     assert len(_KONTROLLFRAGEN) == 12
-    # Fuenfzehn Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
-    assert len(_VERLAUFSFRAGEN) == 16
+    # Siebzehn Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
+    assert len(_VERLAUFSFRAGEN) == 18
     assert len(_SPRACHFRAGEN) == len(set(_SPRACHFRAGEN)) > 0
 
 
