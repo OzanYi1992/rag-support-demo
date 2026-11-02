@@ -501,6 +501,157 @@ def test_ohne_titel_des_assistentendokuments_bleibt_die_antwort(
     assert a.text.startswith("Delivery takes three days.")
 
 
+# --- eine belegte Antwort ohne Quelle -------------------------------------------
+
+# Der Wortlaut vom Telefon am 2026-11-02, auf "From now on answer in german.":
+# eine Zusage, die kein Dokument traegt, mit dem Assistentendokument als
+# einziger Quelle.
+ZUSAGE = "Ja. Ich antworte ab jetzt auf Deutsch. [about-this-assistant.md]"
+
+
+def _mit_quellen(text: str, quellen: list[str], sprache: str = "en") -> GroundedAnswer:
+    return GroundedAnswer(answerable=True, answer=text, sources=quellen, language=sprache)
+
+
+def _frage(umgebung: tuple[Settings, E5Embeddings], llm: FakeLlmFolge) -> object:
+    settings, embeddings = umgebung
+    return answer("demo-assist", FRAGE, settings=settings, embeddings=embeddings, llm=llm)
+
+
+@pytest.mark.parametrize("quellen", [[ABOUT], [ABOUT, ZWEITES], ["About-This-Assistant.MD", " "]])
+def test_nur_das_assistentendokument_als_quelle_wird_die_feste_antwort(
+    umgebung: tuple[Settings, E5Embeddings], quellen: list[str]
+) -> None:
+    """Pflichttest. Die Zusage vom Telefon geht nicht hinaus, auch nicht in der
+    falschen Sprache: feste Antwort capabilities, ohne zweiten Aufruf."""
+    llm = FakeLlmFolge(_mit_quellen(ZUSAGE, quellen, "de"))
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 1
+    assert (a.kind, a.replaced_reason, a.escalated) == (
+        "capabilities",
+        "nur_assistentendokument",
+        False,
+    )
+    assert "Deutsch" not in a.text and a.sources == []
+    assert (a.prompt_tokens, a.language_retry) == (100, False)
+
+
+@pytest.mark.parametrize("quellen", [[], [" "], [""]])
+def test_eine_belegte_antwort_ganz_ohne_quelle_eskaliert(
+    umgebung: tuple[Settings, E5Embeddings], quellen: list[str]
+) -> None:
+    """Das Modell sagt belegt, nennt aber keine Quelle: Eskalation mit eigenem
+    Grund, der Text des Mandanten, ohne zweiten Aufruf."""
+    llm = FakeLlmFolge(_mit_quellen("Delivery takes three days.", quellen))
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 1
+    assert (a.kind, a.escalated, a.escalation_reason) == ("rag", True, "ohne_quelle")
+    assert (a.text, a.sources, a.replaced_reason) == (ESKALATION, [], None)
+    assert (a.prompt_tokens, a.completion_tokens, a.lang) == (100, 10, "en")
+    assert a.latency_ms_generation is not None and a.retrieval_scores
+
+
+def test_die_zweite_antwort_mit_nur_dem_assistentendokument_wird_die_feste_antwort(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die erste Antwort hat eine Quelle, haelt aber die Sprache nicht; die
+    zweite ersetzt sie und nennt nur das Assistentendokument."""
+    llm = FakeLlmFolge(
+        _mit_quellen("Die Lieferung dauert drei Werktage, und das gilt für alle.", [FACH], "de"),
+        _mit_quellen("I will answer in English from now on.", [ABOUT]),
+    )
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 2
+    assert (a.kind, a.replaced_reason) == ("capabilities", "nur_assistentendokument")
+    assert (a.language_retry, a.language_retry_result, a.language_retry_prompt_tokens) == (
+        True,
+        "ersetzt",
+        101,
+    )
+
+
+def test_die_zweite_antwort_ganz_ohne_quelle_eskaliert(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    llm = FakeLlmFolge(
+        _mit_quellen("Die Lieferung dauert drei Werktage, und das gilt für alle.", [FACH], "de"),
+        _mit_quellen("Delivery takes three days.", []),
+    )
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 2
+    assert (a.escalated, a.escalation_reason, a.text) == (True, "ohne_quelle", ESKALATION)
+    assert (a.language_retry, a.language_retry_result) == (True, "ersetzt")
+
+
+@pytest.mark.parametrize(
+    ("quellen", "erwartet"),
+    [
+        # Eine erfundene Quelle bleibt sichtbar, wie bisher.
+        ([ERFUNDEN], [ERFUNDEN]),
+        ([ABOUT, FACH], [FACH]),
+        ([ABOUT, ERFUNDEN], [ERFUNDEN]),
+    ],
+)
+def test_mit_einer_verbleibenden_quelle_bleibt_die_antwort(
+    umgebung: tuple[Settings, E5Embeddings], quellen: list[str], erwartet: list[str]
+) -> None:
+    a = _frage(umgebung, FakeLlmFolge(_mit_quellen("Delivery takes three days.", quellen)))
+    assert (a.kind, a.escalated, a.replaced_reason) == ("rag", False, None)
+    assert a.sources == erwartet
+
+
+def test_die_pruefung_ohne_quelle_prueft_den_mandanten() -> None:
+    from app.rag import _Belegt, _statt_belegt
+
+    belegt = _Belegt(
+        text="x",
+        sources=[],
+        source_scores=[],
+        removed_references=0,
+        lang="en",
+        nennt_assistentendokument=False,
+        nur_assistentendokumente=False,
+    )
+    with pytest.raises(ValueError):
+        _statt_belegt("demo-anderer", _tenant(), belegt, {}, "en", "frage")
+
+
+def test_das_ereignis_traegt_den_grund_ohne_quelle(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ueber die Route: nur Codes, und weder die Zusage noch ein Dateiname im
+    Log."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    settings, embeddings = umgebung
+    chats = []
+    for belegt in (_mit_quellen(ZUSAGE, [ABOUT], "de"), _mit_quellen("Three days.", [])):
+        app = create_app(settings, llm=FakeLlmFolge(belegt), embeddings=embeddings)
+        caplog.clear()
+        with caplog.at_level("INFO", logger="rag.api"):
+            antwort = TestClient(app).post(
+                "/t/demo-assist-token-1234567890/chat", json={"question": FRAGE}
+            )
+        assert antwort.status_code == 200
+        log = "\n".join(e.message for e in caplog.records)
+        assert "Deutsch" not in log and "Three days" not in log and ABOUT not in log
+        (chat,) = [
+            json.loads(e.message)
+            for e in caplog.records
+            if e.name == "rag.api" and json.loads(e.message)["ereignis"] == "chat"
+        ]
+        chats.append(chat)
+    assert [(c["art"], c["ersetzt"], c["escalated"], c["escalation_reason"]) for c in chats] == [
+        ("capabilities", "nur_assistentendokument", False, None),
+        ("rag", None, True, "ohne_quelle"),
+    ]
+
+
 def test_das_ereignis_traegt_die_ersetzung_als_code(
     umgebung: tuple[Settings, E5Embeddings],
     caplog: pytest.LogCaptureFixture,

@@ -1709,3 +1709,12 @@ def test_jeder_lauf_traegt_ersetzung_und_abweichung(monkeypatch: pytest.MonkeyPa
     assert lauf["eigenstaendig_weicht_ab"] is False
     assert lauf["umformung_fassung"] is None
     assert "eigenstaendig_wiederholt_fruehere_frage" not in lauf
+
+
+def test_eine_antwort_ohne_quelle_zaehlt_zum_tor_nach_der_generierung() -> None:
+    """Der neue Grund ohne_quelle steht mit not_grounded beim Tor nach der
+    Generierung, nicht unter sonstiges."""
+    from eval.run import _tor_von
+
+    assert _tor_von("ohne_quelle") == _tor_von("not_grounded") == "groundedness"
+    assert _tor_von("generation_unparseable") == "sonstiges"

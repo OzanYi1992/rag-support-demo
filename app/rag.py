@@ -67,6 +67,9 @@ from app.verweis import (
 
 REASON_NOT_GROUNDED = "not_grounded"
 REASON_UNPARSEABLE = "generation_unparseable"
+# Belegt nach dem Modell, aber nach dem Verdichten ohne eine Quelle, und das
+# Modell nannte auch keine: eine Antwort ohne Beleg.
+REASON_OHNE_QUELLE = "ohne_quelle"
 
 # Die Art der Antwort. "rag" ist der Weg ueber Retrieval und Modell, auch wenn
 # er eskaliert. Die anderen kommen ohne beides aus dem Katalog.
@@ -102,8 +105,12 @@ ZWEITER_PARSEFEHLER = "parsefehler"
 ZWEITER_NICHT_ERREICHBAR = "nicht_erreichbar"
 ZWEITER_ABGELEHNT = "abgelehnt"
 
-# Warum eine belegte Antwort durch eine feste ersetzt wurde.
+# Warum eine belegte Antwort durch eine feste ersetzt wurde: Der Text nannte
+# das Dokument ueber den Assistenten beim Titel, oder das Modell nannte als
+# Quelle nur Dokumente ueber den Assistenten, und nach dem Verdichten blieb
+# keine.
 ERSETZT_ASSISTENTENDOKUMENT = "assistentendokument"
+ERSETZT_NUR_ASSISTENTENDOKUMENT = "nur_assistentendokument"
 
 
 class Answer(BaseModel):
@@ -173,9 +180,11 @@ class Answer(BaseModel):
 
     # Warum eine belegte Antwort des Modells durch eine feste ersetzt wurde,
     # als Code, sonst None. "assistentendokument": Der Text nannte das Dokument
-    # ueber den Assistenten beim Titel. Ausgeliefert wird dann die Antwort auf
-    # "Was kannst du?", mit `kind` "capabilities"; Tokens, Latenz und Modell
-    # sind die des Aufrufs, der stattfand.
+    # ueber den Assistenten beim Titel. "nur_assistentendokument": Das Modell
+    # nannte als Quelle nur Dokumente ueber den Assistenten, und nach dem
+    # Verdichten blieb keine. Ausgeliefert wird dann die Antwort auf "Was kannst
+    # du?", mit `kind` "capabilities"; Tokens, Latenz und Modell sind die des
+    # Aufrufs, der stattfand.
     replaced_reason: str | None = None
 
     # --- Gespraech ---------------------------------------------------------
@@ -829,13 +838,14 @@ def _beantworten(
         "model": ergebnis.model,
     }
 
-    # --- Das Dokument ueber den Assistenten im Text --------------------------
-    # Nennt die Antwort es beim Titel, spricht sie ueber die Unterlagen oder
-    # den Assistenten, meist als Aufzaehlung der Dokumente im Kontext. Dann
-    # kommt die feste Antwort auf "Was kannst du?", ohne zweiten Aufruf: Die
-    # Sprache einer festen Antwort ist die des Mandanten.
-    if ausgeliefert.nennt_assistentendokument:
-        return _durch_faehigkeiten_ersetzt(tenant_id, tenant, aufruf)
+    # --- Darf die belegte Antwort hinaus? ----------------------------------
+    # Nicht, wenn sie das Dokument ueber den Assistenten nennt oder nach dem
+    # Verdichten keine Quelle hat, siehe `_statt_belegt`. Dann ohne zweiten
+    # Aufruf: Eine feste Antwort und die Eskalationsmeldung stehen ohnehin in
+    # der Sprache des Mandanten.
+    statt = _statt_belegt(tenant_id, tenant, ausgeliefert, aufruf, antwortsprache, sprachquelle)
+    if statt is not None:
+        return statt
 
     # --- Antwortsprache ----------------------------------------------------
     # Eine vorgegebene Sprache wird nicht geprueft: Der erste Aufruf hatte sie
@@ -863,9 +873,12 @@ def _beantworten(
             zweiter.completion_tokens if zweiter is not None else None
         ),
     }
-    if ausgeliefert.nennt_assistentendokument:
-        # Die zweite Antwort ersetzte die erste und nennt das Dokument.
-        return _durch_faehigkeiten_ersetzt(tenant_id, tenant, {**aufruf, **zweiter_felder})
+    # Dieselbe Pruefung fuer eine zweite Antwort, die die erste ersetzt hat.
+    statt = _statt_belegt(
+        tenant_id, tenant, ausgeliefert, {**aufruf, **zweiter_felder}, antwortsprache, sprachquelle
+    )
+    if statt is not None:
+        return statt
 
     return Answer(
         text=ausgeliefert.text,
@@ -883,11 +896,60 @@ def _beantworten(
     )
 
 
+def _statt_belegt(
+    tenant_id: str,
+    tenant: TenantConfig,
+    belegt: _Belegt,
+    aufruf: dict[str, object],
+    antwortsprache: str,
+    sprachquelle: str,
+) -> Answer | None:
+    """Was an Stelle einer belegten Antwort hinausgeht, die so nicht hinaus
+    darf; None, wenn sie darf. Fuer die erste wie fuer die zweite Antwort.
+
+      - Der Text nennt das Dokument ueber den Assistenten beim Titel: Er spricht
+        ueber die Unterlagen oder den Assistenten. Die feste Antwort
+        capabilities, Code "assistentendokument".
+      - Nach dem Verdichten bleibt keine Quelle, und das Modell nannte nur
+        Dokumente ueber den Assistenten: wieder capabilities, Code
+        "nur_assistentendokument". Am Telefon antwortete das Modell so auf
+        "From now on answer in german." mit einer Zusage, die kein Dokument
+        traegt.
+      - Nach dem Verdichten bleibt keine Quelle, und das Modell nannte keine:
+        eine Antwort ohne Beleg. Eskalation mit dem Grund "ohne_quelle".
+
+    `aufruf` traegt Scores, Latenz, Tokens und Modell der Aufrufe, die
+    stattfanden. `tenant_id` an erster Stelle, weil die Antwort aus den
+    Dokumenten dieses Mandanten erzeugt ist; passt `tenant.slug` nicht, ist
+    das ein Fehler im Aufrufer.
+    """
+    if tenant.slug != tenant_id:
+        raise ValueError("tenant passt nicht zur tenant_id.")
+    if belegt.nennt_assistentendokument:
+        return _durch_faehigkeiten_ersetzt(tenant_id, tenant, aufruf, ERSETZT_ASSISTENTENDOKUMENT)
+    if belegt.sources:
+        return None
+    if belegt.nur_assistentendokumente:
+        return _durch_faehigkeiten_ersetzt(
+            tenant_id, tenant, aufruf, ERSETZT_NUR_ASSISTENTENDOKUMENT
+        )
+    return _eskaliert(
+        tenant,
+        reason=REASON_OHNE_QUELLE,
+        metric=None,
+        scores=[],
+        latency_retrieval=0,
+        antwortsprache=antwortsprache,
+        sprachquelle=sprachquelle,
+        lang=belegt.lang,
+    ).model_copy(update=aufruf)
+
+
 def _durch_faehigkeiten_ersetzt(
-    tenant_id: str, tenant: TenantConfig, aufruf: dict[str, object]
+    tenant_id: str, tenant: TenantConfig, aufruf: dict[str, object], grund: str
 ) -> Answer:
-    """Die feste Antwort "capabilities" an Stelle einer belegten Antwort, die
-    das Dokument ueber den Assistenten nennt.
+    """Die feste Antwort "capabilities" an Stelle einer belegten Antwort, mit
+    dem Grund in `replaced_reason`.
 
     Text, Sprache und leere Quellen wie bei jeder festen Antwort; `aufruf`
     traegt Scores, Latenz, Tokens und Modell der Aufrufe, die stattfanden.
@@ -895,7 +957,7 @@ def _durch_faehigkeiten_ersetzt(
     den Mandanten prueft.
     """
     return kurzformel_beantworten(tenant_id, tenant, ART_FAEHIGKEITEN).model_copy(
-        update={**aufruf, "replaced_reason": ERSETZT_ASSISTENTENDOKUMENT}
+        update={**aufruf, "replaced_reason": grund}
     )
 
 
@@ -910,8 +972,11 @@ class _Belegt:
     # Die Selbstauskunft des Modells, Feld language seiner Struktur.
     lang: str
     # Ob der Text das Dokument ueber den Assistenten beim Titel nennt. Dann
-    # wird er nicht ausgeliefert, siehe `_beantworten`.
+    # wird er nicht ausgeliefert, siehe `_statt_belegt`.
     nennt_assistentendokument: bool
+    # Ob das Modell als Quelle nur Dokumente ueber den Assistenten nannte,
+    # mindestens eines. Dann bleibt nach dem Verdichten keine Quelle.
+    nur_assistentendokumente: bool
 
 
 def _belegt_aufbereiten(
@@ -942,6 +1007,7 @@ def _belegt_aufbereiten(
     text, entfernt = quellverweise_entfernen(
         tenant_id, tenant, belegt.answer, belegt.language, dokumente
     )
+    genannt = [name.strip() for name in belegt.sources if name.strip()]
     return _Belegt(
         text=text,
         sources=quellen,
@@ -949,6 +1015,8 @@ def _belegt_aufbereiten(
         removed_references=entfernt,
         lang=belegt.language,
         nennt_assistentendokument=nennt_assistentendokument(tenant_id, tenant, text, dokumente),
+        nur_assistentendokumente=bool(genannt)
+        and all(ist_assistentendokument(n, tenant.assistant_documents) for n in genannt),
     )
 
 

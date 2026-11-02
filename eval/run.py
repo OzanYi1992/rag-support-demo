@@ -49,7 +49,7 @@ from app.escalation import (
 )
 from app.llm import LlmNichtErreichbar
 from app.prompts import UMFORMUNG_AKTUELL, UMFORMUNGSFASSUNGEN, Runde
-from app.rag import REASON_NOT_GROUNDED, REASON_UNPARSEABLE, answer
+from app.rag import REASON_NOT_GROUNDED, REASON_OHNE_QUELLE, REASON_UNPARSEABLE, answer
 from app.search import search_tenant
 from app.tenants import load_tenant
 from app.texts import VERFUEGBARE_SPRACHEN, normalisieren, passt_zur_sprache
@@ -60,7 +60,7 @@ ERGEBNIS_DIR = EVAL_DIR / "results"
 # Welches Tor hat gegriffen. ADR-019 haelt die Gruende getrennt, damit genau
 # diese Auswertung moeglich ist.
 TOR_RETRIEVAL = {REASON_NO_HITS, REASON_BELOW_THRESHOLD, REASON_FLAT}
-TOR_GROUNDEDNESS = {REASON_NOT_GROUNDED}
+TOR_GROUNDEDNESS = {REASON_NOT_GROUNDED, REASON_OHNE_QUELLE}
 TOR_SONSTIGES = {REASON_UNPARSEABLE}
 
 # Welche Metrik eine Ergebnisdatei enthaelt. Steht im Kopf JEDER Datei, weil
