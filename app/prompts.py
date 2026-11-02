@@ -363,10 +363,12 @@ def umformungsmodell_fuer(language: str) -> type[EigenstaendigeFrage]:
 #
 # DIE DRITTE FASSUNG trug dazu eine Regel 6: Eine Frage ohne Bezug zum
 # Gespraech bekommt nichts aus ihm, und nie eine fruehere Frage an ihrer
-# Stelle. Gemessen hat sie das Gegenteil bewirkt: Eine unverstaendliche Eingabe
+# Stelle. Gemessen hat sie ihr Ziel verfehlt: Eine unverstaendliche Eingabe
 # blieb unberichtigt und bekam keine feste Antwort mehr, und eine fruehere,
-# unbeantwortete Frage kam oefter zurueck statt seltener. Davor schuetzt jetzt
-# allein die Pruefung in app/rag.py, die eine solche Umformung verwirft.
+# unbeantwortete Frage kam trotzdem zurueck, oefter als in der zweiten Fassung.
+# Ohne Regel 6 kommt sie noch oefter zurueck, in einem Fall 17 von 20 Mal. Dass
+# keine davon als "Verstanden als" erscheint, haengt allein an der Pruefung in
+# app/rag.py, die eine solche Umformung verwirft.
 #
 # Die zweite und die dritte Fassung bleiben fuer die Messung erreichbar,
 # `fassung="2"` und `fassung="3"`; die Seite benutzt immer UMFORMUNG_AKTUELL.

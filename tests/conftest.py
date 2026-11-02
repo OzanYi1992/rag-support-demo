@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,98 @@ class FakeBackend:
 @pytest.fixture
 def fake_backend() -> FakeBackend:
     return FakeBackend()
+
+
+# --- Kein Test ohne Integrationsmarke erreicht das Netz -----------------------
+#
+# Am 2026-10-31 fuhr ein Schaltertest von eval.run einen echten Messlauf gegen
+# den Anbieter, weil ein Wert, der als ungueltig gefuehrt war, gueltig wurde.
+# Der Lauf schluckte jeden Fehler und wiederholte; erst ein Abbruch von Hand
+# hielt ihn an. Die Sperre setzt deshalb am Socket an, unter jedem Client: Wer
+# einen Namen ausserhalb dieses Rechners aufloest oder sich dorthin verbindet,
+# bekommt `NetzGesperrt`, und der Versuch wird aufgezeichnet. Ein Test mit
+# Versuch faellt am Ende, auch wenn der Code den Fehler gefangen hat.
+
+_LOKALE_NAMEN = {"localhost", "localhost.localdomain", "ip6-localhost"}
+
+
+class NetzGesperrt(OSError):
+    """Ein Test ohne Integrationsmarke wollte das Netz erreichen."""
+
+
+def _ist_lokal(host: object) -> bool:
+    """Ob ein Ziel auf diesem Rechner liegt: Loopback, ein Name dafuer, oder
+    kein Rechnername (ein Unix-Socket, eine leere Bindung)."""
+    import ipaddress
+
+    if host is None or host in ("", b""):
+        return True
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    if not isinstance(host, str):
+        return False
+    if host.lower() in _LOKALE_NAMEN:
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%")[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def netzsperre_pruefen(versuche: list[str]) -> None:
+    """Laesst den Test fallen, wenn er das Netz erreichen wollte."""
+    if versuche:
+        pytest.fail(
+            "Test ohne Integrationsmarke wollte das Netz erreichen: " + "; ".join(versuche),
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def kein_netz(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[list[str]]:
+    """Sperrt Namensaufloesung und Verbindungen ausserhalb dieses Rechners fuer
+    jeden Test ohne die Marke integration, und laesst ihn danach fallen, wenn er
+    es versucht hat. Liefert die Liste der Versuche; ein Test, der die Sperre
+    selbst prueft, leert sie."""
+    import socket
+
+    versuche: list[str] = []
+    if request.node.get_closest_marker("integration") is not None:
+        yield versuche
+        return
+
+    echt_getaddrinfo = socket.getaddrinfo
+    echt_connect = socket.socket.connect
+    echt_connect_ex = socket.socket.connect_ex
+
+    def getaddrinfo(host: object, *args: object, **kwargs: object) -> object:
+        if not _ist_lokal(host):
+            versuche.append(f"Namensaufloesung {host!r}")
+            raise NetzGesperrt(f"Netz gesperrt: {host!r}")
+        return echt_getaddrinfo(host, *args, **kwargs)  # type: ignore[arg-type]
+
+    def _ziel(adresse: object) -> object:
+        return adresse[0] if isinstance(adresse, tuple) and adresse else None
+
+    def connect(self: socket.socket, adresse: object) -> None:
+        if not isinstance(adresse, (str, bytes)) and not _ist_lokal(_ziel(adresse)):
+            versuche.append(f"Verbindung {_ziel(adresse)!r}")
+            raise NetzGesperrt(f"Netz gesperrt: {_ziel(adresse)!r}")
+        return echt_connect(self, adresse)  # type: ignore[arg-type]
+
+    def connect_ex(self: socket.socket, adresse: object) -> int:
+        if not isinstance(adresse, (str, bytes)) and not _ist_lokal(_ziel(adresse)):
+            versuche.append(f"Verbindung {_ziel(adresse)!r}")
+            raise NetzGesperrt(f"Netz gesperrt: {_ziel(adresse)!r}")
+        return echt_connect_ex(self, adresse)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    yield versuche
+    netzsperre_pruefen(versuche)
 
 
 class FakeLlm:
