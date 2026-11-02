@@ -1718,3 +1718,107 @@ def test_eine_antwort_ohne_quelle_zaehlt_zum_tor_nach_der_generierung() -> None:
 
     assert _tor_von("ohne_quelle") == _tor_von("not_grounded") == "groundedness"
     assert _tor_von("generation_unparseable") == "sonstiges"
+
+
+# --- nur einzelne Fragen oder Faelle -------------------------------------------
+
+
+@pytest.mark.parametrize("modus", ["gold", "verlauf"])
+def test_nur_faehrt_genau_die_genannten_ids(monkeypatch: pytest.MonkeyPatch, modus: str) -> None:
+    """In der Reihenfolge der Datei, und der Kopf nennt sie."""
+    from app.config import Settings
+    from eval import run
+
+    settings = Settings(openai_api_key="platzhalter", openai_model="platzhalter")
+    monkeypatch.setattr(run, "Settings", lambda: settings)
+    monkeypatch.setattr(run, "_chunkzahl", lambda s, slug: 41)
+    monkeypatch.setattr(run, "_git_commit", lambda: "abc1234")
+    gefahren: list[str] = []
+
+    def ohne_modell(slug: str, eintrag: dict, *args: object, **kwargs: object) -> object:
+        gefahren.append(eintrag["id"])
+        return Frageergebnis(
+            id=eintrag["id"],
+            kategorie=eintrag["kategorie"],
+            frage=eintrag["frage"],
+            erwartete_quelle=eintrag.get("erwartete_quelle"),
+            erwartete_textstelle=eintrag.get("erwartete_textstelle"),
+            erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
+            laeufe=1,
+        )
+
+    monkeypatch.setattr(run, "eine_frage", ohne_modell)
+    if modus == "gold":
+        bericht = run.fahre(
+            "demo-fellgate", None, False, "T", False, nur=frozenset({"fell-12", "fell-01"})
+        )
+        assert gefahren == ["fell-01", "fell-12"]
+        assert bericht["kopf"]["nur_faelle"] == ["fell-01", "fell-12"]
+    else:
+        bericht = run.fahre_verlauf(
+            "demo-fellgate", "T", False, True, 1, nur=frozenset({"verlauf-12", "verlauf-01"})
+        )
+        assert gefahren == ["verlauf-01", "verlauf-12"]
+        assert bericht["kopf"]["nur_faelle"] == ["verlauf-01", "verlauf-12"]
+        assert list(bericht["kopf"]["laeufe_je_fall"]) == ["verlauf-01", "verlauf-12"]
+    assert [f["id"] for f in bericht["fragen"]] == gefahren
+    pruefe_kopf(bericht)
+
+
+def test_nur_mit_einer_unbekannten_id_ist_ein_fehler() -> None:
+    from eval.run import _nur_diese
+
+    eintraege = [{"id": "a"}, {"id": "b"}]
+    with pytest.raises(ValueError, match=r"\['x'\]"):
+        _nur_diese(eintraege, frozenset({"a", "x"}), "test.yaml")
+    assert _nur_diese(eintraege, None, "test.yaml") == eintraege
+    assert _nur_diese(eintraege, frozenset({"b"}), "test.yaml") == [{"id": "b"}]
+
+
+@pytest.mark.parametrize(
+    "argumente",
+    [
+        ["--all", "--nur", "fell-01"],
+        ["demo-fellgate", "--gegenprobe", "--nur", "fell-01"],
+        ["demo-fellgate", "--sprache", "--nur", "fell-01"],
+        ["demo-fellgate", "--verlauf", "--kontrolle", "--nur", "verlauf-01"],
+        ["demo-fellgate", "--nur", " , "],
+    ],
+)
+def test_nur_an_der_falschen_stelle_ist_ein_fehler(
+    argumente: list[str], capsys: pytest.CaptureFixture[str], kein_messlauf: None
+) -> None:
+    with pytest.raises(SystemExit):
+        main(argumente)
+    assert "--nur" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argumente", "modus"),
+    [
+        (["--nur", "inj-06"], "fahre"),
+        (["--verlauf", "--nur", "verlauf-18,verlauf-19"], "fahre_verlauf"),
+        ([], "fahre"),
+    ],
+)
+def test_main_reicht_nur_durch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, argumente: list[str], modus: str
+) -> None:
+    from eval import run
+
+    gesehen: list[dict[str, object]] = []
+
+    def anhalten(*args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs)
+        raise _Halt
+
+    monkeypatch.setattr(run, modus, anhalten)
+    monkeypatch.setattr(run, "ERGEBNIS_DIR", tmp_path)
+    with pytest.raises(_Halt):
+        run.main(["demo-fellgate", *argumente])
+    erwartet = (
+        frozenset(argumente[argumente.index("--nur") + 1].split(","))
+        if "--nur" in argumente
+        else None
+    )
+    assert gesehen[0]["nur"] == erwartet

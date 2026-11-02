@@ -1215,6 +1215,20 @@ def aggregiere(
     return aus
 
 
+def _nur_diese(
+    eintraege: list[dict[str, Any]], nur: frozenset[str] | None, quelle: str
+) -> list[dict[str, Any]]:
+    """Die Eintraege mit diesen IDs, in der Reihenfolge der Datei; ohne `nur`
+    alle. Eine ID, die in der Datei nicht steht, ist ein Fehler: Ein Tippfehler
+    im Schalter liefe sonst still als kleinere Messung durch."""
+    if not nur:
+        return eintraege
+    fehlend = sorted(nur - {e["id"] for e in eintraege})
+    if fehlend:
+        raise ValueError(f"{quelle}: keine Eintraege mit den IDs {fehlend}.")
+    return [e for e in eintraege if e["id"] in nur]
+
+
 def fahre(
     slug: str,
     top_k_erzwungen: int | None,
@@ -1224,10 +1238,14 @@ def fahre(
     cloud: CloudZiel | None = None,
     laeufe: int = 1,
     sprachpruefung: bool = True,
+    nur: frozenset[str] | None = None,
 ) -> dict[str, Any]:
+    """Der Goldsatz eines Mandanten. Mit `nur` nur die Fragen mit diesen IDs,
+    siehe `_nur_diese`."""
     settings = Settings()
     tenant = load_tenant(slug, settings.tenants_dir)
     gold = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
+    fragen = _nur_diese(gold["fragen"], nur, f"eval/{slug}/gold.yaml")
 
     if top_k_erzwungen is not None:
         top_k, herkunft = top_k_erzwungen, "erzwungen ueber --top-k"
@@ -1255,7 +1273,7 @@ def fahre(
             laeufe,
             sprachpruefung=sprachpruefung,
         )
-        for f in gold["fragen"]
+        for f in fragen
     ]
 
     bedeutung = (
@@ -1339,6 +1357,7 @@ def fahre(
             "retrieval_score_threshold": settings.retrieval_score_threshold,
             "chunks_im_index": gesamt,
             "preise_hinterlegt": bool(preise.get("stand")),
+            "nur_faelle": sorted(nur) if nur else None,
         },
         "aggregiert_je_kategorie": aggregiere(ergebnisse, top_k, preise, modell),
         "fragen": [asdict(e) for e in ergebnisse],
@@ -1525,8 +1544,10 @@ def fahre_verlauf(
     laeufe_kontrolle: int,
     sprachpruefung: bool = True,
     umformungsfassungen: tuple[str, str] | None = None,
+    nur: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Die Verlaufsfaelle eines Mandanten, mit Verlauf oder als Kontrolle ohne.
+    Mit `nur` nur die Faelle mit diesen IDs, siehe `_nur_diese`.
 
     Mit Verlauf nimmt jeder Fall seine Laufzahl aus der Datei. Die Kontrolle
     stellt dieselben Folgefragen ohne Verlauf, je `laeufe_kontrolle` mal.
@@ -1545,7 +1566,7 @@ def fahre_verlauf(
     ergebnisse: list[Frageergebnis] = []
     zweite_fassung: list[Frageergebnis] = []
     laeufe_je_fall: dict[str, int] = {}
-    for fall in daten["faelle"]:
+    for fall in _nur_diese(daten["faelle"], nur, f"eval/{slug}/verlauf.yaml"):
         eintrag = {**fall, "frage": fall["folgefrage"]}
         n = fall["laeufe"] if mit_verlauf else laeufe_kontrolle
         laeufe_je_fall[fall["id"]] = n
@@ -1595,6 +1616,7 @@ def fahre_verlauf(
     )
     kopf["laeufe_je_fall"] = laeufe_je_fall
     kopf["sprachpruefung"] = sprachpruefung
+    kopf["nur_faelle"] = sorted(nur) if nur else None
     # YAML liest `stand: 2026-10-13` als Datum; die Ergebnisdatei ist JSON.
     kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
     if mit_verlauf:
@@ -2247,6 +2269,14 @@ def main(argv: list[str] | None = None) -> int:
         help="mit --gegenprobe: nur Fassung B; der Bezug fuer A ist eine fruehere Datei",
     )
     p.add_argument(
+        "--nur",
+        default=None,
+        help=(
+            "nur die Fragen oder Faelle mit diesen IDs, durch Komma getrennt; fuer den "
+            "Goldsatz und --verlauf eines einzelnen Mandanten"
+        ),
+    )
+    p.add_argument(
         "--umformung-fassungen",
         default=None,
         help=(
@@ -2269,6 +2299,16 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--verlauf und --gegenprobe sind zwei getrennte Laeufe.")
     if args.fassungen is not None and not args.sprache:
         p.error("--fassungen gilt nur zusammen mit --sprache.")
+    nur: frozenset[str] | None = None
+    if args.nur is not None:
+        if args.all or args.gegenprobe or args.sprache or args.kontrolle:
+            p.error(
+                "--nur gilt nur fuer den Goldsatz und --verlauf eines einzelnen Mandanten, "
+                "ohne --all, --gegenprobe, --sprache und --kontrolle."
+            )
+        nur = frozenset(teil.strip() for teil in args.nur.split(",") if teil.strip())
+        if not nur:
+            p.error("--nur verlangt mindestens eine ID.")
     umformungsfassungen: tuple[str, str] | None = None
     if args.umformung_fassungen is not None:
         if not (args.verlauf or args.gegenprobe) or args.kontrolle or args.nur_b:
@@ -2361,6 +2401,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.laeufe,
                     sprachpruefung=pruefung,
                     umformungsfassungen=umformungsfassungen,
+                    nur=nur,
                 )
             elif args.sprache:
                 bericht = fahre_sprache(
@@ -2393,6 +2434,7 @@ def main(argv: list[str] | None = None) -> int:
                     # Erkenntnis.
                     1 if args.retrieval_only else args.laeufe,
                     sprachpruefung=pruefung,
+                    nur=nur,
                 )
             pruefe_kopf(bericht)
             stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
