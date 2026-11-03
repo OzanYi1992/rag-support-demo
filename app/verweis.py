@@ -34,7 +34,9 @@ Die Regeln, in dieser Reihenfolge:
    ohne .md. Ein Assistentendokument bekommt seinen Titel aus dem Katalog.
 5. Danach steht kein Name eines Dokuments des Mandanten mehr im Text, und es
    bleibt keine leere Klammer, kein doppelter Leerraum und kein Satzzeichen
-   ohne Wort davor. Waere der Text danach leer, bleibt er unveraendert.
+   ohne Wort davor. Waere der Text danach leer, ist er leer: Eine belegte
+   Antwort ohne Text geht nicht hinaus, sie eskaliert (app/rag.py), statt
+   als Dateiname hinauszugehen.
 6. Jeder andere Text bleibt Zeichen fuer Zeichen gleich. Zweimal angewendet
    ergibt dasselbe wie einmal.
 
@@ -145,6 +147,23 @@ def ist_assistentendokument(name: str, namen: Iterable[str]) -> bool:
     """Ob ein Dateiname einer der Namen ist, mit und ohne .md, ohne Gross- und
     Kleinschreibung."""
     return re.fullmatch(_namensmuster(namen), name.strip(), flags=re.IGNORECASE) is not None
+
+
+def ist_dokument_des_mandanten(tenant_id: str, name: str, dokumente: Mandantendokumente) -> bool:
+    """Ob eine Quellenangabe des Modells ein Dokument dieses Mandanten nennt:
+    beim Dateinamen, mit und ohne .md und in Backticks, oder beim Titel, beides
+    ohne Ruecksicht auf Gross- und Kleinschreibung. "Where We Ship" nennt
+    where-we-ship.md, "user prompt" nennt nichts.
+
+    `tenant_id` an erster Stelle: Namen und Titel sind die dieses Mandanten.
+    Passt die Dokumentliste nicht zu ihr, ist das ein Fehler im Aufrufer.
+    """
+    if dokumente.tenant_id != tenant_id:
+        raise ValueError("Dokumentliste passt nicht zur tenant_id.")
+    if ist_assistentendokument(name, dokumente.titel):
+        return True
+    gesucht = name.strip().strip("`").strip().casefold()
+    return bool(gesucht) and any(t.strip().casefold() == gesucht for t in dokumente.titel.values())
 
 
 def _verbinden(links: str, rechts: str) -> str:
@@ -281,7 +300,7 @@ def quellverweise_entfernen(
 
     # Regel 5, letzter Satz.
     if not neu.strip():
-        return text, 0
+        return "", anzahl
     return neu, anzahl
 
 

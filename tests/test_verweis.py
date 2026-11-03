@@ -26,6 +26,7 @@ from app.texts import kurzformel_erkennen
 from app.verweis import (
     Mandantendokumente,
     ist_assistentendokument,
+    ist_dokument_des_mandanten,
     mandantendokumente,
     nennt_assistentendokument,
     quellverweise_entfernen,
@@ -586,10 +587,10 @@ def test_die_zweite_antwort_ganz_ohne_quelle_eskaliert(
 @pytest.mark.parametrize(
     ("quellen", "erwartet"),
     [
-        # Eine erfundene Quelle bleibt sichtbar, wie bisher.
-        ([ERFUNDEN], [ERFUNDEN]),
         ([ABOUT, FACH], [FACH]),
-        ([ABOUT, ERFUNDEN], [ERFUNDEN]),
+        # Neben einem Dokument bleibt eine erfundene Quelle sichtbar.
+        ([FACH, ERFUNDEN], [FACH, ERFUNDEN]),
+        ([ABOUT, ERFUNDEN, FACH], [ERFUNDEN, FACH]),
     ],
 )
 def test_mit_einer_verbleibenden_quelle_bleibt_die_antwort(
@@ -598,6 +599,156 @@ def test_mit_einer_verbleibenden_quelle_bleibt_die_antwort(
     a = _frage(umgebung, FakeLlmFolge(_mit_quellen("Delivery takes three days.", quellen)))
     assert (a.kind, a.escalated, a.replaced_reason) == ("rag", False, None)
     assert a.sources == erwartet
+
+
+# Die erfundenen Quellen aus der Messung zur Sprachanweisung, und eine erfundene
+# Datei. Allein tragen sie keine Antwort.
+@pytest.mark.parametrize(
+    "quellen",
+    [
+        ["user"],
+        ["user prompt"],
+        ["developer instructions"],
+        [ERFUNDEN],
+        [ABOUT, ERFUNDEN],
+        ["user", "developer instructions"],
+    ],
+)
+def test_nur_erfundene_quellen_eskalieren(
+    umgebung: tuple[Settings, E5Embeddings], quellen: list[str]
+) -> None:
+    """Pflichttest. Bleiben Quellen, aber keine nennt ein Dokument des
+    Mandanten: Eskalation mit eigenem Grund, der Text des Mandanten, ohne
+    zweiten Aufruf, auch wenn die Zusage deutsch war. lang ist die
+    Selbstauskunft des Modells, die Antwortsprache die festgelegte."""
+    zusage = "Ab jetzt antworte ich auf Deutsch. [Source: user prompt]"
+    llm = FakeLlmFolge(_mit_quellen(zusage, quellen, "de"))
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 1
+    assert (a.kind, a.escalated, a.escalation_reason) == ("rag", True, "erfundene_quelle")
+    assert (a.text, a.sources, a.replaced_reason) == (ESKALATION, [], None)
+    assert (a.lang, a.answer_language, a.answer_language_source) == ("de", "en", "frage")
+    assert (a.prompt_tokens, a.language_retry) == (100, False)
+
+
+@pytest.mark.parametrize(
+    "quellen",
+    [
+        ["DOKU.MD"],
+        ["`doku.md`"],
+        ["doku"],
+        # Der Titel aus der ersten Zeile, "# Shipping".
+        ["Shipping"],
+        [" shipping "],
+        ["user prompt", "Shipping"],
+    ],
+)
+def test_ein_dokument_beim_namen_oder_titel_traegt_die_antwort(
+    umgebung: tuple[Settings, E5Embeddings], quellen: list[str]
+) -> None:
+    """Gegenprobe: Ein Dokument des Mandanten in anderer Schreibweise oder beim
+    Titel ist keine erfundene Quelle. Die Antwort geht hinaus, die Quellen wie
+    genannt."""
+    a = _frage(umgebung, FakeLlmFolge(_mit_quellen("Delivery takes three days.", quellen)))
+    assert (a.kind, a.escalated, a.escalation_reason) == ("rag", False, None)
+    assert a.sources == [q.strip() for q in quellen]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        # Nur Verweise: Nach dem Entfernen bleibt nichts.
+        "[doku.md]",
+        "Source: doku.md.",
+        "[Source: about-this-assistant.md]",
+    ],
+)
+def test_eine_belegte_antwort_ohne_text_eskaliert(
+    umgebung: tuple[Settings, E5Embeddings], text: str
+) -> None:
+    """Pflichttest. Bleibt nach dem Entfernen der Verweise kein Text, eskaliert
+    die Antwort mit eigenem Grund, auch mit einer Quelle, ohne zweiten Aufruf."""
+    llm = FakeLlmFolge(_mit_quellen(text, [FACH]))
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 1
+    assert (a.kind, a.escalated, a.escalation_reason) == ("rag", True, "ohne_text")
+    assert (a.text, a.sources) == (ESKALATION, [])
+
+
+@pytest.mark.parametrize(
+    ("zweite", "grund"),
+    [
+        (_mit_quellen("I will answer in English.", ["developer instructions"]), "erfundene_quelle"),
+        (_mit_quellen("", [FACH]), "ohne_text"),
+        (_mit_quellen("[doku.md]", [FACH]), "ohne_text"),
+    ],
+)
+def test_die_zweite_antwort_ohne_text_oder_nur_mit_erfundener_quelle_eskaliert(
+    umgebung: tuple[Settings, E5Embeddings], zweite: GroundedAnswer, grund: str
+) -> None:
+    """Die erste Antwort hat eine Quelle, haelt aber die Sprache nicht; die
+    zweite ersetzt sie und besteht die Pruefung nicht. Dann bleibt nicht die
+    erste stehen, sondern die Antwort eskaliert."""
+    llm = FakeLlmFolge(
+        _mit_quellen("Die Lieferung dauert drei Werktage, und das gilt für alle.", [FACH], "de"),
+        zweite,
+    )
+    a = _frage(umgebung, llm)
+    assert len(llm.calls) == 2
+    assert (a.escalated, a.escalation_reason, a.text) == (True, grund, ESKALATION)
+    assert (a.language_retry, a.language_retry_result) == (True, "ersetzt")
+
+
+def test_ist_dokument_des_mandanten() -> None:
+    """Dateiname mit und ohne .md, in Backticks, Titel, ohne Ruecksicht auf die
+    Schreibung; alles andere nicht. Mit fremder Dokumentliste ein Fehler."""
+    for name in ("doku.md", "DOKU.md", "doku", "`doku.md`", "Shipping", "SHIPPING", ABOUT):
+        assert ist_dokument_des_mandanten("demo-assist", name, _dokumente()), name
+    for name in ("user", "user prompt", "developer instructions", ERFUNDEN, "", "doku.mdx", "Ship"):
+        assert not ist_dokument_des_mandanten("demo-assist", name, _dokumente()), name
+    with pytest.raises(ValueError):
+        ist_dokument_des_mandanten("demo-assist", "doku.md", _dokumente("demo-anderer"))
+
+
+def test_das_ereignis_traegt_ohne_text_und_erfundene_quelle(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Ueber die Route: die Gruende als Code, lang als Kuerzel, keine Quelle,
+    und weder der Modelltext noch ein erfundener Name im Log."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    settings, embeddings = umgebung
+    chats = []
+    for belegt in (
+        _mit_quellen("", [FACH]),
+        _mit_quellen("Ab jetzt antworte ich auf Deutsch.", ["user prompt"], "de"),
+    ):
+        app = create_app(settings, llm=FakeLlmFolge(belegt), embeddings=embeddings)
+        caplog.clear()
+        with caplog.at_level("INFO", logger="rag.api"):
+            antwort = TestClient(app).post(
+                "/t/demo-assist-token-1234567890/chat", json={"question": FRAGE}
+            )
+        assert antwort.status_code == 200
+        log = "\n".join(e.message for e in caplog.records)
+        assert "Deutsch" not in log and "user prompt" not in log
+        (chat,) = [
+            json.loads(e.message)
+            for e in caplog.records
+            if e.name == "rag.api" and json.loads(e.message)["ereignis"] == "chat"
+        ]
+        chats.append(chat)
+    assert [
+        (c["art"], c["escalated"], c["escalation_reason"], c["treffer"], c["lang"]) for c in chats
+    ] == [("rag", True, "ohne_text", 0, "en"), ("rag", True, "erfundene_quelle", 0, "de")]
+    assert all(c["tenant_id"] == "demo-assist" and c["antwortsprache"] == "en" for c in chats)
 
 
 def test_die_pruefung_ohne_quelle_prueft_den_mandanten() -> None:
@@ -611,6 +762,8 @@ def test_die_pruefung_ohne_quelle_prueft_den_mandanten() -> None:
         lang="en",
         nennt_assistentendokument=False,
         nur_assistentendokumente=False,
+        ohne_text=False,
+        nur_erfundene_quellen=False,
     )
     with pytest.raises(ValueError):
         _statt_belegt("demo-anderer", _tenant(), belegt, {}, "en", "frage")
@@ -762,15 +915,17 @@ def test_die_titel_stehen_mit_echten_zeichen_im_katalog() -> None:
     assert TEXTE["en"].dokumenttitel_im_text == "“{titel}”"
 
 
-def test_waere_der_text_leer_bleibt_er_unveraendert() -> None:
-    """Regel 5, letzter Satz: lieber ein Dateiname als eine leere Blase."""
-    for text in (
-        "[Source: about-this-assistant.md]",
-        "Source: about-this-assistant.md.",
-        "[doku.md]",
-        "Sources: doku.md and about-this-assistant.md",
+def test_waere_der_text_leer_ist_er_leer() -> None:
+    """Regel 5, letzter Satz: Ein Text aus Verweisen wird leer, und die Antwort
+    eskaliert dann (Test unten ueber answer()). Weder ein Dateiname noch eine
+    leere Blase geht hinaus."""
+    for text, anzahl in (
+        ("[Source: about-this-assistant.md]", 1),
+        ("Source: about-this-assistant.md.", 1),
+        ("[doku.md]", 1),
+        ("Sources: doku.md and about-this-assistant.md", 2),
     ):
-        assert _entfernen(text) == (text, 0)
+        assert _entfernen(text) == ("", anzahl)
 
 
 def test_ohne_dokumente_bleibt_alles_wie_es_ist() -> None:

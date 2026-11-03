@@ -1378,9 +1378,9 @@ def test_assistentendokument_steht_nie_in_sources(
 
     Nennt das Modell das Dokument und eine Fachdatei, steht nur die Fachdatei
     in sources, mit ihrem Score. Nennt es nur das Dokument, ist sources leer.
-    Eine erfundene Datei bleibt sichtbar, mit Score None. Faengt einen
-    fehlenden Filter, einen, der zu viel filtert, und eine versteckte
-    erfundene Quelle.
+    Eine erfundene Datei neben einer Fachdatei bleibt sichtbar, mit Score None;
+    allein traegt sie keine Antwort mehr. Faengt einen fehlenden Filter, einen,
+    der zu viel filtert, und eine versteckte erfundene Quelle.
     """
     quellen, scores = _quellen_ueber_answer(
         umgebung_mit_assistentendokument, ["ueber-den-assistenten.md", "doku.md"]
@@ -1397,10 +1397,10 @@ def test_assistentendokument_steht_nie_in_sources(
     )
 
     quellen, scores = _quellen_ueber_answer(
-        umgebung_mit_assistentendokument, ["Ueber-den-Assistenten.md", "erfunden.md"]
+        umgebung_mit_assistentendokument, ["Ueber-den-Assistenten.md", "doku.md", "erfunden.md"]
     )
-    assert quellen == ["erfunden.md"]
-    assert scores == [None]
+    assert quellen == ["doku.md", "erfunden.md"]
+    assert isinstance(scores[0], float) and scores[1] is None
 
 
 def test_ausgenommen_filtert_nur_die_genannten_namen() -> None:

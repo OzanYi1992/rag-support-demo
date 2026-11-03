@@ -1717,6 +1717,7 @@ def test_eine_antwort_ohne_quelle_zaehlt_zum_tor_nach_der_generierung() -> None:
     from eval.run import _tor_von
 
     assert _tor_von("ohne_quelle") == _tor_von("not_grounded") == "groundedness"
+    assert _tor_von("ohne_text") == _tor_von("erfundene_quelle") == "groundedness"
     assert _tor_von("generation_unparseable") == "sonstiges"
 
 

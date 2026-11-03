@@ -62,6 +62,7 @@ from app.texts import (
 )
 from app.verweis import (
     ist_assistentendokument,
+    ist_dokument_des_mandanten,
     mandantendokumente,
     nennt_assistentendokument,
     quellverweise_entfernen,
@@ -72,6 +73,11 @@ REASON_UNPARSEABLE = "generation_unparseable"
 # Belegt nach dem Modell, aber nach dem Verdichten ohne eine Quelle, und das
 # Modell nannte auch keine: eine Antwort ohne Beleg.
 REASON_OHNE_QUELLE = "ohne_quelle"
+# Belegt nach dem Modell, aber nach dem Entfernen der Verweise ohne Text.
+REASON_OHNE_TEXT = "ohne_text"
+# Belegt nach dem Modell, aber unter den Quellen kein Dokument des Mandanten,
+# nur Namen wie "user prompt" oder "developer instructions".
+REASON_ERFUNDENE_QUELLE = "erfundene_quelle"
 
 # Die Art der Antwort. "rag" ist der Weg ueber Retrieval und Modell, auch wenn
 # er eskaliert. Die anderen kommen ohne beides aus dem Katalog.
@@ -927,11 +933,19 @@ def _statt_belegt(
     sprachquelle: str,
 ) -> Answer | None:
     """Was an Stelle einer belegten Antwort hinausgeht, die so nicht hinaus
-    darf; None, wenn sie darf. Fuer die erste wie fuer die zweite Antwort.
+    darf; None, wenn sie darf. Fuer die erste wie fuer die zweite Antwort, in
+    dieser Reihenfolge:
 
       - Der Text nennt das Dokument ueber den Assistenten beim Titel: Er spricht
         ueber die Unterlagen oder den Assistenten. Die feste Antwort
         capabilities, Code "assistentendokument".
+      - Nach dem Entfernen der Verweise bleibt kein Text: Eskalation mit dem
+        Grund "ohne_text". Ein leerer Text war nie eine Antwort.
+      - Quellen bleiben, aber keine ist ein Dokument des Mandanten, beim
+        Dateinamen oder beim Titel: Eskalation mit dem Grund
+        "erfundene_quelle". So hielten Zusagen auf eine Sprachanweisung, mit
+        "user prompt" oder "developer instructions" als Quelle. Neben einem
+        Dokument bleibt eine erfundene Quelle sichtbar.
       - Nach dem Verdichten bleibt keine Quelle, und das Modell nannte nur
         Dokumente ueber den Assistenten: wieder capabilities, Code
         "nur_assistentendokument". Am Telefon antwortete das Modell so auf
@@ -949,15 +963,21 @@ def _statt_belegt(
         raise ValueError("tenant passt nicht zur tenant_id.")
     if belegt.nennt_assistentendokument:
         return _durch_faehigkeiten_ersetzt(tenant_id, tenant, aufruf, ERSETZT_ASSISTENTENDOKUMENT)
-    if belegt.sources:
-        return None
-    if belegt.nur_assistentendokumente:
+    if belegt.ohne_text:
+        grund = REASON_OHNE_TEXT
+    elif belegt.sources:
+        if not belegt.nur_erfundene_quellen:
+            return None
+        grund = REASON_ERFUNDENE_QUELLE
+    elif belegt.nur_assistentendokumente:
         return _durch_faehigkeiten_ersetzt(
             tenant_id, tenant, aufruf, ERSETZT_NUR_ASSISTENTENDOKUMENT
         )
+    else:
+        grund = REASON_OHNE_QUELLE
     return _eskaliert(
         tenant,
-        reason=REASON_OHNE_QUELLE,
+        reason=grund,
         metric=None,
         scores=[],
         latency_retrieval=0,
@@ -999,6 +1019,10 @@ class _Belegt:
     # Ob das Modell als Quelle nur Dokumente ueber den Assistenten nannte,
     # mindestens eines. Dann bleibt nach dem Verdichten keine Quelle.
     nur_assistentendokumente: bool
+    # Ob nach dem Entfernen der Verweise kein Text bleibt.
+    ohne_text: bool
+    # Ob Quellen bleiben, aber keine ein Dokument des Mandanten nennt.
+    nur_erfundene_quellen: bool
 
 
 def _belegt_aufbereiten(
@@ -1039,6 +1063,9 @@ def _belegt_aufbereiten(
         nennt_assistentendokument=nennt_assistentendokument(tenant_id, tenant, text, dokumente),
         nur_assistentendokumente=bool(genannt)
         and all(ist_assistentendokument(n, tenant.assistant_documents) for n in genannt),
+        ohne_text=not text.strip(),
+        nur_erfundene_quellen=bool(quellen)
+        and not any(ist_dokument_des_mandanten(tenant_id, q, dokumente) for q in quellen),
     )
 
 
