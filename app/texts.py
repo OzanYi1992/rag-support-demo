@@ -30,6 +30,8 @@ zusammengelegt wird, ist eine offene Frage (open-points.md, OP-055).
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel
 
 # Schluessel, die die Oberflaeche im Browser braucht. Sie werden als JSON in die
@@ -133,6 +135,12 @@ class Texte(BaseModel, frozen=True):
     faehigkeiten_antwort: str
     identitaet_antwort: str
 
+    # Auf eine Anweisung oder Frage zur Antwortsprache ("answer in German",
+    # "Sprechen Sie Englisch?"), ebenfalls aus diesem Katalog, ohne Platzhalter.
+    # Anders als die Texte oben in der Sprache der Eingabe, nicht des Mandanten,
+    # siehe `sprachanweisung_erkennen`.
+    sprache_antwort: str
+
     # --- Gespraech ----------------------------------------------------------
     # Eine Folgefrage wird vor der Suche zu einer eigenstaendigen Frage
     # umgeformt. Weicht sie von der getippten ab, steht sie leise unter der
@@ -209,6 +217,10 @@ _DE = Texte(
         "Hier antwortet ein KI-System, kein Mensch. Ich beantworte Fragen zu {topics}, auf "
         "Grundlage der hinterlegten Unterlagen von {display_name}."
     ),
+    sprache_antwort=(
+        "Ich antworte auf Deutsch oder Englisch, in der Sprache Ihrer Frage. "
+        "Was möchten Sie wissen?"
+    ),
     assistentendokument_titel="„Über den Assistenten“",
     dokumenttitel_im_text="„{titel}“",
     verstanden_als="Verstanden als: {frage}",
@@ -258,6 +270,10 @@ _EN = Texte(
     identitaet_antwort=(
         "You are chatting with an AI system, not a person. I answer questions about "
         "{topics}, based on the documents stored for {display_name}."
+    ),
+    sprache_antwort=(
+        "I answer in English or German, in the language of your question. "
+        "What would you like to know?"
     ),
     assistentendokument_titel="“About This Assistant”",
     dokumenttitel_im_text="“{titel}”",
@@ -553,6 +569,305 @@ ART_ABSCHIED = "goodbye"
 ART_BESTAETIGUNG = "acknowledgment"
 ART_FAEHIGKEITEN = "capabilities"
 ART_IDENTITAET = "identity"
+ART_SPRACHE = "language"
+
+
+# =============================================================================
+# SPRACHANWEISUNGEN OHNE MODELL
+#
+# Eine kurze Eingabe, die nur eine Anweisung oder Frage zur Antwortsprache ist
+# ("answer in German", "Do you speak German?", "Bitte auf Deutsch"), bekommt
+# eine feste Antwort: Der Assistent antwortet auf Deutsch oder Englisch, in der
+# Sprache der Frage. Vorher nahm das Modell eine solche Anweisung oft als
+# belegt und sagte zu, mit Fachdokumenten oder erfundenen Quellen als Beleg.
+#
+# Ein Muster aus Bausteinen statt einer Liste von Wortlauten: davor, Kern,
+# danach, und der Name einer Sprache. Es muss die GANZE Eingabe in Normalform
+# treffen, wie die Formeln oben, ohne Toleranz und mit hoechstens zehn
+# Woertern. Bausteine beider Sprachen gelten gemischt ("antworte auf English").
+# Eine Anweisung mit einer Frage dahinter ("From now on, answer only in German.
+# How long is the return window?") trifft nicht; sie laeuft ueber das Modell,
+# und die Antwortsprache legt der Server fest.
+#
+# Anders als die anderen festen Antworten steht diese in der Sprache der
+# Eingabe, abgelesen an den Bausteinen, die getroffen haben, ohne Erkenner: Der
+# Text traegt keine Themen aus der tenant.yaml. Deutsche Bausteine ergeben den
+# deutschen Text, englische den englischen. Bei einer Mischung entscheidet der
+# Kern; besteht er nur aus "in" und dem Namen der Sprache, entscheidet die
+# Sprache des Namens ("in German" englisch, "in Deutsch" deutsch). Ohne Kern
+# ("German please") entscheidet der erste Baustein davor, sonst der erste
+# danach.
+# =============================================================================
+
+SPRACHANWEISUNG_MAX_WOERTER = 10
+
+# Die Bausteine je Sprache, in Normalform. Keiner steht in beiden Sprachen; das
+# haelt ein Test fest, sonst waere die Sprache des Textes nicht eindeutig.
+_SPRACHNAMEN: dict[str, tuple[str, ...]] = {
+    "en": (
+        "english",
+        "german",
+        "french",
+        "spanish",
+        "italian",
+        "dutch",
+        "norwegian",
+        "swedish",
+        "danish",
+        "finnish",
+    ),
+    "de": (
+        "englisch",
+        "deutsch",
+        "französisch",
+        "franzoesisch",
+        "spanisch",
+        "italienisch",
+        "niederländisch",
+        "niederlaendisch",
+        "norwegisch",
+        "schwedisch",
+        "dänisch",
+        "daenisch",
+        "finnisch",
+    ),
+}
+_DAVOR: dict[str, tuple[str, ...]] = {
+    "en": (
+        "please",
+        "pls",
+        "plz",
+        "kindly",
+        "from now on",
+        "from now",
+        "starting now",
+        "going forward",
+        "now",
+        "also",
+        "only",
+        "just",
+        "always",
+        "can you",
+        "could you",
+        "would you",
+        "will you",
+        "do you",
+        "are you able to",
+        "is it possible to",
+        "i want you to",
+        "i d like you to",
+        "i would like you to",
+        "i want",
+        "i d like",
+        "i would like",
+        "i prefer",
+        "let s",
+        "lets",
+        "let us",
+        "can we",
+        "could we",
+    ),
+    "de": (
+        "bitte",
+        "gerne",
+        "gern",
+        "ab jetzt",
+        "ab sofort",
+        "von jetzt an",
+        "von nun an",
+        "ab nun",
+        "jetzt",
+        "nun",
+        "in zukunft",
+        "künftig",
+        "kuenftig",
+        "nur",
+        "nur noch",
+        "immer",
+        "lieber",
+        "auch",
+        "kannst du",
+        "können sie",
+        "koennen sie",
+        "könnten sie",
+        "koennten sie",
+        "könntest du",
+        "koenntest du",
+        "würden sie",
+        "wuerden sie",
+        "würdest du",
+        "wuerdest du",
+        "können wir",
+        "koennen wir",
+        "lass uns",
+        "lasst uns",
+        "geht das",
+        "geht es",
+        "geht",
+    ),
+}
+_DANACH: dict[str, tuple[str, ...]] = {
+    "en": (
+        "please",
+        "pls",
+        "plz",
+        "from now on",
+        "from now",
+        "going forward",
+        "only",
+        "too",
+        "as well",
+        "instead",
+        "thanks",
+        "thank you",
+        "now",
+    ),
+    "de": (
+        "bitte",
+        "danke",
+        "ab jetzt",
+        "ab sofort",
+        "von jetzt an",
+        "von nun an",
+        "nur",
+        "nur noch",
+        "weiter",
+        "auch",
+        "möglich",
+        "moeglich",
+    ),
+}
+# Der Kern, englisch: ein Verb, wahlweise ein Objekt, "only" oder "just" und
+# eine Praeposition, dann die Sprache; oder ein Nomen wie "answers" mit der
+# Sprache.
+_EN_VERBEN = (
+    "answer",
+    "respond",
+    "reply",
+    "write",
+    "talk",
+    "speak",
+    "chat",
+    "communicate",
+    "continue",
+    "switch",
+    "change",
+    "understand",
+)
+_EN_OBJEKTE = ("me", "to me", "us", "to us")
+_EN_PRAEPOSITIONEN = ("in", "to", "into")
+_EN_NOMEN = ("answer", "answers", "response", "responses", "reply", "replies")
+# Der Kern, deutsch: ein Imperativ oder eine Frage mit dem Verb vorn, oder die
+# Sprache mit dem Infinitiv am Ende ("auf Englisch antworten"), oder "auf" und
+# die Sprache.
+_DE_VERBEN_VORN = (
+    "antworte",
+    "antwortet",
+    "antworten sie",
+    "schreib",
+    "schreibe",
+    "schreibt",
+    "schreiben sie",
+    "sprich",
+    "sprecht",
+    "sprechen sie",
+    "sprichst du",
+    "rede",
+    "redet",
+    "reden sie",
+    "wechsle",
+    "wechsel",
+    "wechselt",
+    "wechseln sie",
+    "verstehen sie",
+    "verstehst du",
+)
+_DE_INFINITIVE = (
+    "antworten",
+    "schreiben",
+    "sprechen",
+    "reden",
+    "wechseln",
+    "kommunizieren",
+    "weitermachen",
+    "weiterschreiben",
+)
+_DE_OBJEKTE = ("mir", "uns")
+_DE_ADVERBIEN = ("nur", "nur noch", "immer", "ab jetzt", "auch")
+_DE_PRAEPOSITIONEN = ("auf", "in", "zu")
+
+
+def _oder(woerter: tuple[str, ...]) -> str:
+    """Eine Alternative ueber Bausteine, laengere zuerst."""
+    return "(?:" + "|".join(re.escape(w) for w in sorted(woerter, key=len, reverse=True)) + ")"
+
+
+def _sprachanweisung_muster() -> re.Pattern[str]:
+    alle = tuple(n for namen in _SPRACHNAMEN.values() for n in namen)
+    sprache = rf"{_oder(alle)}(?: (?:or|and|oder|und) {_oder(alle)})?"
+    davor = _oder(_DAVOR["en"] + _DAVOR["de"])
+    danach = _oder(_DANACH["en"] + _DANACH["de"])
+    kern_en = "|".join(
+        (
+            rf"{_oder(_EN_VERBEN)}(?: {_oder(_EN_OBJEKTE)})?(?: (?:only|just))?"
+            rf"(?: {_oder(_EN_PRAEPOSITIONEN)})? {sprache}",
+            rf"{sprache} {_oder(_EN_NOMEN)}",
+            rf"{_oder(_EN_NOMEN)} (?:{_oder(_EN_PRAEPOSITIONEN)} )?{sprache}",
+            rf"(?:to|into) {sprache}",
+        )
+    )
+    kern_de = "|".join(
+        (
+            rf"{_oder(_DE_VERBEN_VORN)}(?: {_oder(_DE_OBJEKTE)})?(?: bitte)?"
+            rf"(?: {_oder(_DE_ADVERBIEN)})?(?: {_oder(_DE_PRAEPOSITIONEN)})? {sprache}",
+            rf"(?:{_oder(_DE_OBJEKTE)} )?(?:bitte )?(?:(?:nur|nur noch|immer|auch) )?"
+            rf"(?:{_oder(_DE_PRAEPOSITIONEN)} )?{sprache} {_oder(_DE_INFINITIVE)}",
+            rf"auf {sprache}",
+        )
+    )
+    return re.compile(
+        rf"(?:{davor} )*(?:(?P<kern_en>{kern_en})|(?P<kern_de>{kern_de})|in (?P<kern_in>{sprache}))"
+        rf"(?:(?P<danach>(?: {danach})+))?"
+        rf"|(?P<davor_allein>(?:{davor} )+){sprache}(?: {danach})*"
+        rf"|{sprache}(?P<danach_allein>(?: {danach})+)"
+    )
+
+
+_SPRACHANWEISUNG = _sprachanweisung_muster()
+
+
+def _sprache_des_ersten(teil: str, bausteine: dict[str, tuple[str, ...]]) -> str:
+    """Die Sprache des ersten Bausteins in `teil`."""
+    woerter = teil.strip()
+    for sprache, liste in bausteine.items():
+        if any(woerter == b or woerter.startswith(f"{b} ") for b in liste):
+            return sprache
+    raise ValueError(f"Kein Baustein am Anfang von {teil!r}")
+
+
+def sprachanweisung_erkennen(eingabe: str) -> str | None:
+    """Die Sprache des Textes, "de" oder "en", wenn die ganze Eingabe eine
+    Anweisung oder Frage zur Antwortsprache ist, sonst None.
+
+    Die Sprache kommt aus den Bausteinen, die getroffen haben, siehe oben.
+    Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
+    deshalb keine tenant_id.
+    """
+    normal = normalisieren(eingabe)
+    if not normal or len(normal.split()) > SPRACHANWEISUNG_MAX_WOERTER:
+        return None
+    treffer = _SPRACHANWEISUNG.fullmatch(normal)
+    if treffer is None:
+        return None
+    if treffer["kern_en"] is not None:
+        return "en"
+    if treffer["kern_de"] is not None:
+        return "de"
+    if treffer["kern_in"] is not None:
+        return _sprache_des_ersten(treffer["kern_in"], _SPRACHNAMEN)
+    if treffer["davor_allein"] is not None:
+        return _sprache_des_ersten(treffer["davor_allein"], _DAVOR)
+    return _sprache_des_ersten(treffer["danach_allein"], _DANACH)
 
 
 def normalisieren(text: str) -> str:
@@ -650,6 +965,9 @@ def kurzformel_genau(eingabe: str) -> str | None:
     kurze Folgefrage wie "How can you tell?" liegt innerhalb der Toleranz einer
     Formel, meint aber die vorige Antwort und gehoert in die Umformung.
 
+    Nach den Listen das Muster fuer Sprachanweisungen, ebenfalls ohne Toleranz;
+    es trifft keine Formel der Listen.
+
     Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
     deshalb keine tenant_id.
     """
@@ -660,6 +978,8 @@ def kurzformel_genau(eingabe: str) -> str | None:
         for art, liste in _arten(formeln):
             if normal in {normalisieren(formel) for formel in liste}:
                 return art
+    if sprachanweisung_erkennen(normal) is not None:
+        return ART_SPRACHE
     return None
 
 

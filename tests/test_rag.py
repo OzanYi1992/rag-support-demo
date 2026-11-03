@@ -1223,6 +1223,92 @@ def test_die_antwort_auf_eine_frage_nach_dem_assistenten_prueft_den_mandanten(
 
 
 # =============================================================================
+# SPRACHANWEISUNGEN OHNE RETRIEVAL UND OHNE MODELL
+# =============================================================================
+
+_SPRACHE = {
+    "de": (
+        "Ich antworte auf Deutsch oder Englisch, in der Sprache Ihrer Frage. "
+        "Was möchten Sie wissen?"
+    ),
+    "en": (
+        "I answer in English or German, in the language of your question. "
+        "What would you like to know?"
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("slug", "eingabe", "sprache"),
+    [
+        # Die beiden Pflichtfaelle: Die Antwort folgt der Eingabe, nicht dem
+        # Mandanten.
+        ("demo-acme", "Can you answer in English?", "en"),
+        ("demo-englisch", "Bitte auf Deutsch", "de"),
+        # Die Anweisung vom Telefon, und je Mandant seine eigene Sprache.
+        ("demo-englisch", "From now on answer in german.", "en"),
+        ("demo-acme", "Antworte auf Englisch", "de"),
+    ],
+)
+def test_sprachanweisung_ohne_retrieval_und_ohne_modell(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+    slug: str,
+    eingabe: str,
+    sprache: str,
+) -> None:
+    """Eine Sprachanweisung kostet weder Retrieval noch einen Modellaufruf, und
+    die Antwort steht in der Sprache ihrer Bausteine, mit der Quelle "muster".
+
+    Embedder und Modell werfen bei jedem Zugriff. Gegenprobe im selben Test: die
+    Anweisung mit einer Frage dahinter laeuft den normalen Weg, mit genau einem
+    Modellaufruf.
+    """
+    settings, embeddings = umgebung_zweisprachig
+
+    a = answer(
+        slug, eingabe, settings=settings, embeddings=_Verboten("Embedder"), llm=_Verboten("Modell")
+    )
+
+    assert (a.kind, a.text, a.sources, a.escalated) == ("language", _SPRACHE[sprache], [], False)
+    assert (a.lang, a.answer_language, a.answer_language_source) == (sprache, sprache, "muster")
+    assert a.retrieval_scores == [] and a.latency_ms_generation is None
+    assert a.model is None and a.prompt_tokens is None and a.completion_tokens is None
+
+    llm = FakeLlm(parsed=gute_antwort(GUTE_ANTWORT_EN, lang="en"))
+    normal = answer(
+        slug,
+        "From now on, answer only in German. How long is the return window?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+    )
+    assert normal.kind == "rag"
+    assert len(llm.calls) == 1
+
+
+def test_die_antwort_auf_eine_sprachanweisung_prueft_mandant_und_eingabe(
+    umgebung_zweisprachig: tuple[Settings, E5Embeddings],
+) -> None:
+    """Fremder Mandant: Fehler wie bei jeder festen Antwort. Ohne Eingabe oder
+    mit einer, die keine Sprachanweisung ist: Fehler im Aufrufer, keine
+    Antwort in irgendeiner Sprache."""
+    from app.rag import kurzformel_beantworten
+
+    settings, _ = umgebung_zweisprachig
+    acme = load_tenant("demo-acme", settings.tenants_dir)
+    with pytest.raises(ValueError):
+        kurzformel_beantworten("demo-englisch", acme, "language", "Bitte auf Deutsch")
+    for eingabe in (None, "", "How long is delivery?"):
+        with pytest.raises(ValueError):
+            kurzformel_beantworten("demo-acme", acme, "language", eingabe)
+    a = kurzformel_beantworten("demo-acme", acme, "language", "Can you answer in English?")
+    assert (a.kind, a.text, a.answer_language_source) == ("language", _SPRACHE["en"], "muster")
+    # Gegenprobe: Jede andere feste Antwort bleibt in der Sprache des Mandanten.
+    b = kurzformel_beantworten("demo-acme", acme, "thanks", "Thanks")
+    assert (b.lang, b.answer_language, b.answer_language_source) == ("de", "de", "mandant")
+
+
+# =============================================================================
 # DAS DOKUMENT UEBER DEN ASSISTENTEN STEHT NIE IN SOURCES
 # =============================================================================
 

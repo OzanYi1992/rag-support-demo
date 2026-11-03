@@ -458,6 +458,51 @@ def test_ok_mit_verlauf_ergibt_die_feste_antwort(
     assert a.standalone_question is None
 
 
+def test_eine_sprachanweisung_im_gespraech_ohne_umformung_und_ohne_modell(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Anweisung vom Telefon als Folgefrage: feste Antwort ohne Umformung,
+    ohne Suche und ohne Modell, in der Sprache ihrer Bausteine. Am Telefon
+    wurde sie umgeformt, und das Modell sagte belegt zu."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-acme",
+        "From now on answer in german.",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=VERLAUF,
+        umformer=_Verboten("Umformer"),  # type: ignore[arg-type]
+    )
+    assert (a.kind, a.answer_language, a.answer_language_source) == ("language", "en", "muster")
+    assert a.text.startswith("I answer in English or German")
+    assert (a.history_turns, a.rewrite_status, a.standalone_question) == (1, "keine", None)
+
+
+def test_eine_sprachanweisung_nach_der_umformung_bekommt_die_feste_antwort(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Erst die Umformung macht aus der Folgefrage eine Sprachanweisung: feste
+    Antwort ohne Suche und ohne Antwortaufruf, in der Sprache der
+    eigenstaendigen Frage, mit den Feldern der Umformung."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-englisch",
+        "und das bitte",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=VERLAUF,
+        umformer=FakeUmformer("Können Sie auf Deutsch antworten?"),  # type: ignore[arg-type]
+    )
+    assert (a.kind, a.answer_language, a.answer_language_source) == ("language", "de", "muster")
+    assert a.text.startswith("Ich antworte auf Deutsch oder Englisch")
+    assert (a.rewrite_status, a.standalone_question) == (
+        "umgeformt",
+        "Können Sie auf Deutsch antworten?",
+    )
+
+
 def test_heinis_your_programmer_wird_ueber_die_umformung_zu_identity(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:

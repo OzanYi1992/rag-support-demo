@@ -1451,6 +1451,36 @@ def test_begruessung_ueber_die_route(
     assert [e["art"] for e in _ereignisse(caplog) if e["ereignis"] == "chat"] == ["rag"]
 
 
+def test_sprachanweisung_ueber_die_route(
+    umgebung: tuple[Settings, E5Embeddings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Eine Sprachanweisung beim deutschen Mandanten ergibt 200 ohne
+    Modellaufruf, den englischen Text, und im Ereignis die Art und die Sprache
+    der Bausteine mit der Quelle "muster". Kein Text im Ereignis."""
+    client, llm = _client(umgebung)
+    with caplog.at_level("INFO", logger="rag.api"):
+        antwort = client.post(
+            f"/t/{ACME_TOKEN}/chat", json={"question": "Can you answer in English?"}
+        )
+
+    assert antwort.status_code == 200
+    daten = antwort.json()
+    assert (daten["kind"], daten["sources"], daten["escalated"]) == ("language", [], False)
+    assert daten["text"].startswith("I answer in English or German")
+    assert llm.calls == []
+    (chat,) = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
+    assert (chat["art"], chat["tenant_id"]) == ("language", "demo-acme")
+    assert (chat["lang"], chat["antwortsprache"], chat["antwortsprache_quelle"]) == (
+        "en",
+        "en",
+        "muster",
+    )
+    log = "\n".join(eintrag.message for eintrag in caplog.records)
+    assert daten["text"] not in log
+    assert "Can you answer in English?" not in log
+
+
 def test_begruessung_zaehlt_im_limit(umgebung: tuple[Settings, E5Embeddings]) -> None:
     """Auch eine Begruessung verbraucht einen Platz: Das Limit greift vor answer()."""
     client, llm = _client(umgebung, rate_limit=2)

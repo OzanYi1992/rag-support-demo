@@ -53,9 +53,11 @@ from app.texts import (
     ART_DANK,
     ART_FAEHIGKEITEN,
     ART_IDENTITAET,
+    ART_SPRACHE,
     kurzformel_erkennen,
     kurzformel_genau,
     normalisieren,
+    sprachanweisung_erkennen,
     texte_fuer,
 )
 from app.verweis import (
@@ -95,7 +97,8 @@ UMFORMUNG_MAX_ZEICHEN = 2000
 SPRACHE_VORGEGEBEN = "vorgegeben"  # response_language kam mit der Anfrage
 SPRACHE_FRAGE = "frage"  # die getippte Frage ist erkennbar
 SPRACHE_UMFORMUNG = "umformung"  # nur die eigenstaendige Frage ist erkennbar
-SPRACHE_MANDANT = "mandant"  # sonst, und immer bei einer festen Antwort
+SPRACHE_MANDANT = "mandant"  # sonst, und bei einer festen Antwort
+SPRACHE_MUSTER = "muster"  # feste Antwort auf eine Sprachanweisung, aus ihren Bausteinen
 
 # Was der zweite Aufruf ergab, wenn die erste Antwort die Sprache nicht hielt.
 # Nur bei "ersetzt" wird die zweite ausgeliefert, sonst bleibt die erste.
@@ -158,19 +161,21 @@ class Answer(BaseModel):
     lang: str
 
     # Die Sprache, die der Server festgelegt hat, und woher sie kommt:
-    # "vorgegeben", "frage", "umformung" oder "mandant". Eine feste Antwort traegt
-    # die Sprache des Mandanten mit "mandant". Bei einer Eskalation tragen beide
-    # Felder die festgelegte Sprache, also die Entscheidung; die
-    # Eskalationsmeldung selbst steht in der Sprache des Mandanten. Ohne Default,
-    # damit kein Weg sie still auslaesst.
+    # "vorgegeben", "frage", "umformung", "mandant" oder "muster". Eine feste
+    # Antwort traegt die Sprache des Mandanten mit "mandant", die Antwort auf
+    # eine Sprachanweisung die Sprache ihrer Bausteine mit "muster". Bei einer
+    # Eskalation tragen beide Felder die festgelegte Sprache, also die
+    # Entscheidung; die Eskalationsmeldung selbst steht in der Sprache des
+    # Mandanten. Ohne Default, damit kein Weg sie still auslaesst.
     answer_language: str
     answer_language_source: str
 
     # "rag", oder "greeting", "thanks", "goodbye", "acknowledgment",
-    # "capabilities" und "identity" fuer eine Antwort ohne Retrieval und ohne
-    # Modell. Die Oberflaeche braucht das Feld fuer die Antwort selbst nicht:
-    # Ohne Quellen haengt sie nichts an, ohne Eskalation zeigt sie keinen
-    # Kasten. Sie nimmt aber nur Runden der Art "rag" in den Verlauf.
+    # "capabilities", "identity" und "language" fuer eine Antwort ohne
+    # Retrieval und ohne Modell. Die Oberflaeche braucht das Feld fuer die
+    # Antwort selbst nicht: Ohne Quellen haengt sie nichts an, ohne Eskalation
+    # zeigt sie keinen Kasten. Sie nimmt aber nur Runden der Art "rag" in den
+    # Verlauf.
     kind: str = ART_RAG
 
     # Wie viele Namen von Dokumenten des Mandanten aus dem Antworttext genommen
@@ -318,10 +323,12 @@ def _quellen_verdichten(
     return quellen, scores
 
 
-def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> Answer:
+def kurzformel_beantworten(
+    tenant_id: str, tenant: TenantConfig, art: str, eingabe: str | None = None
+) -> Answer:
     """Antwort auf eine Begruessung, einen Dank, einen Abschied, eine
-    Bestaetigung oder eine Frage nach dem Assistenten, aus dem Katalog in der
-    Sprache des Mandanten.
+    Bestaetigung, eine Frage nach dem Assistenten oder eine Sprachanweisung, aus
+    dem Katalog.
 
     Kein Retrieval, kein Modell: keine Scores, keine Tokens,
     `latency_ms_generation` und `model` None. `sources` ist leer.
@@ -335,11 +342,24 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
     Die Antwortsprache ist die des Mandanten, mit der Quelle "mandant", auch
     wenn die Anfrage eine Sprache vorgibt: Der Katalogtext nennt die Themen aus
     der tenant.yaml, und die stehen nur in dieser Sprache.
+
+    Die Ausnahme ist die Antwort auf eine Sprachanweisung: Sie traegt keine
+    Themen und steht in der Sprache der Bausteine, die in `eingabe` getroffen
+    haben, mit der Quelle "muster". Fuer sie ist `eingabe` Pflicht; trifft sie
+    das Muster nicht, ist das ein Fehler im Aufrufer.
     """
     if tenant.slug != tenant_id:
         raise ValueError("tenant passt nicht zur tenant_id.")
-    texte = texte_fuer(tenant.language)
-    if art == ART_BEGRUESSUNG:
+    sprache, quelle = tenant.language, SPRACHE_MANDANT
+    if art == ART_SPRACHE:
+        erkannt = sprachanweisung_erkennen(eingabe or "")
+        if erkannt is None:
+            raise ValueError("Die Eingabe ist keine Sprachanweisung.")
+        sprache, quelle = erkannt, SPRACHE_MUSTER
+    texte = texte_fuer(sprache)
+    if art == ART_SPRACHE:
+        text = texte.sprache_antwort
+    elif art == ART_BEGRUESSUNG:
         text = texte.begruessung_antwort.format(topics=tenant.topics.strip())
     elif art == ART_DANK:
         text = texte.dank_antwort
@@ -370,9 +390,9 @@ def kurzformel_beantworten(tenant_id: str, tenant: TenantConfig, art: str) -> An
         prompt_tokens=None,
         completion_tokens=None,
         model=None,
-        lang=tenant.language,
-        answer_language=tenant.language,
-        answer_language_source=SPRACHE_MANDANT,
+        lang=sprache,
+        answer_language=sprache,
+        answer_language_source=quelle,
         kind=art,
     )
 
@@ -636,12 +656,12 @@ def answer(
     if not verlauf:
         # --- Begruessung, Dank, Abschied, Fragen nach dem Assistenten ------
         # Ohne Retrieval und ohne Modell. Nur, wenn die GANZE Eingabe einer
-        # Formel entspricht, bei den Fragen nach dem Assistenten mit Toleranz
-        # fuer Tippfehler. Jede andere Eingabe laeuft unveraendert den Weg
-        # darunter.
+        # Formel oder dem Muster fuer Sprachanweisungen entspricht, bei den
+        # Fragen nach dem Assistenten mit Toleranz fuer Tippfehler. Jede andere
+        # Eingabe laeuft unveraendert den Weg darunter.
         art = kurzformel_erkennen(question)
         if art is not None:
-            return kurzformel_beantworten(tenant_id, tenant, art)
+            return kurzformel_beantworten(tenant_id, tenant, art, question)
         sprache, quelle = antwortsprache_festlegen(tenant_id, tenant, question, response_language)
         return _beantworten(
             tenant_id,
@@ -660,7 +680,7 @@ def answer(
     # --- Mit Verlauf ---------------------------------------------------------
     art = kurzformel_genau(question)
     if art is not None:
-        return kurzformel_beantworten(tenant_id, tenant, art).model_copy(
+        return kurzformel_beantworten(tenant_id, tenant, art, question).model_copy(
             update={"history_turns": len(verlauf)}
         )
 
@@ -680,7 +700,9 @@ def answer(
 
     art = kurzformel_erkennen(umformung.suchfrage)
     if art is not None:
-        return kurzformel_beantworten(tenant_id, tenant, art).model_copy(update=felder)
+        return kurzformel_beantworten(tenant_id, tenant, art, umformung.suchfrage).model_copy(
+            update=felder
+        )
     sprache, quelle = antwortsprache_festlegen(
         tenant_id, tenant, question, response_language, umformung
     )
