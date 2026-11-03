@@ -1852,6 +1852,304 @@ def test_main_reicht_die_leeren_runden_durch(
     assert gesehen[0]["leere_runden_verschraenkt"] is schalter
 
 
+# --- zwei Fassungen des Regelwerks, verschraenkt ---------------------------------
+
+
+@pytest.mark.parametrize("mit_verlauf", [False, True])
+def test_die_fassungen_des_regelwerks_wechseln_sich_ab(
+    monkeypatch: pytest.MonkeyPatch, mit_verlauf: bool
+) -> None:
+    """Je Lauf einmal jede Fassung, die Reihenfolge wechselt; sonst dasselbe,
+    auch der Verlauf und die Fassung der Umformung. Je Lauf steht die Fassung."""
+    from app.prompts import REGELWERK_AKTUELL, Runde
+    from eval.run import regelwerk_frage
+
+    verlauf = [Runde(question="Do you ship to Norway?", answer="Yes.")] if mit_verlauf else None
+    folge: list[object] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        folge.append(kwargs["regelwerkfassung"])
+        assert kwargs["history"] == verlauf
+        assert kwargs["umformungsfassung"] == UMFORMUNG_AKTUELL
+        assert kwargs["sprachpruefung"] is True
+        return _antwort("Five days.", kwargs["regelwerkfassung"] == "2", "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "How long does delivery to Norway take?"}
+
+    eins, zwei = regelwerk_frage(
+        "demo-test",
+        eintrag,
+        None,  # type: ignore[arg-type]
+        2,
+        10,
+        3,
+        ("1", "2"),
+        verlauf,
+    )
+
+    assert folge == ["1", "2", "2", "1", "1", "2"]
+    assert (eins.regelwerk_fassung, zwei.regelwerk_fassung) == ("1", "2")
+    assert [lauf["regelwerk_fassung"] for lauf in eins.laeufe_einzeln] == ["1"] * 3
+    assert [lauf["regelwerk_fassung"] for lauf in zwei.laeufe_einzeln] == ["2"] * 3
+    assert (eins.eskaliert_anzahl, zwei.eskaliert_anzahl) == (0, 3)
+    assert eins.verlauf_runden == zwei.verlauf_runden == (1 if mit_verlauf else 0)
+    assert REGELWERK_AKTUELL == "2"
+
+
+def test_die_fassungen_des_regelwerks_in_den_sprachfaellen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In den Sprachfaellen beide Arme in Fassung O: ohne Vorgabe, mit
+    Sprachpruefung, und je Lauf die Felder der Sprachprobe."""
+    from eval.run import regelwerk_frage
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        assert kwargs["response_language"] is None
+        assert kwargs["sprachpruefung"] is True
+        assert kwargs["history"] is None
+        return _antwort("Yes, and the delivery to Norway takes five working days.", False, "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "Do you ship to Norway?"}
+
+    eins, zwei = regelwerk_frage(
+        "demo-test",
+        eintrag,
+        None,  # type: ignore[arg-type]
+        2,
+        10,
+        2,
+        ("1", "2"),
+        sprache="en",
+    )
+
+    for erg in (eins, zwei):
+        assert (erg.arm, erg.erwartete_sprache) == ("O", "en")
+        for lauf in erg.laeufe_einzeln:
+            assert lauf["response_language"] is None and lauf["sprachpruefung"] is True
+            assert lauf["erwartete_sprache"] == "en"
+            assert lauf["sprache_wie_erwartet"] is True
+
+
+@pytest.mark.parametrize("modus", ["gold", "verlauf", "sprache"])
+def test_zwei_fassungen_des_regelwerks_schreiben_gueltiges_json(
+    monkeypatch: pytest.MonkeyPatch, modus: str
+) -> None:
+    """Mit den echten Falldateien und ohne Modell: Die zweite Fassung steht unter
+    fragen_r2, der Kopf nennt beide, und jede Tabelle laesst sich drucken. Der
+    Goldsatz traegt den Stand seiner Datei im Kopf."""
+    import yaml
+
+    from app.config import Settings
+    from eval import run
+
+    settings = Settings(openai_api_key="platzhalter", openai_model="platzhalter")
+    monkeypatch.setattr(run, "Settings", lambda: settings)
+    monkeypatch.setattr(run, "_chunkzahl", lambda s, slug: 41)
+    monkeypatch.setattr(run, "_git_commit", lambda: "abc1234")
+    aufrufe: list[tuple[str, object, object, object]] = []
+
+    def ohne_modell(slug: str, eintrag: dict, *args: object, **kwargs: object) -> object:
+        fassungen = args[4]
+        verlauf = args[5] if len(args) > 5 else kwargs.get("verlauf")
+        aufrufe.append((eintrag["id"], fassungen, verlauf is not None, kwargs.get("sprache")))
+        return tuple(
+            Frageergebnis(
+                id=eintrag["id"],
+                kategorie=eintrag["kategorie"],
+                frage=eintrag.get("frage") or eintrag["folgefrage"],
+                erwartete_quelle=eintrag.get("erwartete_quelle"),
+                erwartete_textstelle=eintrag.get("erwartete_textstelle"),
+                erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
+                laeufe=1,
+                regelwerk_fassung=fassung,
+            )
+            for fassung in fassungen  # type: ignore[attr-defined]
+        )
+
+    monkeypatch.setattr(run, "regelwerk_frage", ohne_modell)
+    for anderes in ("eine_frage", "sprachprobe_frage", "umformungsfassungen_frage"):
+        monkeypatch.setattr(run, anderes, lambda *a, **k: pytest.fail("ein Arm allein"))
+    if modus == "gold":
+        bericht = run.fahre(
+            "demo-fellgate", None, False, "T", False, laeufe=1, regelwerkfassungen=("1", "2")
+        )
+        gold = yaml.safe_load((run.EVAL_DIR / "demo-fellgate" / "gold.yaml").read_text())
+        assert bericht["kopf"]["falldatei_stand"] == str(gold["stand"])
+        assert {mit for _, _, mit, _ in aufrufe} == {False}
+    elif modus == "verlauf":
+        bericht = run.fahre_verlauf(
+            "demo-fellgate",
+            "T",
+            False,
+            True,
+            1,
+            nur=frozenset({"verlauf-05", "verlauf-19"}),
+            regelwerkfassungen=("1", "2"),
+        )
+        assert {mit for _, _, mit, _ in aufrufe} == {True}
+    else:
+        bericht = run.fahre_sprache(
+            "demo-fellgate", "T", False, False, regelwerkfassungen=("1", "2")
+        )
+        assert bericht["kopf"]["fassungen"] == ["O"]
+        assert {sprache for _, _, _, sprache in aufrufe} == {"en"}
+
+    json.loads(json.dumps(bericht, ensure_ascii=False))
+    pruefe_kopf(bericht)
+    kopf = bericht["kopf"]
+    assert kopf["regelwerk_fassungen"] == ["1", "2"]
+    assert "MIT ZWEI FASSUNGEN DES REGELWERKS" in kopf["metrik_bedeutung"]
+    assert {f["regelwerk_fassung"] for f in bericht["fragen"]} == {"1"}
+    assert {f["regelwerk_fassung"] for f in bericht["fragen_r2"]} == {"2"}
+    assert [f["id"] for f in bericht["fragen"]] == [f["id"] for f in bericht["fragen_r2"]]
+    assert {fassungen for _, fassungen, _, _ in aufrufe} == {("1", "2")}
+    assert run._ueberschrift("r2", modus == "sprache") == "Regelwerk in Fassung 2"
+    assert run.tabelle(bericht)
+    assert run.tabelle(
+        {
+            **bericht,
+            "aggregiert_je_kategorie": bericht["aggregiert_je_kategorie_r2"],
+            "fragen": bericht["fragen_r2"],
+        }
+    )
+
+
+def test_zwei_fassungen_des_regelwerks_nur_wo_sie_gelten() -> None:
+    """Nicht gegen eine Instanz, nicht ohne Modell, nicht in der Kontrolle oder
+    zusammen mit den anderen Verschraenkungen im Verlauf, nicht im Goldsatz der
+    Sprachprobe. Jeder Fall bricht vor dem ersten Lauf ab."""
+    from eval import run
+
+    with pytest.raises(ValueError, match="Regelwerks"):
+        run.fahre("demo-fellgate", None, True, "T", False, regelwerkfassungen=("1", "2"))
+    with pytest.raises(ValueError, match="Regelwerks"):
+        run.fahre(
+            "demo-fellgate",
+            None,
+            False,
+            "T",
+            False,
+            cloud=object(),  # type: ignore[arg-type]
+            regelwerkfassungen=("1", "2"),
+        )
+    with pytest.raises(ValueError, match="Regelwerks"):
+        run.fahre_verlauf("demo-fellgate", "T", False, False, 1, regelwerkfassungen=("1", "2"))
+    with pytest.raises(ValueError, match="Regelwerks"):
+        run.fahre_verlauf(
+            "demo-fellgate",
+            "T",
+            False,
+            True,
+            1,
+            leere_runden_verschraenkt=True,
+            regelwerkfassungen=("1", "2"),
+        )
+    with pytest.raises(ValueError, match="Regelwerks"):
+        run.fahre_sprache("demo-fellgate", "T", False, True, regelwerkfassungen=("1", "2"))
+
+
+def test_eine_andere_fassung_des_regelwerks_gibt_es_nur_lokal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lokal geht die Fassung an answer() und steht im Lauf; gegen eine Instanz
+    ist sie ein Fehler, bevor eine Anfrage hinausgeht."""
+    from eval.run import _ein_aufruf
+
+    gesehen: list[object] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs["regelwerkfassung"])
+        return _antwort("Five days.", False, "en")
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    d = _ein_aufruf("demo-test", "Frage?", None, None, None, None, None, regelwerkfassung="1")  # type: ignore[arg-type]
+    assert (gesehen, d["regelwerk_fassung"]) == (["1"], "1")
+
+    monkeypatch.setattr("eval.run.cloud_antwort", lambda *a: pytest.fail("Anfrage hinaus"))
+    with pytest.raises(ValueError, match="nur lokal"):
+        _ein_aufruf(  # type: ignore[arg-type]
+            "demo-test", "Frage?", None, None, object(), "token", None, regelwerkfassung="1"
+        )
+
+
+@pytest.mark.parametrize(
+    "argumente",
+    [
+        # Werte, die ungueltig bleiben, auch wenn eine dritte Fassung dazukommt.
+        ["demo-fellgate", "--regelwerk-fassungen", "1"],
+        ["demo-fellgate", "--regelwerk-fassungen", "1,1"],
+        ["demo-fellgate", "--regelwerk-fassungen", "a,b"],
+        ["demo-fellgate", "--regelwerk-fassungen", "1,2,1"],
+        # Modi und Schalter, mit denen es nicht geht.
+        ["demo-fellgate", "--gegenprobe", "--regelwerk-fassungen", "1,2"],
+        ["demo-fellgate", "--verlauf", "--kontrolle", "--regelwerk-fassungen", "1,2"],
+        ["demo-fellgate", "--sprache", "--gold", "--regelwerk-fassungen", "1,2"],
+        ["demo-fellgate", "--sprache", "--fassungen", "A,O", "--regelwerk-fassungen", "1,2"],
+        [
+            "demo-fellgate",
+            "--verlauf",
+            "--umformung-fassungen",
+            "2,4",
+            "--regelwerk-fassungen",
+            "1,2",
+        ],
+        [
+            "demo-fellgate",
+            "--verlauf",
+            "--leere-runden-verschraenkt",
+            "--regelwerk-fassungen",
+            "1,2",
+        ],
+        ["demo-fellgate", "--retrieval-only", "--regelwerk-fassungen", "1,2"],
+    ],
+)
+def test_falsche_fassungen_des_regelwerks_sind_ein_fehler(
+    argumente: list[str], capsys: pytest.CaptureFixture[str], kein_messlauf: None
+) -> None:
+    with pytest.raises(SystemExit):
+        main(argumente)
+    assert "--regelwerk-fassungen" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argumente", "modus"),
+    [
+        (["--regelwerk-fassungen", "1,2"], "fahre"),
+        (["--verlauf", "--regelwerk-fassungen", "1,2"], "fahre_verlauf"),
+        (["--sprache", "--regelwerk-fassungen", "1,2"], "fahre_sprache"),
+        ([], "fahre"),
+        (["--verlauf"], "fahre_verlauf"),
+        (["--sprache"], "fahre_sprache"),
+    ],
+)
+def test_main_reicht_die_fassungen_des_regelwerks_durch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    argumente: list[str],
+    modus: str,
+) -> None:
+    from eval import run
+
+    gesehen: list[dict[str, object]] = []
+
+    def anhalten(*args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs)
+        raise _Halt
+
+    monkeypatch.setattr(run, modus, anhalten)
+    monkeypatch.setattr(run, "ERGEBNIS_DIR", tmp_path)
+    with pytest.raises(_Halt):
+        run.main(["demo-fellgate", *argumente])
+    erwartet = ("1", "2") if "--regelwerk-fassungen" in argumente else None
+    assert gesehen[0]["regelwerkfassungen"] == erwartet
+
+
 def test_jeder_lauf_traegt_ersetzung_und_abweichung(monkeypatch: pytest.MonkeyPatch) -> None:
     """Lokal aus Answer: ersetzt und eigenstaendig_weicht_ab; ohne Verlauf keine
     Fassung der Umformung und keine Wiederholungspruefung."""

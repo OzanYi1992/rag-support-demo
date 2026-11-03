@@ -48,7 +48,13 @@ from app.escalation import (
     REASON_NO_HITS,
 )
 from app.llm import LlmNichtErreichbar
-from app.prompts import UMFORMUNG_AKTUELL, UMFORMUNGSFASSUNGEN, Runde
+from app.prompts import (
+    REGELWERK_AKTUELL,
+    REGELWERKFASSUNGEN,
+    UMFORMUNG_AKTUELL,
+    UMFORMUNGSFASSUNGEN,
+    Runde,
+)
 from app.rag import (
     REASON_ERFUNDENE_QUELLE,
     REASON_NOT_GROUNDED,
@@ -269,6 +275,9 @@ class Frageergebnis:
     # Ob die Umformung die Runden mit leerer Antwort sah, wenn beide Arme
     # verschraenkt liefen: "weg" wie auf der Seite oder "umgeformt"; sonst None.
     leere_runden: str | None = None
+    # Die Fassung des Regelwerks der Antwort, wenn zwei verschraenkt liefen;
+    # sonst None, und es galt die Fassung der Seite.
+    regelwerk_fassung: str | None = None
 
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
@@ -643,6 +652,7 @@ def _ein_aufruf(
     sprachpruefung: bool = True,
     umformungsfassung: str = UMFORMUNG_AKTUELL,
     leere_runden_umformen: bool = False,
+    regelwerkfassung: str = REGELWERK_AKTUELL,
 ) -> dict[str, Any]:
     """Ein Lauf, lokal ueber answer() oder gegen die deployte Instanz.
 
@@ -651,7 +661,8 @@ def _ein_aufruf(
     zweiten Aufruf weg, nur lokal: Gegen eine Instanz entscheidet die Instanz.
     `umformungsfassung` waehlt den Wortlaut des Umformungsprompts, ebenfalls
     nur lokal. `leere_runden_umformen=True` gibt der Umformung auch die Runden
-    mit leerer Antwort, ebenfalls nur lokal.
+    mit leerer Antwort, ebenfalls nur lokal. `regelwerkfassung` waehlt das
+    Regelwerk der Antwort, ebenfalls nur lokal.
 
     Gibt die Felder in einer Form zurueck, die fuer beide Wege gleich ist. Eine
     Instanz von vor einem Feld liefert es nicht; dann steht None.
@@ -670,6 +681,8 @@ def _ein_aufruf(
             raise ValueError("Eine andere Fassung der Umformung gibt es nur lokal.")
         if leere_runden_umformen:
             raise ValueError("Die Runden mit leerer Antwort in der Umformung gibt es nur lokal.")
+        if regelwerkfassung != REGELWERK_AKTUELL:
+            raise ValueError("Eine andere Fassung des Regelwerks gibt es nur lokal.")
         daten = cloud_antwort(cloud, url_token, frage, verlauf)
         return {
             "eskaliert": daten["escalated"],
@@ -690,6 +703,7 @@ def _ein_aufruf(
             "ersetzt": daten.get("replaced_reason"),
             "umformung_fassung": None,
             "leere_runden": None,
+            "regelwerk_fassung": None,
             "verlauf_runden_weggelassen": daten.get("history_turns_dropped"),
             "umformung": daten.get("rewrite_status"),
             "umformung_grund": daten.get("rewrite_reason"),
@@ -710,6 +724,7 @@ def _ein_aufruf(
                 sprachpruefung=sprachpruefung,
                 umformungsfassung=umformungsfassung,
                 leere_runden_umformen=leere_runden_umformen,
+                regelwerkfassung=regelwerkfassung,
             )
             break
         except LlmNichtErreichbar as fehler:
@@ -743,6 +758,7 @@ def _ein_aufruf(
         # Nur mit Verlauf: Ohne ihn gibt es keine Umformung.
         "umformung_fassung": umformungsfassung if verlauf else None,
         "leere_runden": ("umgeformt" if leere_runden_umformen else "weg") if verlauf else None,
+        "regelwerk_fassung": regelwerkfassung,
         "verlauf_runden_weggelassen": antwort.history_turns_dropped,
         "umformung": antwort.rewrite_status,
         "umformung_grund": antwort.rewrite_reason,
@@ -803,6 +819,7 @@ def _lauf_eintragen(
         "eigenstaendig_weicht_ab": d.get("eigenstaendig_weicht_ab"),
         "umformung_fassung": d.get("umformung_fassung"),
         "leere_runden": d.get("leere_runden"),
+        "regelwerk_fassung": d.get("regelwerk_fassung"),
         "verlauf_runden_weggelassen": d.get("verlauf_runden_weggelassen"),
         "umformung": d["umformung"],
         "umformung_grund": d["umformung_grund"],
@@ -1114,6 +1131,72 @@ def leere_runden_frage(
     return erg_weg, erg_mit
 
 
+def regelwerk_frage(
+    slug: str,
+    eintrag: dict[str, Any],
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    laeufe: int,
+    fassungen: tuple[str, str],
+    verlauf: list[Runde] | None = None,
+    sprachpruefung: bool = True,
+    sprache: str | None = None,
+) -> tuple[Frageergebnis, Frageergebnis]:
+    """Eine Frage in zwei Fassungen des Regelwerks der Antwort, verschraenkt: je
+    Lauf einmal jede, die Reihenfolge wechselt von Lauf zu Lauf. Sonst ist alles
+    gleich, Verlauf, Umformung und Sprachpruefung.
+
+    So verschiebt eine Aenderung beim Anbieter waehrend der Messung beide
+    Fassungen gleich und erscheint nicht als Wirkung des Wortlauts. Fuer den
+    Goldsatz ohne Verlauf, fuer die Verlaufsfaelle mit. `sprache` fuer die
+    Sprachfaelle: die erwartete Sprache, je Lauf dieselben Felder wie in
+    `sprachprobe_frage` mit Fassung O, ohne Vorgabe und mit Sprachpruefung.
+    """
+    erste, zweite = fassungen
+    erg_1, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
+    if sprache is not None:
+        erg_1.erwartete_sprache = sprache
+        erg_1.arm = "O"
+    erg_2 = copy.deepcopy(erg_1)
+    erg_1.regelwerk_fassung, erg_2.regelwerk_fassung = erste, zweite
+    for erg in (erg_1, erg_2):
+        erg.laeufe = laeufe
+        erg.verlauf_runden = len(verlauf or [])
+    aufbau = {erste: (erg_1, _Sammler()), zweite: (erg_2, _Sammler())}
+    for lauf_nr in range(laeufe):
+        for fassung in (erste, zweite) if lauf_nr % 2 == 0 else (zweite, erste):
+            erg, sammler = aufbau[fassung]
+            d = _ein_aufruf(
+                slug,
+                erg.frage,
+                settings,
+                embedder,
+                None,
+                None,
+                verlauf,
+                sprachpruefung=sprachpruefung,
+                regelwerkfassung=fassung,
+            )
+            _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
+            if sprache is not None:
+                gesprochen = erg.laeufe_einzeln[-1]["sprache_der_antwort"]
+                erg.laeufe_einzeln[-1].update(
+                    {
+                        "response_language": None,
+                        "sprachpruefung": sprachpruefung,
+                        "erwartete_sprache": sprache,
+                        "sprache_wie_erwartet": (
+                            None if gesprochen is None else gesprochen == sprache
+                        ),
+                        "stelle_im_kontext": erg.antwort_im_kontext,
+                    }
+                )
+    for erg, sammler in aufbau.values():
+        _abschliessen(erg, sammler, mit_verlauf=verlauf is not None)
+    return erg_1, erg_2
+
+
 def _rate_sprache(text: str) -> str | None:
     """Raet die Sprache eines Textes ueber die Markerlisten aus app/texts.py.
 
@@ -1314,9 +1397,16 @@ def fahre(
     laeufe: int = 1,
     sprachpruefung: bool = True,
     nur: frozenset[str] | None = None,
+    regelwerkfassungen: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Der Goldsatz eines Mandanten. Mit `nur` nur die Fragen mit diesen IDs,
-    siehe `_nur_diese`."""
+    siehe `_nur_diese`.
+
+    Mit `regelwerkfassungen` laeuft jede Frage in beiden Fassungen des
+    Regelwerks, verschraenkt, siehe `regelwerk_frage`; nur lokal und mit Modell.
+    """
+    if regelwerkfassungen is not None and (cloud is not None or nur_retrieval):
+        raise ValueError("Zwei Fassungen des Regelwerks gibt es nur lokal und mit Modell.")
     settings = Settings()
     tenant = load_tenant(slug, settings.tenants_dir)
     gold = yaml.safe_load((EVAL_DIR / slug / "gold.yaml").read_text(encoding="utf-8"))
@@ -1335,21 +1425,38 @@ def fahre(
     # Das url_token verlaesst diese Funktion nur in Richtung cloud_antwort().
     # Es steht weder im Kopf noch in einem Frageergebnis.
     url_token = tenant.url_token if cloud is not None else None
-    ergebnisse = [
-        eine_frage(
-            slug,
-            f,
-            settings,
-            top_k,
-            gesamt,
-            nur_retrieval,
-            cloud,
-            url_token,
-            laeufe,
-            sprachpruefung=sprachpruefung,
-        )
-        for f in fragen
-    ]
+    zweite_fassung: list[Frageergebnis] = []
+    if regelwerkfassungen is not None:
+        ergebnisse = []
+        for f in fragen:
+            erste, zweite = regelwerk_frage(
+                slug,
+                f,
+                settings,
+                top_k,
+                gesamt,
+                laeufe,
+                regelwerkfassungen,
+                sprachpruefung=sprachpruefung,
+            )
+            ergebnisse.append(erste)
+            zweite_fassung.append(zweite)
+    else:
+        ergebnisse = [
+            eine_frage(
+                slug,
+                f,
+                settings,
+                top_k,
+                gesamt,
+                nur_retrieval,
+                cloud,
+                url_token,
+                laeufe,
+                sprachpruefung=sprachpruefung,
+            )
+            for f in fragen
+        ]
 
     bedeutung = (
         "rang = Rang der Quelldatei, rang_chunk = Rang des Chunks mit "
@@ -1392,8 +1499,10 @@ def fahre(
             "retrieval_quelle": "lokal",
             "antwort_quelle": None if nur_retrieval else "lokal",
         }
+    if regelwerkfassungen is not None:
+        bedeutung += BEDEUTUNG_REGELWERK
 
-    return {
+    bericht: dict[str, Any] = {
         "kopf": {
             "zeitstempel": datetime.now(UTC).isoformat(timespec="seconds"),
             "lauf": lauf,
@@ -1433,10 +1542,20 @@ def fahre(
             "chunks_im_index": gesamt,
             "preise_hinterlegt": bool(preise.get("stand")),
             "nur_faelle": sorted(nur) if nur else None,
+            # YAML liest `stand: 2026-11-03` als Datum; die Ergebnisdatei ist JSON.
+            "falldatei_stand": str(gold["stand"]) if gold.get("stand") is not None else None,
         },
         "aggregiert_je_kategorie": aggregiere(ergebnisse, top_k, preise, modell),
         "fragen": [asdict(e) for e in ergebnisse],
     }
+    if regelwerkfassungen is not None:
+        endung = f"_r{regelwerkfassungen[1]}"
+        bericht["kopf"]["regelwerk_fassungen"] = list(regelwerkfassungen)
+        bericht[f"aggregiert_je_kategorie{endung}"] = aggregiere(
+            zweite_fassung, top_k, preise, modell
+        )
+        bericht[f"fragen{endung}"] = [asdict(e) for e in zweite_fassung]
+    return bericht
 
 
 # --- Gespraech: Verlaufsfaelle und Gegenprobe --------------------------------
@@ -1611,6 +1730,15 @@ BEDEUTUNG_LEERE_RUNDEN = (
     "sieht die Umformung sie, wie bevor sie wegfielen, leere_runden umgeformt. Je "
     "Lauf: leere_runden und verlauf_runden_weggelassen."
 )
+BEDEUTUNG_REGELWERK = (
+    " MIT ZWEI FASSUNGEN DES REGELWERKS DER ANTWORT, verschraenkt, je Lauf einmal "
+    "jede, die Reihenfolge wechselnd; welche, steht in regelwerk_fassungen. Die erste "
+    "steht unter fragen und aggregiert_je_kategorie, die zweite unter "
+    "fragen_r<fassung> und aggregiert_je_kategorie_r<fassung>. Je Lauf: "
+    "regelwerk_fassung. Fassung 1 ist das Regelwerk mit Regel 1 bis 5, Fassung 2 "
+    "traegt dazu Regel 6, in beiden Fassungen von Regel 5, also auch im zweiten "
+    "Aufruf zur Sprache."
+)
 BEDEUTUNG_GEGENPROBE = (
     "Goldfragen verschraenkt in zwei Fassungen: A ohne Verlauf, B als zweite "
     "Runde nach einer fremden ersten. Raenge aus der getippten Frage, sie gelten "
@@ -1629,6 +1757,7 @@ def fahre_verlauf(
     umformungsfassungen: tuple[str, str] | None = None,
     nur: frozenset[str] | None = None,
     leere_runden_verschraenkt: bool = False,
+    regelwerkfassungen: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Die Verlaufsfaelle eines Mandanten, mit Verlauf oder als Kontrolle ohne.
     Mit `nur` nur die Faelle mit diesen IDs, siehe `_nur_diese`.
@@ -1643,7 +1772,18 @@ def fahre_verlauf(
     mit leerer Antwort in der Umformung, verschraenkt, siehe
     `leere_runden_frage`; nur mit Verlauf und nicht zusammen mit
     `umformungsfassungen`.
+
+    Mit `regelwerkfassungen` laeuft jeder Fall in beiden Fassungen des
+    Regelwerks der Antwort, verschraenkt, siehe `regelwerk_frage`; nur mit
+    Verlauf und ohne die beiden anderen Verschraenkungen.
     """
+    if regelwerkfassungen is not None and (
+        not mit_verlauf or umformungsfassungen is not None or leere_runden_verschraenkt
+    ):
+        raise ValueError(
+            "Zwei Fassungen des Regelwerks gibt es im Verlauf nur mit Verlauf und ohne "
+            "zwei Fassungen der Umformung oder die Runden mit leerer Antwort."
+        )
     if umformungsfassungen is not None and not mit_verlauf:
         raise ValueError("Zwei Fassungen der Umformung gibt es nur mit Verlauf.")
     if leere_runden_verschraenkt and (not mit_verlauf or umformungsfassungen is not None):
@@ -1660,6 +1800,7 @@ def fahre_verlauf(
     ergebnisse: list[Frageergebnis] = []
     zweite_fassung: list[Frageergebnis] = []
     mit_leeren: list[Frageergebnis] = []
+    regelwerk_zwei: list[Frageergebnis] = []
     laeufe_je_fall: dict[str, int] = {}
     for fall in _nur_diese(daten["faelle"], nur, f"eval/{slug}/verlauf.yaml"):
         eintrag = {**fall, "frage": fall["folgefrage"]}
@@ -1680,6 +1821,21 @@ def fahre_verlauf(
             )
             ergebnisse.append(erste)
             zweite_fassung.append(zweite)
+            continue
+        if regelwerkfassungen is not None and verlauf is not None:
+            erste, zweite = regelwerk_frage(
+                slug,
+                eintrag,
+                settings,
+                top_k,
+                gesamt,
+                n,
+                regelwerkfassungen,
+                verlauf,
+                sprachpruefung,
+            )
+            ergebnisse.append(erste)
+            regelwerk_zwei.append(zweite)
             continue
         if leere_runden_verschraenkt and verlauf is not None:
             weg, umgeformt = leere_runden_frage(
@@ -1715,7 +1871,8 @@ def fahre_verlauf(
         preise,
         (BEDEUTUNG_VERLAUF if mit_verlauf else BEDEUTUNG_KONTROLLE)
         + (BEDEUTUNG_UMFORMUNGSFASSUNGEN.format(arm="") if umformungsfassungen else "")
-        + (BEDEUTUNG_LEERE_RUNDEN if leere_runden_verschraenkt else ""),
+        + (BEDEUTUNG_LEERE_RUNDEN if leere_runden_verschraenkt else "")
+        + (BEDEUTUNG_REGELWERK if regelwerkfassungen else ""),
     )
     kopf["laeufe_je_fall"] = laeufe_je_fall
     kopf["sprachpruefung"] = sprachpruefung
@@ -1748,6 +1905,15 @@ def fahre_verlauf(
             mit_leeren, top_k, preise, settings.model_name
         )
         bericht[f"fragen{endung}"] = [asdict(e) for e in mit_leeren]
+    if regelwerkfassungen is not None:
+        endung = f"_r{regelwerkfassungen[1]}"
+        kopf["regelwerk_fassungen"] = list(regelwerkfassungen)
+        kopf[f"eigenstaendig_gleich_getippt{endung}"] = _gleich_getippt(regelwerk_zwei)
+        kopf[f"eigenstaendig_weicht_ab{endung}"] = _weicht_ab(regelwerk_zwei)
+        bericht[f"aggregiert_je_kategorie{endung}"] = aggregiere(
+            regelwerk_zwei, top_k, preise, settings.model_name
+        )
+        bericht[f"fragen{endung}"] = [asdict(e) for e in regelwerk_zwei]
     return bericht
 
 
@@ -2014,9 +2180,17 @@ def fahre_sprache(
     baseline: bool,
     gold: bool,
     fassungen: tuple[str, str] = ("A", "B"),
+    regelwerkfassungen: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Die Sprachfaelle eines Mandanten, oder mit `gold` seinen Goldsatz, je in
-    zwei Fassungen, Standard A und B."""
+    zwei Fassungen, Standard A und B.
+
+    Mit `regelwerkfassungen` statt der beiden Fassungen A, B oder O: jede Frage
+    in Fassung O, dem Weg der Seite, mit beiden Fassungen des Regelwerks,
+    verschraenkt, siehe `regelwerk_frage`; nur fuer die Sprachfaelle.
+    """
+    if regelwerkfassungen is not None and gold:
+        raise ValueError("Zwei Fassungen des Regelwerks gibt es nur fuer die Sprachfaelle.")
     settings = Settings()
     daten = lade_sprache(slug)
     top_k, herkunft = _top_k_und_herkunft(settings, slug)
@@ -2039,7 +2213,12 @@ def fahre_sprache(
     laeufe_je_frage: dict[str, int] = {}
     for eintrag, sprache, n in auftraege:
         laeufe_je_frage[eintrag["id"]] = n
-        a, b = sprachprobe_frage(slug, eintrag, settings, top_k, gesamt, n, sprache, fassungen)
+        if regelwerkfassungen is not None:
+            a, b = regelwerk_frage(
+                slug, eintrag, settings, top_k, gesamt, n, regelwerkfassungen, sprache=sprache
+            )
+        else:
+            a, b = sprachprobe_frage(slug, eintrag, settings, top_k, gesamt, n, sprache, fassungen)
         arm_1.append(a)
         arm_2.append(b)
 
@@ -2054,12 +2233,16 @@ def fahre_sprache(
         herkunft,
         gesamt,
         preise,
-        BEDEUTUNG_SPRACHE,
+        BEDEUTUNG_SPRACHE + (BEDEUTUNG_REGELWERK if regelwerkfassungen else ""),
     )
     kopf["laeufe_je_fall"] = laeufe_je_frage
-    kopf["fassungen"] = list(fassungen)
+    kopf["fassungen"] = ["O"] if regelwerkfassungen else list(fassungen)
     kopf["falldatei_stand"] = str(daten["stand"]) if daten.get("stand") is not None else None
-    zweite = fassungen[1].lower()
+    if regelwerkfassungen is not None:
+        kopf["regelwerk_fassungen"] = list(regelwerkfassungen)
+        zweite = f"r{regelwerkfassungen[1]}"
+    else:
+        zweite = fassungen[1].lower()
     return {
         "kopf": kopf,
         "aggregiert_je_kategorie": aggregiere(arm_1, top_k, preise, settings.model_name),
@@ -2275,7 +2458,9 @@ def tabelle(bericht: dict[str, Any]) -> str:
 
 def _ueberschrift(endung: str, sprache: bool) -> str:
     """Die Ueberschrift einer weiteren Tabelle, aus der Endung ihres Schluessels:
-    "b", "o", "u3", "b_u3" oder "mit_leeren"."""
+    "b", "o", "u3", "b_u3", "mit_leeren" oder "r2"."""
+    if endung.startswith("r") and endung[1:].isdigit():
+        return f"Regelwerk in Fassung {endung[1:]}"
     if sprache:
         return f"Fassung {endung.upper()}, {UEBERSCHRIFT_FASSUNG[endung.upper()]}"
     if endung == "mit_leeren":
@@ -2406,6 +2591,15 @@ def main(argv: list[str] | None = None) -> int:
             "Antwort wie auf der Seite und mit ihnen in der Umformung wie vorher"
         ),
     )
+    p.add_argument(
+        "--regelwerk-fassungen",
+        default=None,
+        help=(
+            "Goldsatz, --verlauf oder --sprache: genau zwei Fassungen des Regelwerks der "
+            "Antwort, durch Komma getrennt, etwa 1,2; verschraenkt, --sprache dann in "
+            "Fassung O"
+        ),
+    )
     args = p.parse_args(argv)
 
     gespraech = args.verlauf or args.gegenprobe or args.sprache
@@ -2452,6 +2646,30 @@ def main(argv: list[str] | None = None) -> int:
             "--leere-runden-verschraenkt gilt nur mit --verlauf, ohne --kontrolle und ohne "
             "--umformung-fassungen."
         )
+    regelwerkfassungen: tuple[str, str] | None = None
+    if args.regelwerk_fassungen is not None:
+        if (
+            args.gegenprobe
+            or args.kontrolle
+            or args.gold
+            or args.fassungen is not None
+            or umformungsfassungen is not None
+            or args.leere_runden_verschraenkt
+            or args.retrieval_only
+            or args.base_url
+        ):
+            p.error(
+                "--regelwerk-fassungen gilt fuer den Goldsatz, --verlauf und --sprache, lokal "
+                "mit Modell, ohne --gegenprobe, --kontrolle, --gold, --fassungen, "
+                "--umformung-fassungen und --leere-runden-verschraenkt."
+            )
+        teile = tuple(args.regelwerk_fassungen.split(","))
+        if len(teile) != 2 or len(set(teile)) != 2 or not set(teile) <= set(REGELWERKFASSUNGEN):
+            p.error(
+                "--regelwerk-fassungen verlangt genau zwei verschiedene der Fassungen "
+                f"{', '.join(REGELWERKFASSUNGEN)}, etwa 1,2."
+            )
+        regelwerkfassungen = (teile[0], teile[1])
     fassungen = tuple((args.fassungen or "A,B").split(","))
     if (
         len(fassungen) != 2
@@ -2532,6 +2750,7 @@ def main(argv: list[str] | None = None) -> int:
                     umformungsfassungen=umformungsfassungen,
                     nur=nur,
                     leere_runden_verschraenkt=args.leere_runden_verschraenkt,
+                    regelwerkfassungen=regelwerkfassungen,
                 )
             elif args.sprache:
                 bericht = fahre_sprache(
@@ -2540,6 +2759,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.baseline,
                     args.gold,
                     (fassungen[0], fassungen[1]),
+                    regelwerkfassungen=regelwerkfassungen,
                 )
             elif args.gegenprobe:
                 bericht = fahre_gegenprobe(
@@ -2565,6 +2785,7 @@ def main(argv: list[str] | None = None) -> int:
                     1 if args.retrieval_only else args.laeufe,
                     sprachpruefung=pruefung,
                     nur=nur,
+                    regelwerkfassungen=regelwerkfassungen,
                 )
             pruefe_kopf(bericht)
             stempel = bericht["kopf"]["zeitstempel"].replace(":", "").replace("-", "")
