@@ -266,6 +266,9 @@ class Frageergebnis:
     # Die Fassung des Umformungsprompts, wenn zwei verschraenkt liefen; sonst
     # None, und es galt die Fassung der Seite.
     umformung_fassung: str | None = None
+    # Ob die Umformung die Runden mit leerer Antwort sah, wenn beide Arme
+    # verschraenkt liefen: "weg" wie auf der Seite oder "umgeformt"; sonst None.
+    leere_runden: str | None = None
 
     # Nur in Cloud-Laeufen: Stimmen die Top-k-Scores der Cloud mit den lokalen?
     scores_wie_lokal: bool | None = None
@@ -639,6 +642,7 @@ def _ein_aufruf(
     response_language: str | None = None,
     sprachpruefung: bool = True,
     umformungsfassung: str = UMFORMUNG_AKTUELL,
+    leere_runden_umformen: bool = False,
 ) -> dict[str, Any]:
     """Ein Lauf, lokal ueber answer() oder gegen die deployte Instanz.
 
@@ -646,7 +650,8 @@ def _ein_aufruf(
     der Server die Sprache selbst fest. `sprachpruefung=False` laesst den
     zweiten Aufruf weg, nur lokal: Gegen eine Instanz entscheidet die Instanz.
     `umformungsfassung` waehlt den Wortlaut des Umformungsprompts, ebenfalls
-    nur lokal.
+    nur lokal. `leere_runden_umformen=True` gibt der Umformung auch die Runden
+    mit leerer Antwort, ebenfalls nur lokal.
 
     Gibt die Felder in einer Form zurueck, die fuer beide Wege gleich ist. Eine
     Instanz von vor einem Feld liefert es nicht; dann steht None.
@@ -663,6 +668,8 @@ def _ein_aufruf(
             raise ValueError("Ohne Sprachpruefung gibt es nur lokal.")
         if umformungsfassung != UMFORMUNG_AKTUELL:
             raise ValueError("Eine andere Fassung der Umformung gibt es nur lokal.")
+        if leere_runden_umformen:
+            raise ValueError("Die Runden mit leerer Antwort in der Umformung gibt es nur lokal.")
         daten = cloud_antwort(cloud, url_token, frage, verlauf)
         return {
             "eskaliert": daten["escalated"],
@@ -682,6 +689,8 @@ def _ein_aufruf(
             "eigenstaendig_weicht_ab": daten.get("standalone_question_differs"),
             "ersetzt": daten.get("replaced_reason"),
             "umformung_fassung": None,
+            "leere_runden": None,
+            "verlauf_runden_weggelassen": daten.get("history_turns_dropped"),
             "umformung": daten.get("rewrite_status"),
             "umformung_grund": daten.get("rewrite_reason"),
             "umformung_ms": daten.get("latency_ms_rewrite"),
@@ -700,6 +709,7 @@ def _ein_aufruf(
                 history=verlauf,
                 sprachpruefung=sprachpruefung,
                 umformungsfassung=umformungsfassung,
+                leere_runden_umformen=leere_runden_umformen,
             )
             break
         except LlmNichtErreichbar as fehler:
@@ -732,6 +742,8 @@ def _ein_aufruf(
         "ersetzt": antwort.replaced_reason,
         # Nur mit Verlauf: Ohne ihn gibt es keine Umformung.
         "umformung_fassung": umformungsfassung if verlauf else None,
+        "leere_runden": ("umgeformt" if leere_runden_umformen else "weg") if verlauf else None,
+        "verlauf_runden_weggelassen": antwort.history_turns_dropped,
         "umformung": antwort.rewrite_status,
         "umformung_grund": antwort.rewrite_reason,
         "umformung_ms": antwort.latency_ms_rewrite,
@@ -790,6 +802,8 @@ def _lauf_eintragen(
         else None,
         "eigenstaendig_weicht_ab": d.get("eigenstaendig_weicht_ab"),
         "umformung_fassung": d.get("umformung_fassung"),
+        "leere_runden": d.get("leere_runden"),
+        "verlauf_runden_weggelassen": d.get("verlauf_runden_weggelassen"),
         "umformung": d["umformung"],
         "umformung_grund": d["umformung_grund"],
         "umformung_ms": d["umformung_ms"],
@@ -1049,6 +1063,55 @@ def umformungsfassungen_frage(
     for erg, sammler in aufbau.values():
         _abschliessen(erg, sammler, mit_verlauf=True)
     return erg_1, erg_2
+
+
+# Die beiden Arme von `leere_runden_frage`, in der Reihenfolge des ersten Laufs.
+LEERE_RUNDEN_ARME = ("weg", "umgeformt")
+
+
+def leere_runden_frage(
+    slug: str,
+    eintrag: dict[str, Any],
+    settings: Settings,
+    top_k: int,
+    gesamtzahl: int,
+    laeufe: int,
+    verlauf: list[Runde],
+    sprachpruefung: bool = True,
+) -> tuple[Frageergebnis, Frageergebnis]:
+    """Eine Frage mit Verlauf zweimal, verschraenkt: einmal wie auf der Seite,
+    ohne die Runden mit leerer Antwort ("weg"), einmal mit ihnen in der
+    Umformung ("umgeformt"), wie bevor sie wegfielen. Je Lauf einmal jeder Arm,
+    die Reihenfolge wechselt von Lauf zu Lauf; sonst ist alles gleich.
+
+    So verschiebt eine Aenderung beim Anbieter waehrend der Messung beide Arme
+    gleich und erscheint nicht als Wirkung des Wegfalls.
+    """
+    erg_weg, embedder, _ = _retrieval_teil(slug, eintrag, settings, top_k, gesamtzahl)
+    erg_mit = copy.deepcopy(erg_weg)
+    erg_weg.leere_runden, erg_mit.leere_runden = LEERE_RUNDEN_ARME
+    for erg in (erg_weg, erg_mit):
+        erg.laeufe = laeufe
+        erg.verlauf_runden = len(verlauf)
+    aufbau = {False: (erg_weg, _Sammler()), True: (erg_mit, _Sammler())}
+    for lauf_nr in range(laeufe):
+        for umformen in (False, True) if lauf_nr % 2 == 0 else (True, False):
+            erg, sammler = aufbau[umformen]
+            d = _ein_aufruf(
+                slug,
+                erg.frage,
+                settings,
+                embedder,
+                None,
+                None,
+                verlauf,
+                sprachpruefung=sprachpruefung,
+                leere_runden_umformen=umformen,
+            )
+            _lauf_eintragen(slug, erg, sammler, lauf_nr, d, settings, embedder, top_k, verlauf)
+    for erg, sammler in aufbau.values():
+        _abschliessen(erg, sammler, mit_verlauf=True)
+    return erg_weg, erg_mit
 
 
 def _rate_sprache(text: str) -> str | None:
@@ -1383,7 +1446,7 @@ def fahre(
 # geschrieben, damit jeder Lauf denselben Verlauf sieht. `answer: null` heisst
 # "noch nicht eingefroren", `answer: ""` heisst "die Runde ist eskaliert".
 
-ARTEN_FUER_VERLAUF = ("capabilities", "identity")
+ARTEN_FUER_VERLAUF = ("capabilities", "identity", "language")
 
 
 def pruefe_verlauf(daten: dict[str, Any], quelle: str, eingefroren: bool) -> None:
@@ -1540,6 +1603,14 @@ BEDEUTUNG_UMFORMUNGSFASSUNGEN = (
     "getippten unterscheidet; umformung_grund fruehere_frage, wenn der Server sie "
     "deshalb verworfen hat."
 )
+BEDEUTUNG_LEERE_RUNDEN = (
+    " MIT UND OHNE DIE RUNDEN MIT LEERER ANTWORT, verschraenkt, je Lauf einmal "
+    "jeder Arm, die Reihenfolge wechselnd. Unter fragen und aggregiert_je_kategorie "
+    "der Weg der Seite: Runden mit leerer Antwort fallen vor der Umformung weg, "
+    "leere_runden weg. Unter fragen_mit_leeren und aggregiert_je_kategorie_mit_leeren "
+    "sieht die Umformung sie, wie bevor sie wegfielen, leere_runden umgeformt. Je "
+    "Lauf: leere_runden und verlauf_runden_weggelassen."
+)
 BEDEUTUNG_GEGENPROBE = (
     "Goldfragen verschraenkt in zwei Fassungen: A ohne Verlauf, B als zweite "
     "Runde nach einer fremden ersten. Raenge aus der getippten Frage, sie gelten "
@@ -1557,6 +1628,7 @@ def fahre_verlauf(
     sprachpruefung: bool = True,
     umformungsfassungen: tuple[str, str] | None = None,
     nur: frozenset[str] | None = None,
+    leere_runden_verschraenkt: bool = False,
 ) -> dict[str, Any]:
     """Die Verlaufsfaelle eines Mandanten, mit Verlauf oder als Kontrolle ohne.
     Mit `nur` nur die Faelle mit diesen IDs, siehe `_nur_diese`.
@@ -1566,9 +1638,19 @@ def fahre_verlauf(
 
     Mit `umformungsfassungen` laeuft jeder Fall in beiden Fassungen des
     Umformungsprompts, verschraenkt, je mit seiner Laufzahl; nur mit Verlauf.
+
+    Mit `leere_runden_verschraenkt` laeuft jeder Fall ohne und mit den Runden
+    mit leerer Antwort in der Umformung, verschraenkt, siehe
+    `leere_runden_frage`; nur mit Verlauf und nicht zusammen mit
+    `umformungsfassungen`.
     """
     if umformungsfassungen is not None and not mit_verlauf:
         raise ValueError("Zwei Fassungen der Umformung gibt es nur mit Verlauf.")
+    if leere_runden_verschraenkt and (not mit_verlauf or umformungsfassungen is not None):
+        raise ValueError(
+            "Die Runden mit leerer Antwort verschraenkt gibt es nur mit Verlauf und "
+            "ohne zwei Fassungen der Umformung."
+        )
     settings = Settings()
     daten = lade_verlauf(slug, eingefroren=mit_verlauf)
     top_k, herkunft = _top_k_und_herkunft(settings, slug)
@@ -1577,6 +1659,7 @@ def fahre_verlauf(
 
     ergebnisse: list[Frageergebnis] = []
     zweite_fassung: list[Frageergebnis] = []
+    mit_leeren: list[Frageergebnis] = []
     laeufe_je_fall: dict[str, int] = {}
     for fall in _nur_diese(daten["faelle"], nur, f"eval/{slug}/verlauf.yaml"):
         eintrag = {**fall, "frage": fall["folgefrage"]}
@@ -1597,6 +1680,13 @@ def fahre_verlauf(
             )
             ergebnisse.append(erste)
             zweite_fassung.append(zweite)
+            continue
+        if leere_runden_verschraenkt and verlauf is not None:
+            weg, umgeformt = leere_runden_frage(
+                slug, eintrag, settings, top_k, gesamt, n, verlauf, sprachpruefung
+            )
+            ergebnisse.append(weg)
+            mit_leeren.append(umgeformt)
             continue
         ergebnisse.append(
             eine_frage(
@@ -1624,7 +1714,8 @@ def fahre_verlauf(
         gesamt,
         preise,
         (BEDEUTUNG_VERLAUF if mit_verlauf else BEDEUTUNG_KONTROLLE)
-        + (BEDEUTUNG_UMFORMUNGSFASSUNGEN.format(arm="") if umformungsfassungen else ""),
+        + (BEDEUTUNG_UMFORMUNGSFASSUNGEN.format(arm="") if umformungsfassungen else "")
+        + (BEDEUTUNG_LEERE_RUNDEN if leere_runden_verschraenkt else ""),
     )
     kopf["laeufe_je_fall"] = laeufe_je_fall
     kopf["sprachpruefung"] = sprachpruefung
@@ -1648,6 +1739,15 @@ def fahre_verlauf(
             zweite_fassung, top_k, preise, settings.model_name
         )
         bericht[f"fragen{endung}"] = [asdict(e) for e in zweite_fassung]
+    if leere_runden_verschraenkt:
+        endung = "_mit_leeren"
+        kopf["leere_runden_verschraenkt"] = True
+        kopf[f"eigenstaendig_gleich_getippt{endung}"] = _gleich_getippt(mit_leeren)
+        kopf[f"eigenstaendig_weicht_ab{endung}"] = _weicht_ab(mit_leeren)
+        bericht[f"aggregiert_je_kategorie{endung}"] = aggregiere(
+            mit_leeren, top_k, preise, settings.model_name
+        )
+        bericht[f"fragen{endung}"] = [asdict(e) for e in mit_leeren]
     return bericht
 
 
@@ -2175,9 +2275,11 @@ def tabelle(bericht: dict[str, Any]) -> str:
 
 def _ueberschrift(endung: str, sprache: bool) -> str:
     """Die Ueberschrift einer weiteren Tabelle, aus der Endung ihres Schluessels:
-    "b", "o", "u3" oder "b_u3"."""
+    "b", "o", "u3", "b_u3" oder "mit_leeren"."""
     if sprache:
         return f"Fassung {endung.upper()}, {UEBERSCHRIFT_FASSUNG[endung.upper()]}"
+    if endung == "mit_leeren":
+        return "Umformung mit den Runden mit leerer Antwort"
     teile = []
     for teil in endung.split("_"):
         if teil == "b":
@@ -2296,6 +2398,14 @@ def main(argv: list[str] | None = None) -> int:
             "durch Komma getrennt, etwa 2,3; verschraenkt, die Gegenprobe dann nur mit B"
         ),
     )
+    p.add_argument(
+        "--leere-runden-verschraenkt",
+        action="store_true",
+        help=(
+            "mit --verlauf: jeder Fall zweimal, verschraenkt, ohne die Runden mit leerer "
+            "Antwort wie auf der Seite und mit ihnen in der Umformung wie vorher"
+        ),
+    )
     args = p.parse_args(argv)
 
     gespraech = args.verlauf or args.gegenprobe or args.sprache
@@ -2335,6 +2445,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"{', '.join(UMFORMUNGSFASSUNGEN)}, etwa 2,3."
             )
         umformungsfassungen = (teile[0], teile[1])
+    if args.leere_runden_verschraenkt and (
+        not args.verlauf or args.kontrolle or umformungsfassungen is not None
+    ):
+        p.error(
+            "--leere-runden-verschraenkt gilt nur mit --verlauf, ohne --kontrolle und ohne "
+            "--umformung-fassungen."
+        )
     fassungen = tuple((args.fassungen or "A,B").split(","))
     if (
         len(fassungen) != 2
@@ -2414,6 +2531,7 @@ def main(argv: list[str] | None = None) -> int:
                     sprachpruefung=pruefung,
                     umformungsfassungen=umformungsfassungen,
                     nur=nur,
+                    leere_runden_verschraenkt=args.leere_runden_verschraenkt,
                 )
             elif args.sprache:
                 bericht = fahre_sprache(

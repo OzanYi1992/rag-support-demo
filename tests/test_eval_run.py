@@ -18,6 +18,7 @@ import pathlib
 import httpx
 import pytest
 
+from app.prompts import UMFORMUNG_AKTUELL
 from eval.run import (
     ABW_IM_KONTEXT,
     ABW_KEINE,
@@ -1690,6 +1691,165 @@ def test_main_reicht_die_fassungen_der_umformung_durch(
         run.main(["demo-fellgate", *argumente])
     erwartet = ("2", "3") if "--umformung-fassungen" in argumente else None
     assert gesehen[0]["umformungsfassungen"] == erwartet
+
+
+# --- Runden mit leerer Antwort, verschraenkt -------------------------------------
+
+
+def test_die_arme_der_leeren_runden_wechseln_sich_ab(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Je Lauf einmal jeder Arm, die Reihenfolge wechselt; beide mit demselben
+    Verlauf und der Fassung der Seite. Je Lauf stehen der Arm und die Zahl der
+    weggelassenen Runden."""
+    from app.prompts import Runde
+    from eval.run import leere_runden_frage
+
+    verlauf = [
+        Runde(question="Do you ship to Norway?", answer="Yes."),
+        Runde(question="Do you offer a student discount?", answer=""),
+    ]
+    folge: list[object] = []
+
+    def antwort(*args: object, **kwargs: object) -> object:
+        umformen = kwargs["leere_runden_umformen"]
+        folge.append(umformen)
+        assert kwargs["history"] == verlauf
+        assert kwargs["umformungsfassung"] == UMFORMUNG_AKTUELL
+        return _antwort_mit_umformung("Five days.", "How long to Norway?").model_copy(  # type: ignore[attr-defined]
+            update={"history_turns": 2, "history_turns_dropped": 0 if umformen else 1}
+        )
+
+    monkeypatch.setattr("eval.run.answer", antwort)
+    monkeypatch.setattr("eval.run.get_embeddings", lambda settings: None)
+    monkeypatch.setattr("eval.run.search_tenant", _FakeSuche({}))
+    eintrag = {**_fall(), "frage": "How long takes that?"}
+
+    weg, umgeformt = leere_runden_frage(
+        "demo-test",
+        eintrag,
+        None,  # type: ignore[arg-type]
+        2,
+        10,
+        3,
+        verlauf,
+    )
+
+    assert folge == [False, True, True, False, False, True]
+    assert (weg.leere_runden, umgeformt.leere_runden) == ("weg", "umgeformt")
+    assert weg.verlauf_runden == umgeformt.verlauf_runden == 2
+    assert [lauf["leere_runden"] for lauf in weg.laeufe_einzeln] == ["weg"] * 3
+    assert [lauf["leere_runden"] for lauf in umgeformt.laeufe_einzeln] == ["umgeformt"] * 3
+    assert [lauf["verlauf_runden_weggelassen"] for lauf in weg.laeufe_einzeln] == [1, 1, 1]
+    assert [lauf["verlauf_runden_weggelassen"] for lauf in umgeformt.laeufe_einzeln] == [0, 0, 0]
+    assert all(lauf["umformung_fassung"] == UMFORMUNG_AKTUELL for lauf in weg.laeufe_einzeln)
+
+
+def test_die_leeren_runden_verschraenkt_schreiben_gueltiges_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mit den echten Falldateien und ohne Modell: Der Arm mit den leeren Runden
+    steht unter seiner Endung, der Kopf sagt es, und jede Tabelle laesst sich
+    drucken."""
+    from app.config import Settings
+    from eval import run
+
+    settings = Settings(openai_api_key="platzhalter", openai_model="platzhalter")
+    monkeypatch.setattr(run, "Settings", lambda: settings)
+    monkeypatch.setattr(run, "_chunkzahl", lambda s, slug: 41)
+    monkeypatch.setattr(run, "_git_commit", lambda: "abc1234")
+    gefahren: list[str] = []
+
+    def ohne_modell(slug: str, eintrag: dict, *args: object, **kwargs: object) -> object:
+        gefahren.append(eintrag["id"])
+        return tuple(
+            Frageergebnis(
+                id=eintrag["id"],
+                kategorie=eintrag["kategorie"],
+                frage=eintrag["frage"],
+                erwartete_quelle=eintrag.get("erwartete_quelle"),
+                erwartete_textstelle=eintrag.get("erwartete_textstelle"),
+                erwartet_eskalation=bool(eintrag.get("erwartet_eskalation")),
+                laeufe=1,
+                leere_runden=arm,
+            )
+            for arm in ("weg", "umgeformt")
+        )
+
+    monkeypatch.setattr(run, "leere_runden_frage", ohne_modell)
+    monkeypatch.setattr(run, "eine_frage", lambda *a, **k: pytest.fail("ein Arm allein"))
+    bericht = run.fahre_verlauf(
+        "demo-fellgate",
+        "T",
+        False,
+        True,
+        1,
+        nur=frozenset({"verlauf-03", "verlauf-13"}),
+        leere_runden_verschraenkt=True,
+    )
+
+    json.loads(json.dumps(bericht, ensure_ascii=False))
+    pruefe_kopf(bericht)
+    kopf = bericht["kopf"]
+    assert kopf["leere_runden_verschraenkt"] is True
+    assert "MIT UND OHNE DIE RUNDEN MIT LEERER ANTWORT" in kopf["metrik_bedeutung"]
+    assert sorted(gefahren) == ["verlauf-03", "verlauf-13"]
+    assert {f["leere_runden"] for f in bericht["fragen"]} == {"weg"}
+    assert {f["leere_runden"] for f in bericht["fragen_mit_leeren"]} == {"umgeformt"}
+    assert run._ueberschrift("mit_leeren", False) == "Umformung mit den Runden mit leerer Antwort"
+    assert run.tabelle(
+        {
+            **bericht,
+            "aggregiert_je_kategorie": bericht["aggregiert_je_kategorie_mit_leeren"],
+            "fragen": bericht["fragen_mit_leeren"],
+        }
+    )
+    with pytest.raises(ValueError):
+        run.fahre_verlauf("demo-fellgate", "T", False, False, 1, leere_runden_verschraenkt=True)
+
+
+@pytest.mark.parametrize(
+    "argumente",
+    [
+        ["demo-fellgate", "--leere-runden-verschraenkt"],
+        ["demo-fellgate", "--gegenprobe", "--leere-runden-verschraenkt"],
+        ["demo-fellgate", "--sprache", "--leere-runden-verschraenkt"],
+        ["demo-fellgate", "--verlauf", "--kontrolle", "--leere-runden-verschraenkt"],
+        [
+            "demo-fellgate",
+            "--verlauf",
+            "--umformung-fassungen",
+            "2,4",
+            "--leere-runden-verschraenkt",
+        ],
+    ],
+)
+def test_falsche_schalter_fuer_die_leeren_runden_sind_ein_fehler(
+    argumente: list[str], capsys: pytest.CaptureFixture[str], kein_messlauf: None
+) -> None:
+    with pytest.raises(SystemExit):
+        main(argumente)
+    assert "--leere-runden-verschraenkt" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("schalter", [True, False])
+def test_main_reicht_die_leeren_runden_durch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, schalter: bool
+) -> None:
+    from eval import run
+
+    gesehen: list[dict[str, object]] = []
+
+    def anhalten(*args: object, **kwargs: object) -> object:
+        gesehen.append(kwargs)
+        raise _Halt
+
+    monkeypatch.setattr(run, "fahre_verlauf", anhalten)
+    monkeypatch.setattr(run, "ERGEBNIS_DIR", tmp_path)
+    argumente = ["demo-fellgate", "--verlauf"] + (
+        ["--leere-runden-verschraenkt"] if schalter else []
+    )
+    with pytest.raises(_Halt):
+        run.main(argumente)
+    assert gesehen[0]["leere_runden_verschraenkt"] is schalter
 
 
 def test_jeder_lauf_traegt_ersetzung_und_abweichung(monkeypatch: pytest.MonkeyPatch) -> None:
