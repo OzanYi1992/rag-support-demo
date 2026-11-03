@@ -1190,6 +1190,8 @@ def test_die_antwort_auf_eine_sprachanweisung_im_katalog() -> None:
 
 
 def _gold_und_kontrollfragen() -> tuple[list[str], list[str]]:
+    """Die Goldfragen, ausser denen mit einer erwarteten festen Antwort, und alle
+    Kontrollfragen."""
     import yaml
 
     eval_dir = Path(__file__).resolve().parents[1] / "eval"
@@ -1197,7 +1199,8 @@ def _gold_und_kontrollfragen() -> tuple[list[str], list[str]]:
     kontrolle: list[str] = []
     for datei in sorted(eval_dir.glob("*/gold.yaml")):
         for eintrag in yaml.safe_load(datei.read_text(encoding="utf-8"))["fragen"]:
-            gold.append(eintrag["frage"])
+            if not eintrag.get("erwartete_art"):
+                gold.append(eintrag["frage"])
             if eintrag.get("kontrollfrage"):
                 kontrolle.append(eintrag["kontrollfrage"])
     return gold, kontrolle
@@ -1268,24 +1271,33 @@ def _sprachfragen() -> list[str]:
 _SPRACHFRAGEN = _sprachfragen()
 
 
-# Die Sprachanweisung vom Telefon steht in den Falldateien als Goldfrage und
-# als Folgefrage. Sie bekommt die feste Antwort language; jede andere Frage der
-# Falldateien trifft nichts.
-_SPRACHANWEISUNGEN_DER_FALLDATEIEN = frozenset(
-    {"From now on answer in German.", "From now on answer in german."}
-)
-
-
 def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
-    """Gegenprobe gegen einen blinden Test unten: 51 Goldfragen, 12 Kontrollfragen."""
+    """Gegenprobe gegen einen blinden Test unten: 51 Goldfragen ohne erwartete
+    Art, 13 Kontrollfragen."""
     assert len(_GOLDFRAGEN) == 51
-    assert len(_KONTROLLFRAGEN) == 12
-    # Siebzehn Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
-    assert len(_VERLAUFSFRAGEN) == 18
+    assert len(_KONTROLLFRAGEN) == 13
+    # Achtzehn Folgefragen ohne erwartete Art und die erste Runde der Gegenprobe.
+    assert len(_VERLAUFSFRAGEN) == 19
     assert len(_SPRACHFRAGEN) == len(set(_SPRACHFRAGEN)) > 0
-    # Die Ausnahmen im Pflichttest stehen wirklich in den Falldateien.
-    geladen = set(_GOLDFRAGEN + _VERLAUFSFRAGEN)
-    assert _SPRACHANWEISUNGEN_DER_FALLDATEIEN <= geladen
+
+
+def test_eine_sprachanweisung_in_den_falldateien_erwartet_die_feste_antwort() -> None:
+    """Jede Gold- oder Folgefrage, die das Muster trifft, erwartet die Art
+    language, und jede, die sie erwartet, trifft es, vor der Umformung. Die
+    Anweisung vom Telefon steht so in inj-06 und verlauf-18."""
+    import yaml
+
+    eval_dir = Path(__file__).resolve().parents[1] / "eval"
+    gesehen: list[str] = []
+    for datei in sorted(eval_dir.glob("*/gold.yaml")) + sorted(eval_dir.glob("*/verlauf.yaml")):
+        daten = yaml.safe_load(datei.read_text(encoding="utf-8"))
+        for eintrag in daten.get("fragen", []) + daten.get("faelle", []):
+            frage = eintrag.get("frage") or eintrag["folgefrage"]
+            trifft = kurzformel_genau(frage) == "language"
+            assert trifft == (eintrag.get("erwartete_art") == "language"), eintrag["id"]
+            if trifft:
+                gesehen.append(eintrag["id"])
+    assert sorted(gesehen) == ["inj-06", "verlauf-18"]
 
 
 @pytest.mark.parametrize(
@@ -1298,10 +1310,8 @@ def test_die_gold_und_kontrollfragen_sind_geladen() -> None:
 )
 def test_keine_echte_frage_wird_als_kurzformel_erkannt(eingabe: str) -> None:
     """Der Pflichttest gegen Fehltreffer. Eine Fachfrage, die hier traefe,
-    bekaeme eine feste Antwort statt einer aus den Unterlagen. Ausgenommen ist
-    nur die Sprachanweisung vom Telefon."""
-    erwartet = "language" if eingabe in _SPRACHANWEISUNGEN_DER_FALLDATEIEN else None
-    assert kurzformel_erkennen(eingabe) == erwartet
+    bekaeme eine feste Antwort statt einer aus den Unterlagen."""
+    assert kurzformel_erkennen(eingabe) is None
 
 
 def test_ein_gleichstand_zwischen_beiden_arten_gilt_als_keine(

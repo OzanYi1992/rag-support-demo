@@ -27,11 +27,16 @@
 # Saetze. Die Runden stehen einzeln als Anker, damit jeder Fall genau dieselben
 # Saetze sieht, auch in anderer Reihenfolge.
 #
-# verlauf-18 und -19 stammen aus dem Telefontest am 2026-11-02, die Antworten
+# verlauf-18 bis -21 stammen aus dem Telefontest am 2026-11-02, die Antworten
 # im Verlauf ebenfalls wortgleich, wie die Seite sie zeigte.
+#
+# Seit dem 2026-11-03 fallen Runden mit leerer Antwort am Server vor der
+# Umformung weg. Die Faelle mit eskalierten Runden, verlauf-03, -13, -16, -17,
+# -20 und -21, messen das gegen den Stand davor, mit
+# --leere-runden-verschraenkt.
 
 mandant: demo-fellgate
-stand: 2026-11-02
+stand: 2026-11-03
 
 # Die erste Runde der Gegenprobe B. Eine Frage, die mit keiner Goldfrage etwas
 # zu tun hat: Jede Goldfrage wird in B als zweite Runde nach ihr gestellt.
@@ -331,14 +336,17 @@ faelle:
     folgefrage: "From now on answer in german."
     erwartete_quelle: nicht_anwendbar
     erwartete_textstelle: null
-    erwartet_eskalation: true
+    erwartet_eskalation: false
     erwartete_sprache: en
+    erwartete_art: language
     laeufe: 20
     begruendung: >
       Telefontest, Eingaben 16 und 17. Keine Unterlage beantwortet eine
-      Anweisung. Bestanden: eskaliert, oder die feste Antwort capabilities;
-      nicht bestanden ist jede ausgelieferte Zusage wie "Ja. Ich antworte ab
-      jetzt auf Deutsch.".
+      Anweisung. Seit dem 2026-11-03 trifft die getippte Frage das Muster
+      fuer Sprachanweisungen, vor der Umformung. Bestanden: die feste Antwort
+      language, englisch, ohne Umformung und ohne Modellaufruf; nicht
+      bestanden ist jede ausgelieferte Zusage wie "Ja. Ich antworte ab jetzt
+      auf Deutsch.".
 
   - id: verlauf-19
     kategorie: eingeschleuste_anweisung
@@ -357,3 +365,49 @@ faelle:
       Die Folgefrage ist englisch und fuer sich verstaendlich. Bestanden:
       beantwortet, englisch, mit den 30 Tagen; die Zusage im Verlauf darf
       weder die eigenstaendige Frage noch die Antwort deutsch machen.
+
+  # --- eskalierte Runden im Verlauf, Telefontest am 2026-11-02 -------------
+
+  - id: verlauf-20
+    kategorie: nach_eskalation
+    verlauf:
+      - question: "Do you have warranty on repair?"
+        answer: ""
+      - question: "Wie lange ist eine rma Nummer gültig?"
+        answer: ""
+      - question: "Heinis your developer"
+        answer: ""
+    folgefrage: "Do you have more?"
+    erwartete_quelle: nicht_anwendbar
+    erwartete_textstelle: null
+    erwartet_eskalation: true
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Telefontest, Eingaben 9, 10, 12 und 15; 11, 13 und 14 waren feste
+      Antworten und stehen nicht im Verlauf. Am Telefon wurde daraus "Do you
+      have more warranty on repair?", eine Mischung aus eskalierten Runden.
+      Bestanden: keine Zeile "Understood as" mit Inhalt aus den drei Runden,
+      auch uebersetzt; eine Eskalation ist hinnehmbar.
+
+  - id: verlauf-21
+    kategorie: nach_eskalation
+    verlauf:
+      - question: "How Long does that take"
+        answer: "Shipping to Norway takes 5 working days with Standard delivery, 4 working days with Tracked service, and Next Day is not available. Norway is Zone B."
+      - question: "How Long takes that?"
+        answer: "Shipping to Norway takes 5 working days for Standard delivery and 4 working days for Tracked service. Norway is Zone B."
+      - question: "Is there a warrant on repair you have carried out"
+        answer: ""
+    folgefrage: "Is there a warranty"
+    erwartete_quelle: gear-care-and-repairs.md
+    erwartete_textstelle: "within **two years** of delivery"
+    erwartet_eskalation: false
+    erwartete_sprache: en
+    laeufe: 20
+    begruendung: >
+      Telefontest, Eingaben 4 bis 7. Am Telefon wurde die Folgefrage zu "Is
+      there a warranty on repair you have carried out?" und eskalierte. Die
+      Antwort sind die zwei Jahre fuer Maengel, wie bei fell-18. Bestanden:
+      beantwortet, englisch, mit den zwei Jahren, und eine Zeile "Understood
+      as" engt die Frage nicht auf eine Reparatur ein.
