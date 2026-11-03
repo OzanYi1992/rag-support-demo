@@ -211,6 +211,9 @@ class Answer(BaseModel):
     standalone_question_differs: bool = False
     # Wie viele fruehere Runden die Anfrage mitbrachte.
     history_turns: int = 0
+    # Wie viele davon eine leere Antwort hatten, also eskaliert waren, und vor
+    # der Umformung wegfielen.
+    history_turns_dropped: int = 0
     # "keine", "umgeformt" oder "verworfen", und bei "verworfen" der Grund:
     # "parsefehler", "leer", "zu_lang", "abgelehnt" oder "fruehere_frage".
     rewrite_status: str = UMFORMUNG_KEINE
@@ -607,6 +610,7 @@ def answer(
     umformer: Umformer | None = None,
     sprachpruefung: bool = True,
     umformungsfassung: str = UMFORMUNG_AKTUELL,
+    leere_runden_umformen: bool = False,
 ) -> Answer:
     """Beantwortet eine Frage fuer genau einen Mandanten.
 
@@ -622,8 +626,11 @@ def answer(
                 Spracherkennung des Modells, ist der Test wackelig.
 
     `history` sind die frueheren Runden des Gespraechs aus dem Browser. Der
-    Server haelt sie nicht ueber die Anfrage hinaus. Ohne Verlauf laeuft alles
-    Zeichen fuer Zeichen wie vorher. Mit Verlauf:
+    Server haelt sie nicht ueber die Anfrage hinaus. Runden mit leerer Antwort,
+    also eskalierte, fallen zuerst weg: Sie tragen keine Aussage, auf die eine
+    Folgefrage zeigen koennte, und aus ihnen holte die Umformung Fragen, die
+    niemand gestellt hatte. Bleibt keine Runde, laeuft alles wie ohne Verlauf.
+    Ohne Verlauf laeuft alles Zeichen fuer Zeichen wie vorher. Mit Verlauf:
 
       1. Entspricht die getippte Frage GENAU einer Formel, kommt die feste
          Antwort, ohne Umformung und ohne Modell.
@@ -651,13 +658,21 @@ def answer(
     `umformungsfassung` ebenfalls nur fuer Messungen: der Wortlaut des
     Umformungsprompts, alt gegen neu. Die Seite benutzt die Voreinstellung.
 
+    `leere_runden_umformen=True` ebenfalls nur fuer Messungen: Die Umformung
+    sieht auch die Runden mit leerer Antwort, wie bevor sie wegfielen.
+
     `strategy`, `llm`, `umformer` und `embeddings` sind injizierbar, damit Tests
     ohne Netz und ohne Schluessel auskommen. Keines davon hat einen
     Mandantenbezug.
     """
     aktive_settings = settings if settings is not None else get_settings()
     tenant = load_tenant(tenant_id, aktive_settings.tenants_dir)
-    verlauf = list(history or [])
+    gesendet = list(history or [])
+    verlauf = gesendet if leere_runden_umformen else [r for r in gesendet if r.answer.strip()]
+    runden: dict[str, object] = {
+        "history_turns": len(gesendet),
+        "history_turns_dropped": len(gesendet) - len(verlauf),
+    }
 
     if not verlauf:
         # --- Begruessung, Dank, Abschied, Fragen nach dem Assistenten ------
@@ -667,7 +682,9 @@ def answer(
         # Eingabe laeuft unveraendert den Weg darunter.
         art = kurzformel_erkennen(question)
         if art is not None:
-            return kurzformel_beantworten(tenant_id, tenant, art, question)
+            return kurzformel_beantworten(tenant_id, tenant, art, question).model_copy(
+                update=runden
+            )
         sprache, quelle = antwortsprache_festlegen(tenant_id, tenant, question, response_language)
         return _beantworten(
             tenant_id,
@@ -681,14 +698,12 @@ def answer(
             strategy,
             llm,
             embeddings,
-        )
+        ).model_copy(update=runden)
 
     # --- Mit Verlauf ---------------------------------------------------------
     art = kurzformel_genau(question)
     if art is not None:
-        return kurzformel_beantworten(tenant_id, tenant, art, question).model_copy(
-            update={"history_turns": len(verlauf)}
-        )
+        return kurzformel_beantworten(tenant_id, tenant, art, question).model_copy(update=runden)
 
     aktiver_umformer = (
         umformer
@@ -702,7 +717,7 @@ def answer(
     umformung = eigenstaendige_frage(
         tenant_id, tenant, verlauf, question, aktiver_umformer, umformungsfassung
     )
-    felder = umformung.als_felder(len(verlauf), question)
+    felder = {**umformung.als_felder(len(gesendet), question), **runden}
 
     art = kurzformel_erkennen(umformung.suchfrage)
     if art is not None:

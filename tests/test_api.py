@@ -1613,7 +1613,8 @@ def test_kein_text_in_einem_ereignis(
     chats = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
     assert len(chats) == 1
     assert chats[0]["tenant_id"] == "demo-acme"
-    assert chats[0]["verlauf_runden"] == 2
+    # Die zweite Runde ist eskaliert und faellt vor der Umformung weg.
+    assert (chats[0]["verlauf_runden"], chats[0]["verlauf_runden_weggelassen"]) == (2, 1)
     assert chats[0]["umformung"] == "umgeformt"
     assert chats[0]["umformung_prompt_tokens"] == 211
     assert "umformung_grund" not in chats[0]
@@ -1651,12 +1652,14 @@ def test_verworfene_umformung_steht_im_ereignis(
     assert chats[0]["umformung_grund"] == grund
 
 
-def test_eine_wiederholte_unbeantwortete_frage_steht_im_ereignis(
+def test_eine_runde_mit_leerer_antwort_faellt_weg_und_steht_im_ereignis(
     umgebung: tuple[Settings, E5Embeddings],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Ueber die Route: verworfen mit dem Grund fruehere_frage, ohne Zeile
-    "Verstanden als", und weder die getippte noch die fruehere Frage im Log."""
+    """Ueber die Route: Eine eskalierte Runde faellt vor der Umformung weg;
+    bleibt keine, gibt es keine Umformung und keine Zeile "Verstanden als". Das
+    Ereignis traegt die gesendeten und die weggelassenen Runden als Zahl, und
+    weder die getippte noch die fruehere Frage steht im Log."""
     umformer = FakeUmformer("Wie lange gilt die RMA?")
     client, llm = _client(umgebung, umformer=umformer)
     with caplog.at_level("INFO", logger="rag.api"):
@@ -1667,9 +1670,11 @@ def test_eine_wiederholte_unbeantwortete_frage_steht_im_ereignis(
     assert antwort.status_code == 200
     daten = antwort.json()
     assert daten["standalone_question"] is None and daten["standalone_question_differs"] is False
+    assert umformer.calls == []
     assert llm.calls[0][1].endswith("Frage: werisn dein entwikla")
     (chat,) = [e for e in _ereignisse(caplog) if e["ereignis"] == "chat"]
-    assert (chat["umformung"], chat["umformung_grund"]) == ("verworfen", "fruehere_frage")
+    assert (chat["verlauf_runden"], chat["verlauf_runden_weggelassen"]) == (1, 1)
+    assert chat["umformung"] == "keine" and "umformung_grund" not in chat
     log = "\n".join(eintrag.message for eintrag in caplog.records)
     assert "werisn" not in log and "RMA" not in log
 

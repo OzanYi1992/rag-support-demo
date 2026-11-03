@@ -699,6 +699,7 @@ def create_app(
         # eigenstaendige Frage.
         gespraech: dict[str, object] = {
             "verlauf_runden": ergebnis.history_turns,
+            "verlauf_runden_weggelassen": ergebnis.history_turns_dropped,
             "umformung": ergebnis.rewrite_status,
             "umformung_ms": ergebnis.latency_ms_rewrite,
             "umformung_prompt_tokens": ergebnis.rewrite_prompt_tokens,

@@ -277,7 +277,9 @@ def test_abgelehnte_umformung_faellt_auf_die_originalfrage_zurueck(
 
 
 # Der Verlauf vor "heinis your developer" im Telefontest am 2026-10-22: zwei
-# eskalierte Runden um eine beantwortete.
+# eskalierte Runden um eine beantwortete. Auf dem Weg der Seite fallen die
+# eskalierten vor der Umformung weg; die Tests der Pruefung auf fruehere Fragen
+# laufen deshalb mit dem Schalter fuer die Messung, der sie der Umformung laesst.
 VERLAUF_TELEFON = [
     Runde(question="Is there a warranty on a repair you have carried out?", answer=""),
     Runde(
@@ -300,9 +302,10 @@ VERLAUF_TELEFON = [
 def test_eine_wiederholte_unbeantwortete_frage_wird_verworfen(
     umgebung: tuple[Settings, E5Embeddings], gesucht: list[str], eigenstaendig: str
 ) -> None:
-    """Die Umformung gibt eine fruehere, eskalierte Frage zurueck: verworfen mit
-    dem Grund fruehere_frage. Gesucht und geantwortet wird mit der getippten
-    Frage, und es gibt keine Zeile "Understood as"."""
+    """Mit den eskalierten Runden in der Umformung, wie vor ihrem Wegfall: Die
+    Umformung gibt eine fruehere, eskalierte Frage zurueck, verworfen mit dem
+    Grund fruehere_frage. Gesucht und geantwortet wird mit der getippten Frage,
+    und es gibt keine Zeile "Understood as"."""
     settings, embeddings = umgebung
     llm = FakeLlm(parsed=_antwort_en())
 
@@ -314,6 +317,7 @@ def test_eine_wiederholte_unbeantwortete_frage_wird_verworfen(
         llm=llm,
         history=VERLAUF_TELEFON,
         umformer=FakeUmformer(eigenstaendig),
+        leere_runden_umformen=True,
     )
 
     assert gesucht == ["heinis your developer"]
@@ -362,11 +366,127 @@ def test_sonst_bleibt_die_umformung(
         llm=FakeLlm(parsed=_antwort_en()),
         history=verlauf,
         umformer=FakeUmformer(eigenstaendig),
+        leere_runden_umformen=True,
     )
     assert (a.rewrite_status, a.rewrite_reason) == ("umgeformt", None)
     assert a.standalone_question == eigenstaendig
     # "Who is your developer?" ist eine feste Antwort, ohne Suche.
     assert gesucht == ([] if a.kind == "identity" else [eigenstaendig])
+
+
+# --- Runden mit leerer Antwort fallen vor der Umformung weg -------------------
+
+# Die drei eskalierten Runden vor "Do you have more?" im Telefontest am
+# 2026-11-02. Die Umformung machte daraus "Do you have more warranty on repair?".
+VERLAUF_ESKALIERT = [
+    Runde(question="Do you have warranty on repair?", answer=""),
+    Runde(question="Wie lange ist eine rma Nummer gültig?", answer=""),
+    Runde(question="Heinis your developer", answer=""),
+]
+
+
+def test_runden_mit_leerer_antwort_fallen_vor_der_umformung_weg(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Pflichttest. Die Umformung sieht nur die beantworteten Runden; im Prompt
+    steht keine eskalierte Frage. Beide Zahlen stehen in der Antwort. Gegenprobe
+    mit dem Schalter fuer die Messung: Dann sieht sie alle."""
+    settings, embeddings = umgebung
+    verlauf = [*VERLAUF, Runde(question="Do you offer a student discount?", answer="  ")]
+
+    umformer = FakeUmformer("How long does delivery to Norway take?")
+    a = answer(
+        "demo-englisch",
+        "how long does that take?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=FakeLlm(parsed=_antwort_en()),
+        history=verlauf,
+        umformer=umformer,
+    )
+    _, prompt = umformer.calls[0]
+    assert "Do you ship to Norway?" in prompt and "student" not in prompt
+    assert (a.history_turns, a.history_turns_dropped, a.rewrite_status) == (2, 1, "umgeformt")
+
+    alle = FakeUmformer("How long does delivery to Norway take?")
+    b = answer(
+        "demo-englisch",
+        "how long does that take?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=FakeLlm(parsed=_antwort_en()),
+        history=verlauf,
+        umformer=alle,
+        leere_runden_umformen=True,
+    )
+    _, prompt = alle.calls[0]
+    assert "Do you ship to Norway?" in prompt and "student" in prompt
+    assert (b.history_turns, b.history_turns_dropped) == (2, 0)
+
+
+def test_ohne_beantwortete_runde_keine_umformung(
+    umgebung: tuple[Settings, E5Embeddings], gesucht: list[str]
+) -> None:
+    """Der Fall vom Telefon: nur eskalierte Runden, dann "Do you have more?".
+    Keine Umformung, keine Zeile; gesucht und geantwortet wird mit der
+    getippten Frage, wie ohne Gespraech. Der Umformer wirft bei jedem Zugriff."""
+    settings, embeddings = umgebung
+    llm = FakeLlm(parsed=_antwort_en())
+    a = answer(
+        "demo-englisch",
+        "Do you have more?",
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+        history=VERLAUF_ESKALIERT,
+        umformer=_Verboten("Umformer"),  # type: ignore[arg-type]
+    )
+    assert gesucht == ["Do you have more?"]
+    assert llm.calls[0][1].endswith("Question: Do you have more?")
+    assert (a.rewrite_status, a.standalone_question, a.standalone_question_differs) == (
+        "keine",
+        None,
+        False,
+    )
+    assert (a.history_turns, a.history_turns_dropped) == (3, 3)
+
+
+def test_nach_leeren_runden_greift_die_toleranz_auf_die_getippte_frage(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Bleibt keine Runde, laeuft die Frage wie ohne Gespraech, also auch mit
+    der Toleranz der festen Antworten: "WHO Developer you" liegt zu "who
+    developed you" im Abstand 1 und ergibt identity, ohne Umformung, Suche und
+    Modell."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-englisch",
+        "WHO Developer you",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=VERLAUF_ESKALIERT[:2],
+        umformer=_Verboten("Umformer"),  # type: ignore[arg-type]
+    )
+    assert (a.kind, a.rewrite_status) == ("identity", "keine")
+    assert (a.history_turns, a.history_turns_dropped) == (2, 2)
+
+
+def test_eine_genaue_formel_traegt_die_zahl_der_runden(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Auch eine feste Antwort im Gespraech traegt beide Zahlen."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-englisch",
+        "Thanks",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=[*VERLAUF, *VERLAUF_ESKALIERT[:1]],
+        umformer=_Verboten("Umformer"),  # type: ignore[arg-type]
+    )
+    assert (a.kind, a.history_turns, a.history_turns_dropped) == ("thanks", 2, 1)
 
 
 def test_die_pruefung_auf_fruehere_fragen_prueft_den_mandanten(
