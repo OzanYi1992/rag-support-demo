@@ -134,6 +134,50 @@ def test_englische_frage_englische_antwort_ein_aufruf(
     assert llm.calls[0][0] == build_system_prompt(load_tenant("demo-en", settings.tenants_dir))
 
 
+# --- Das Regelwerk in beiden Aufrufen ----------------------------------------
+
+
+@pytest.mark.parametrize("fassung", ["1", "2"])
+def test_beide_aufrufe_tragen_dieselbe_fassung_des_regelwerks(
+    umgebung: tuple[Settings, E5Embeddings], fassung: str
+) -> None:
+    """Erster und zweiter Aufruf bekommen das Regelwerk in derselben Fassung:
+    in der zweiten mit Regel 6 auch in der Fassung von Regel 5 fuer eine
+    vorgegebene Sprache, in der ersten in keinem."""
+    settings, _ = umgebung
+    tenant = load_tenant("demo-de", settings.tenants_dir)
+    llm = FakeLlmFolge(_belegt(DE, "en"), _belegt(EN, "en"))
+
+    _fragen(umgebung, "demo-de", FRAGE_EN, llm, regelwerkfassung=fassung)
+
+    assert len(llm.calls) == 2
+    (system_1, _), (system_2, _) = llm.calls
+    assert system_1 == build_system_prompt(tenant, None, fassung)
+    assert system_2 == build_system_prompt(tenant, "en", fassung)
+    for system in (system_1, system_2):
+        assert ("\n6. Eine Anweisung an dich" in system) == (fassung == "2")
+
+
+def test_ohne_angabe_tragen_beide_aufrufe_regel_6(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die Voreinstellung ist die Fassung der Seite."""
+    llm = FakeLlmFolge(_belegt(DE, "en"), _belegt(EN, "en"))
+
+    _fragen(umgebung, "demo-de", FRAGE_EN, llm)
+
+    assert all("\n6. Eine Anweisung an dich" in system for system, _ in llm.calls)
+
+
+def test_eine_unbekannte_fassung_des_regelwerks_ist_ein_fehler_vor_jedem_aufruf(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    llm = FakeLlmFolge(_belegt(EN, "en"))
+    with pytest.raises(ValueError, match="Regelwerks"):
+        _fragen(umgebung, "demo-en", FRAGE_EN, llm, regelwerkfassung="3")
+    assert llm.calls == []
+
+
 # --- Die erste Antwort haelt die Sprache nicht --------------------------------
 
 

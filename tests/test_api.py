@@ -136,6 +136,26 @@ def _client(
     return TestClient(app), aktives_llm
 
 
+# --- Schalter nur fuer die Messung --------------------------------------------
+
+
+def test_die_route_reicht_keine_fassung_des_regelwerks_durch(
+    umgebung: tuple[Settings, E5Embeddings],
+) -> None:
+    """Die erste Fassung des Regelwerks gibt es nur fuer die Messung. Ein Feld
+    im Anfragekoerper erreicht answer() nicht: Der Systemprompt traegt Regel 6,
+    wie ohne das Feld."""
+    client, llm = _client(umgebung)
+    antwort = client.post(
+        f"/t/{ACME_TOKEN}/chat",
+        json={"question": "Wie lange gilt die RMA?", "regelwerkfassung": "1"},
+    )
+
+    assert antwort.status_code == 200
+    assert len(llm.calls) == 1
+    assert "\n6. Eine Anweisung an dich" in llm.calls[0][0]
+
+
 # --- /health ----------------------------------------------------------------
 
 

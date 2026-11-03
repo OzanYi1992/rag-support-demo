@@ -34,6 +34,8 @@ from app.llm import (
     build_umformer,
 )
 from app.prompts import (
+    REGELWERK_AKTUELL,
+    REGELWERKFASSUNGEN,
     UMFORMUNG_AKTUELL,
     GroundedAnswer,
     Runde,
@@ -611,6 +613,7 @@ def answer(
     sprachpruefung: bool = True,
     umformungsfassung: str = UMFORMUNG_AKTUELL,
     leere_runden_umformen: bool = False,
+    regelwerkfassung: str = REGELWERK_AKTUELL,
 ) -> Answer:
     """Beantwortet eine Frage fuer genau einen Mandanten.
 
@@ -663,10 +666,16 @@ def answer(
     `leere_runden_umformen=True` ebenfalls nur fuer Messungen: Die Umformung
     sieht auch die Runden mit leerer Antwort, wie bevor sie wegfielen.
 
+    `regelwerkfassung` ebenfalls nur fuer Messungen: das Regelwerk der Antwort,
+    "1" ohne und "2" mit Regel 6, fuer den ersten wie den zweiten Aufruf. Eine
+    unbekannte Fassung ist ein Fehler, bevor irgendetwas geschieht.
+
     `strategy`, `llm`, `umformer` und `embeddings` sind injizierbar, damit Tests
     ohne Netz und ohne Schluessel auskommen. Keines davon hat einen
     Mandantenbezug.
     """
+    if regelwerkfassung not in REGELWERKFASSUNGEN:
+        raise ValueError(f"Unbekannte Fassung des Regelwerks: {regelwerkfassung!r}")
     aktive_settings = settings if settings is not None else get_settings()
     tenant = load_tenant(tenant_id, aktive_settings.tenants_dir)
     gesendet = list(history or [])
@@ -700,6 +709,7 @@ def answer(
             strategy,
             llm,
             embeddings,
+            regelwerkfassung,
         ).model_copy(update=runden)
 
     # --- Mit Verlauf ---------------------------------------------------------
@@ -741,6 +751,7 @@ def answer(
         strategy,
         llm,
         embeddings,
+        regelwerkfassung,
     ).model_copy(update=felder)
 
 
@@ -756,6 +767,7 @@ def _beantworten(
     strategy: EscalationStrategy | None,
     llm: LlmClient | None,
     embeddings: E5Embeddings | None,
+    regelwerkfassung: str = REGELWERK_AKTUELL,
 ) -> Answer:
     """Der Weg ueber Retrieval und Modell, mit beiden Toren.
 
@@ -829,7 +841,7 @@ def _beantworten(
             answer_model=antwortmodell_fuer(tenant.language),
         )
     )
-    system_prompt = build_system_prompt(tenant, response_language)
+    system_prompt = build_system_prompt(tenant, response_language, regelwerkfassung)
     user_prompt = build_user_prompt(frage, treffer, tenant.language)
 
     start = time.perf_counter()
@@ -901,7 +913,7 @@ def _beantworten(
         gehalten = sprache_bestimmen(ausgeliefert.text) == antwortsprache
         if not gehalten and sprachpruefung:
             zweiter = _sprache_nachfordern(
-                tenant_id, tenant, aktives_llm, user_prompt, antwortsprache
+                tenant_id, tenant, aktives_llm, user_prompt, antwortsprache, regelwerkfassung
             )
             if zweiter.belegt is not None:
                 ausgeliefert = _belegt_aufbereiten(
@@ -1105,13 +1117,15 @@ def _sprache_nachfordern(
     llm: LlmClient,
     user_prompt: str,
     antwortsprache: str,
+    regelwerkfassung: str = REGELWERK_AKTUELL,
 ) -> _Nachforderung:
     """Der zweite Aufruf, wenn die erste belegte Antwort die festgelegte
     Sprache nicht haelt.
 
     Derselbe Client und derselbe Userprompt, also dieselben Treffer und dieselbe
     Frage. Nur der Systemprompt traegt die Fassung der Sprachregel fuer eine
-    vorgegebene Sprache; einen neuen Prompttext gibt es nicht.
+    vorgegebene Sprache; einen neuen Prompttext gibt es nicht. Das Regelwerk ist
+    in derselben Fassung wie beim ersten Aufruf, mit Regel 6 auch hier.
 
     Liefert er keine belegte Antwort, bleibt die erste: wenn er eskaliert, wenn
     seine Struktur nicht lesbar ist, wenn der Anbieter ihn ablehnt oder nicht
@@ -1124,7 +1138,7 @@ def _sprache_nachfordern(
     """
     if tenant.slug != tenant_id:
         raise ValueError("tenant passt nicht zur tenant_id.")
-    system_prompt = build_system_prompt(tenant, antwortsprache)
+    system_prompt = build_system_prompt(tenant, antwortsprache, regelwerkfassung)
 
     start = time.perf_counter()
     try:

@@ -1725,9 +1725,10 @@ def test_die_vierte_fassung_ist_die_dritte_ohne_regel_6() -> None:
 
 
 def test_regelwerk_und_schema_der_antwort_bleiben_zeichengleich() -> None:
-    """Nur die Umformung hat einen neuen Wortlaut. Regelwerk, Rahmen und
-    Strukturschema der Antwort, je Sprache als sha256, wie vor der dritten
-    Fassung."""
+    """Regel 1 bis 5, Zusatz, Rahmen und Strukturschema der Antwort, je Sprache
+    als sha256, wie vor der dritten Fassung der Umformung. Regel 6 steht als
+    eigener Teil daneben und ist hier nicht gehasht: Diese Teile sind in beiden
+    Fassungen des Regelwerks dieselben."""
     erwartet = {
         "de": (
             "82d964a6b466225260f84cf9cbd121d5a86214d2ae7a42483ba1155b72122794",
@@ -1746,3 +1747,50 @@ def test_regelwerk_und_schema_der_antwort_bleiben_zeichengleich() -> None:
         )
         assert hashlib.sha256("\x00".join(teile).encode()).hexdigest() == regeln_wert, sprache
         assert hashlib.sha256(schema.encode()).hexdigest() == schema_wert, sprache
+
+
+def test_die_erste_fassung_des_regelwerks_ist_der_bezug_der_messung() -> None:
+    """Der Bezug der Messung alt gegen neu: sha256 des ganzen Systemprompts der
+    ersten Fassung fuer die drei Demomandanten, ohne Vorgabe und mit beiden
+    vorgegebenen Sprachen, gleich dem Stand vor Regel 6. Aendert sich eine
+    tenant.yaml, faellt dieser Test, und der Bezug ist neu festzuhalten."""
+    from app.prompts import build_system_prompt
+    from app.tenants import load_tenant
+
+    erwartet = {
+        ("demo-fellgate", None): "97a3ddc757de1695223b2395907379b607e16a0e888037aabb5961613d61f292",
+        ("demo-fellgate", "en"): "5b394027380223137c7c7db4f7014c783eccedb8cabdbf7c8cbeba9ee03adb0e",
+        ("demo-fellgate", "de"): "a85ba1be88275c989190fcb4280254a04c65be725b1e2bc6458835f41ae7995d",
+        ("demo-acme", None): "bc7525900b6273faf95060603f75caff2f4a068de5c7253de869bd341d845106",
+        ("demo-acme", "en"): "5eaccc7e31f27bd42418f0bb2bdd922de12bf019a81b80bc8ea0f520443e82da",
+        ("demo-acme", "de"): "3d50caee148cce598c44c910e2567a19b7f8f38fabb87f1839e6058948d0d99e",
+        ("demo-nordwind", None): "7acde394f1087fa5bf5cfffac09e7e2cea0f47fdf42f9c586dec946c5ded17f0",
+        ("demo-nordwind", "en"): "b2d3592a834f82daec5eb7fb9a9b6313f706d3a069939811d6e7511f854cc5d2",
+        ("demo-nordwind", "de"): "b065ebde90ea94dfd5fe0d5d6d97c609916800f867b9b3b6f92af682575049cf",
+    }
+    wurzel = Path(__file__).resolve().parents[1] / "tenants"
+    for (slug, vorgabe), wert in erwartet.items():
+        tenant = load_tenant(slug, wurzel)
+        erste = build_system_prompt(tenant, vorgabe, "1")
+        assert hashlib.sha256(erste.encode()).hexdigest() == wert, (slug, vorgabe)
+        # Die zweite Fassung ist die erste mit Regel 6 vor dem Zusatz.
+        zweite = build_system_prompt(tenant, vorgabe)
+        regel_6 = _REGELWERK[tenant.language].anweisung
+        assert zweite.replace("\n" + regel_6, "", 1) == erste, (slug, vorgabe)
+        assert zweite.index(regel_6) < zweite.index(_REGELWERK[tenant.language].zusatz.strip())
+
+
+def test_eine_unbekannte_fassung_des_regelwerks_ist_ein_fehler() -> None:
+    from app.prompts import build_system_prompt
+    from app.tenants import TenantConfig
+
+    tenant = TenantConfig(
+        slug="t",
+        display_name="T",
+        language="en",
+        topics="shipping",
+        escalation_message="nothing found",
+        url_token="test-token-1234567890",
+    )
+    with pytest.raises(ValueError, match="Regelwerks"):
+        build_system_prompt(tenant, None, "3")
