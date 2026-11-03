@@ -928,9 +928,15 @@ def _arten(formeln: Kurzformeln) -> tuple[tuple[str, tuple[str, ...]], ...]:
     )
 
 
+# Formeln, die nur genau treffen, ohne Toleranz: Im Abstand 1 oder 2 liegen
+# dort gewoehnliche Fragen nach dem Sortiment, "What dogs do you have?", "What
+# docks do you have?" oder "welche Docks hast du".
+NUR_GENAU: frozenset[str] = frozenset({"what docs do you have", "welche doku hast du"})
+
+
 def _nach_tippfehler(normal: str) -> str | None:
     """Die Frage nach dem Assistenten, deren Formel der Eingabe am naechsten
-    liegt, innerhalb der Toleranz.
+    liegt, innerhalb der Toleranz. Formeln aus `NUR_GENAU` zaehlen hier nicht.
 
     Treffen beide Arten mit demselben kleinsten Abstand, gilt keine: Dann ist
     nicht zu entscheiden, was gemeint ist, und die Eingabe laeuft den normalen
@@ -944,6 +950,8 @@ def _nach_tippfehler(normal: str) -> str | None:
         ):
             for formel in liste:
                 eintrag = normalisieren(formel)
+                if eintrag in NUR_GENAU:
+                    continue
                 grenze = tippfehler_toleranz(min(len(normal), len(eintrag)))
                 if abs(len(normal) - len(eintrag)) > grenze:
                     continue

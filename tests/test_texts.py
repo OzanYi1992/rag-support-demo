@@ -914,6 +914,31 @@ def test_die_fachfragen_aus_dem_telefontest_bleiben_fachfragen(eingabe: str) -> 
     assert kurzformel_erkennen(eingabe) is None
 
 
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        "What dogs do you have?",
+        "What docks do you have?",
+        "What decks do you have?",
+        "welche Docks hast du",
+        # Der Preis: auch Tippfehler in diesen beiden Formeln treffen nicht.
+        "What doc do you have?",
+        "welche Dokus hast du",
+    ],
+)
+def test_zwei_formeln_fuer_die_unterlagen_treffen_nur_genau(eingabe: str) -> None:
+    """ "what docs do you have" und "welche doku hast du" ohne Toleranz: Im
+    Abstand 1 oder 2 liegen dort Fragen nach dem Sortiment. Gegenprobe: genau
+    getippt treffen beide, und beide stehen in der Liste."""
+    from app.texts import NUR_GENAU
+
+    assert kurzformel_erkennen(eingabe) is None
+    for formel in NUR_GENAU:
+        assert any(formel in f.faehigkeiten for f in KURZFORMELN.values()), formel
+    assert kurzformel_erkennen("What docs do you have?") == "capabilities"
+    assert kurzformel_erkennen("Welche Doku hast du?") == "capabilities"
+
+
 def test_wie_getippt_sieht_aus_wie_ein_mensch_tippt() -> None:
     """Gegenprobe zur Hilfsfunktion des Tests oben."""
     assert _wie_getippt("sind sie ein bot", "de") == "Sind Sie ein Bot?"
