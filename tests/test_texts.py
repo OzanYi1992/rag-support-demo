@@ -31,6 +31,7 @@ from app.texts import (
     _DEUTSCHE_ZEICHEN,
     _MARKER,
     _SPRACHNAMEN,
+    ANREDE,
     JAVASCRIPT_SCHLUESSEL,
     KURZFORMELN,
     SCHEMABESCHREIBUNGEN,
@@ -42,6 +43,7 @@ from app.texts import (
     Texte,
     kurzformel_erkennen,
     kurzformel_genau,
+    kurzformel_vor_umformung,
     levenshtein_abstand,
     normalisieren,
     passt_zur_sprache,
@@ -1011,6 +1013,139 @@ def test_ausserhalb_der_toleranz_trifft_nichts(eingabe: str) -> None:
     assert kurzformel_erkennen(eingabe) is None
 
 
+# --- Vor der Umformung: identity mit Anrede ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        # Telefon 2026-11-02 und 2026-11-03, Abstand 1 zu "who developed you".
+        "WHO Developer you",
+        "who developer you",
+        "Who develped you",
+        "Who creatd you",
+        "Are you a bott?",
+        "Are you a robbot?",
+        # Telefon 2026-10-19, Abstand 1 zu "what is your origin".
+        "What is you origin",
+        "Who is you developer",
+        "Wer hat dich entwicklet",
+        "Bist du ein Bott?",
+        "Wer ist dein Entwikler",
+    ],
+)
+def test_vor_der_umformung_traegt_die_toleranz_fragen_mit_anrede(eingabe: str) -> None:
+    """Im Gespraech, bevor umgeformt wird: Eine Frage nach dem Assistenten, die
+    ihn anredet, bekommt identity auch mit Tippfehler."""
+    assert kurzformel_genau(eingabe) is None
+    assert kurzformel_vor_umformung(eingabe) == "identity"
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        # Abstand 1 zu Formeln ohne Anrede; ohne Verlauf treffen sie identity.
+        "Is this a boot?",
+        "Ist das ein Boot?",
+        # "sie" ist auch die dritte Person (Befund der Cowork-Sitzung).
+        "Sind sie ein Set?",
+        "Sind sie ein Kit?",
+        "Sind sie ein Top?",
+        "Wer sind die?",
+        # capabilities gilt vor der Umformung nur genau.
+        "How can you tell?",
+        "How do ou help?",
+        # Kurze Folgefragen mit Bezug.
+        "Who are they?",
+        "Who made it?",
+        "Who built it?",
+        "Who makes them?",
+        "Who is that?",
+        "What are yours?",
+        "Are you sure?",
+        "Are you open?",
+        "Is this it?",
+        "Which model is that?",
+        "What is the origin?",
+        "Wer hat das gemacht?",
+        "Wer bist du denn?",
+        "Bist du sicher?",
+        # Ausserhalb der Toleranz, wie ohne Verlauf: Abstand 2 bei 13 Zeichen.
+        "Who builded you",
+    ],
+)
+def test_vor_der_umformung_trifft_eine_folgefrage_ohne_anrede_nichts(eingabe: str) -> None:
+    assert kurzformel_vor_umformung(eingabe) is None
+
+
+def test_vor_der_umformung_gelten_formeln_ohne_anrede_nur_genau() -> None:
+    """Die identity-Formeln ohne ein Wort aus ANREDE, woertlich. Sie treffen vor
+    der Umformung nur genau; die sieben mit "sie" gehoeren dazu."""
+    ohne = sorted(
+        {
+            normalisieren(f)
+            for formeln in KURZFORMELN.values()
+            for f in formeln.identitaet
+            if not ANREDE & set(normalisieren(f).split())
+        }
+    )
+    assert ANREDE == frozenset({"you", "your", "du", "dich", "dein"})
+    assert ohne == [
+        "am i talking to a bot",
+        "am i talking to a human",
+        "am i talking to a person",
+        "am i talking to a real person",
+        "is this a bot",
+        "is this a real person",
+        "is this ai",
+        "ist das ein bot",
+        "ist das eine ki",
+        "rede ich mit einem menschen",
+        "sind sie chatgpt",
+        "sind sie ein bot",
+        "sind sie ein mensch",
+        "sind sie ein roboter",
+        "sind sie eine ki",
+        "spreche ich mit einem bot",
+        "spreche ich mit einem menschen",
+        "wer hat sie programmiert",
+        "wer sind sie",
+    ]
+    # Gegenprobe: genau getippt treffen sie weiter.
+    for formel in ohne:
+        assert kurzformel_vor_umformung(formel) == "identity", formel
+
+
+def test_vor_der_umformung_schickt_ein_gleichstand_in_die_umformung(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Liegt eine capabilities-Formel gleich nah oder naeher, gilt vor der
+    Umformung keine Art: capabilities zaehlt dort nur genau. Mit eingespeisten
+    Listen, weil die echten keinen solchen Fall haben."""
+    from app import texts
+    from app.texts import Kurzformeln
+
+    leer: tuple[str, ...] = ()
+    monkeypatch.setattr(
+        texts,
+        "KURZFORMELN",
+        {
+            "en": Kurzformeln(
+                begruessung=leer,
+                dank=leer,
+                abschied=leer,
+                bestaetigung=leer,
+                faehigkeiten=("abcdefgh you x",),
+                identitaet=("abcdefgh you y",),
+            )
+        },
+    )
+    assert kurzformel_vor_umformung("abcdefgh you z") is None
+    assert kurzformel_vor_umformung("abcdefgh you xx") is None
+    # Gegenprobe: identity naeher.
+    assert kurzformel_vor_umformung("abcdefgh you yy") == "identity"
+
+
 # --- Sprachanweisungen -------------------------------------------------------
 
 # Was treffen soll, mit der Sprache des Textes. Ozans fuenf Beispiele, die
@@ -1310,8 +1445,10 @@ def test_eine_sprachanweisung_in_den_falldateien_erwartet_die_feste_antwort() ->
 )
 def test_keine_echte_frage_wird_als_kurzformel_erkannt(eingabe: str) -> None:
     """Der Pflichttest gegen Fehltreffer. Eine Fachfrage, die hier traefe,
-    bekaeme eine feste Antwort statt einer aus den Unterlagen."""
+    bekaeme eine feste Antwort statt einer aus den Unterlagen, ohne Verlauf wie
+    im Gespraech vor der Umformung."""
     assert kurzformel_erkennen(eingabe) is None
+    assert kurzformel_vor_umformung(eingabe) is None
 
 
 def test_ein_gleichstand_zwischen_beiden_arten_gilt_als_keine(

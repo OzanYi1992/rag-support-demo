@@ -55,7 +55,7 @@ from app.texts import (
     ART_IDENTITAET,
     ART_SPRACHE,
     kurzformel_erkennen,
-    kurzformel_genau,
+    kurzformel_vor_umformung,
     normalisieren,
     sprachanweisung_erkennen,
     texte_fuer,
@@ -632,8 +632,10 @@ def answer(
     niemand gestellt hatte. Bleibt keine Runde, laeuft alles wie ohne Verlauf.
     Ohne Verlauf laeuft alles Zeichen fuer Zeichen wie vorher. Mit Verlauf:
 
-      1. Entspricht die getippte Frage GENAU einer Formel, kommt die feste
-         Antwort, ohne Umformung und ohne Modell.
+      1. Entspricht die getippte Frage GENAU einer Formel, oder liegt sie in
+         der Toleranz einer Frage nach dem Assistenten, die ihn anredet, kommt
+         die feste Antwort, ohne Umformung und ohne Modell, siehe
+         `kurzformel_vor_umformung`.
       2. Sonst wird die Frage umgeformt, siehe `eigenstaendige_frage`.
       3. Dann laeuft die Erkennung mit Toleranz auf die Frage, die sonst in die
          Suche ginge. Trifft sie, kommt die feste Antwort ohne Suche und ohne
@@ -701,7 +703,7 @@ def answer(
         ).model_copy(update=runden)
 
     # --- Mit Verlauf ---------------------------------------------------------
-    art = kurzformel_genau(question)
+    art = kurzformel_vor_umformung(question)
     if art is not None:
         return kurzformel_beantworten(tenant_id, tenant, art, question).model_copy(update=runden)
 

@@ -933,14 +933,28 @@ def _arten(formeln: Kurzformeln) -> tuple[tuple[str, tuple[str, ...]], ...]:
 # docks do you have?" oder "welche Docks hast du".
 NUR_GENAU: frozenset[str] = frozenset({"what docs do you have", "welche doku hast du"})
 
+# Woerter, mit denen eine Frage nach dem Assistenten ihn anredet. Im Gespraech
+# gilt die Toleranz schon vor der Umformung, aber nur fuer identity-Formeln mit
+# einem dieser Woerter: Ihr Bezug haengt nicht am Gespraech. "is this a bot"
+# zeigt dagegen mit "this" auf etwas und liegt im Abstand 1 zu "Is this a
+# boot?". "sie" fehlt mit Absicht: Es ist auch die dritte Person und zeigt im
+# Gespraech auf Produkte, "Sind sie ein Set?" liegt zu "sind sie ein bot" im
+# Abstand 2.
+ANREDE: frozenset[str] = frozenset({"you", "your", "du", "dich", "dein"})
 
-def _nach_tippfehler(normal: str) -> str | None:
+
+def _nach_tippfehler(normal: str, nur_anrede: bool = False) -> str | None:
     """Die Frage nach dem Assistenten, deren Formel der Eingabe am naechsten
     liegt, innerhalb der Toleranz. Formeln aus `NUR_GENAU` zaehlen hier nicht.
 
     Treffen beide Arten mit demselben kleinsten Abstand, gilt keine: Dann ist
     nicht zu entscheiden, was gemeint ist, und die Eingabe laeuft den normalen
     Weg.
+
+    Mit `nur_anrede` zaehlen von identity nur die Formeln mit einem Wort aus
+    `ANREDE`, und das Ergebnis ist identity oder nichts. capabilities zaehlt
+    weiter mit, damit ein Gleichstand oder eine naeher liegende capabilities-
+    Formel die Eingabe in die Umformung schickt.
     """
     bester: dict[str, int] = {}
     for formeln in KURZFORMELN.values():
@@ -952,6 +966,8 @@ def _nach_tippfehler(normal: str) -> str | None:
                 eintrag = normalisieren(formel)
                 if eintrag in NUR_GENAU:
                     continue
+                if nur_anrede and art == ART_IDENTITAET and not ANREDE & set(eintrag.split()):
+                    continue
                 grenze = tippfehler_toleranz(min(len(normal), len(eintrag)))
                 if abs(len(normal) - len(eintrag)) > grenze:
                     continue
@@ -962,16 +978,19 @@ def _nach_tippfehler(normal: str) -> str | None:
         return None
     kleinster = min(bester.values())
     arten = [art for art, abstand in bester.items() if abstand == kleinster]
-    return arten[0] if len(arten) == 1 else None
+    if len(arten) != 1:
+        return None
+    if nur_anrede and arten[0] != ART_IDENTITAET:
+        return None
+    return arten[0]
 
 
 def kurzformel_genau(eingabe: str) -> str | None:
     """Die Art der Eingabe, wenn sie GENAU einer Formel entspricht, sonst None.
 
     Ueber alle Arten und alle Sprachen, ohne Toleranz fuer Tippfehler. Im
-    Gespraech laeuft zuerst nur diese Pruefung auf die getippte Frage: Eine
-    kurze Folgefrage wie "How can you tell?" liegt innerhalb der Toleranz einer
-    Formel, meint aber die vorige Antwort und gehoert in die Umformung.
+    Gespraech laeuft diese Pruefung zuerst auf die getippte Frage, siehe
+    `kurzformel_vor_umformung`.
 
     Nach den Listen das Muster fuer Sprachanweisungen, ebenfalls ohne Toleranz;
     es trifft keine Formel der Listen.
@@ -1008,6 +1027,29 @@ def kurzformel_erkennen(eingabe: str) -> str | None:
     if not normal:
         return None
     return _nach_tippfehler(normal)
+
+
+def kurzformel_vor_umformung(eingabe: str) -> str | None:
+    """Die Art der getippten Frage im Gespraech, bevor umgeformt wird.
+
+    Zuerst genau, ueber alle Arten, wie `kurzformel_genau`. Danach mit Toleranz,
+    aber nur fuer identity-Formeln, die den Assistenten anreden (`ANREDE`):
+    "WHO Developer you" liegt zu "who developed you" im Abstand 1 und bekam am
+    Telefon nach der Umformung "Who is the developer?", das keine Formel ist.
+    capabilities bleibt hier genau, weil eine kurze Folgefrage wie "How can you
+    tell?" innerhalb der Toleranz von "how can you help" liegt, aber die vorige
+    Antwort meint und in die Umformung gehoert.
+
+    Beruehrt nur die Eingabe und den Katalog, keinen Mandanteninhalt, und nimmt
+    deshalb keine tenant_id.
+    """
+    genau = kurzformel_genau(eingabe)
+    if genau is not None:
+        return genau
+    normal = normalisieren(eingabe)
+    if not normal:
+        return None
+    return _nach_tippfehler(normal, nur_anrede=True)
 
 
 # Kurze Markerlisten fuer die Sprachpruefung unten. Bewusst Funktionswoerter:

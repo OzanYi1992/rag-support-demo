@@ -472,6 +472,99 @@ def test_nach_leeren_runden_greift_die_toleranz_auf_die_getippte_frage(
     assert (a.history_turns, a.history_turns_dropped) == (2, 2)
 
 
+# Runden 10 bis 12 vom Telefon am 2026-11-03, wie der Browser sie schickte:
+# zwei beantwortete, die dritte eskaliert. Danach zweimal "WHO Developer you".
+VERLAUF_GARANTIE = [
+    Runde(
+        question="Is there a warranty?",
+        answer=(
+            "Yes. Faults reported within two years of delivery are repaired or replaced at no "
+            "charge, and repairs are carried out whether or not the item is still under warranty."
+        ),
+    ),
+    Runde(
+        question="On repair too?",
+        answer=(
+            "Yes. Repairs are carried out in our own workshop whether or not the item is still "
+            "under warranty."
+        ),
+    ),
+    Runde(question="Wie lange ist eine rma Nummer gültig?", answer=""),
+]
+
+
+@pytest.mark.parametrize(
+    ("verlauf", "weggelassen"),
+    [
+        # Eingabe 13: drei Runden, eine eskaliert.
+        (VERLAUF_GARANTIE, 1),
+        # Eingabe 14: die zweite beantwortete Runde, die eskalierte und die
+        # eskalierte Eingabe 13.
+        ([*VERLAUF_GARANTIE[1:], Runde(question="WHO Developer you", answer="")], 2),
+    ],
+)
+def test_nach_beantworteten_runden_ergibt_who_developer_you_identity(
+    umgebung: tuple[Settings, E5Embeddings], verlauf: list[Runde], weggelassen: int
+) -> None:
+    """Pflichttest. Am Telefon blieben vor "WHO Developer you" beantwortete
+    Runden, die Umformung machte "Who is the developer?", und die Frage
+    eskalierte. Die getippte Frage liegt zu "who developed you" im Abstand 1,
+    und die Formel redet den Assistenten an: identity schon vor der Umformung.
+    Umformer, Embedder und Modell werfen bei jedem Zugriff."""
+    settings, _ = umgebung
+    a = answer(
+        "demo-englisch",
+        "WHO Developer you",
+        settings=settings,
+        embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
+        llm=_Verboten("Modell"),  # type: ignore[arg-type]
+        history=verlauf,
+        umformer=_Verboten("Umformer"),  # type: ignore[arg-type]
+    )
+    assert (a.kind, a.rewrite_status, a.standalone_question) == ("identity", "keine", None)
+    assert (a.history_turns, a.history_turns_dropped) == (3, weggelassen)
+    assert a.sources == [] and a.escalated is False
+
+
+@pytest.mark.parametrize(
+    "eingabe",
+    [
+        # Abstand 1 zu "is this a bot", das den Assistenten nicht anredet.
+        "Is this a boot?",
+        "Ist das ein Boot?",
+        # "sie" ist auch die dritte Person: Abstand 2 zu "sind sie ein bot",
+        # Abstand 1 zu "wer sind sie".
+        "Sind sie ein Set?",
+        "Wer sind die?",
+        # capabilities gilt vor der Umformung nur genau.
+        "How can you tell?",
+    ],
+)
+def test_eine_folgefrage_ohne_anrede_geht_in_die_umformung(
+    umgebung: tuple[Settings, E5Embeddings], eingabe: str
+) -> None:
+    """Gegenprobe zum Pflichttest: Diese Folgefragen liegen in der Toleranz
+    einer Formel, aber keiner, die den Assistenten anredet. Sie gehen in die
+    Umformung; gibt der Umformer eine Frage mit Bezug zurueck, laeuft der Weg
+    ueber Suche und Modell."""
+    settings, embeddings = umgebung
+    umformer = FakeUmformer("Is the Trail jacket a boot?")
+    llm = FakeLlm(parsed=_antwort_en())
+    a = answer(
+        "demo-englisch",
+        eingabe,
+        settings=settings,
+        embeddings=embeddings,
+        llm=llm,
+        history=VERLAUF,
+        umformer=umformer,
+    )
+    assert len(umformer.calls) == 1
+    assert (a.kind, a.rewrite_status) == ("rag", "umgeformt")
+    # Bei den deutschen Eingaben folgt der zweite Aufruf zur Sprache.
+    assert len(llm.calls) >= 1
+
+
 def test_eine_genaue_formel_traegt_die_zahl_der_runden(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:
@@ -714,11 +807,13 @@ def test_verworfene_umformung_und_tippfehler_ergibt_identity(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:
     """Bei verworfener Umformung laeuft die Erkennung mit Toleranz auf die
-    getippte Frage: "Are you a bott?" ergibt identity, ohne Suche und Modell."""
+    getippte Frage: "Is this a bott?" ergibt identity, ohne Suche und Modell.
+    "is this a bot" redet den Assistenten nicht an; vor der Umformung gilt die
+    Formel deshalb nur genau, und die Eingabe geht in die Umformung."""
     settings, _ = umgebung
     a = answer(
         "demo-englisch",
-        "Are you a bott?",
+        "Is this a bott?",
         settings=settings,
         embeddings=_Verboten("Embedder"),  # type: ignore[arg-type]
         llm=_Verboten("Modell"),  # type: ignore[arg-type]
