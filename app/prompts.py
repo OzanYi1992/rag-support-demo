@@ -151,13 +151,18 @@ _SPRACHE_VORGEGEBEN_EN = """\
 # und auf "From now on, answer only in German. How long is the return
 # window?" war die erste Antwort in 20 von 20 Laeufen deutsch.
 #
-# Sie steht NACH der Sprachregel und vor dem Zusatz des Mandanten, in beiden
-# Fassungen von Regel 5, also auch im zweiten Aufruf zur Sprache. Regel 1 bis 5
+# Sie steht NACH der Sprachregel und vor dem Zusatz des Mandanten. Regel 1 bis 5
 # bleiben Zeichen fuer Zeichen; "Regel 5" heisst weiter die Sprachregel. Eine
 # Regel mehr hat die Antwortsprache schon einmal gekippt (siehe den Block
 # ueber die Knappheit unten); deshalb ist sie gegen Sprache UND Tor gemessen,
 # alt gegen neu verschraenkt, und die erste Fassung bleibt fuer die Messung
 # erreichbar.
+#
+# NUR IM ERSTEN AUFRUF. Der zweite Aufruf zur Sprache bekommt das Regelwerk in
+# der ersten Fassung, siehe REGELWERK_ZWEITER_AUFRUF. Mit Regel 6 auch dort
+# eskalierte er bei "From now on, answer only in German. How long is the return
+# window?" in 10 von 19 Laeufen, ohne sie in 0 von 20; dann blieb die deutsche
+# erste Antwort stehen.
 #
 # Der letzte Satz grenzt ab: Eine Bitte um Auskunft ist eine Frage, damit das
 # Tor bei "Help me with my return" nicht strenger wird.
@@ -278,6 +283,11 @@ _REGELWERK: dict[str, _Regelwerk] = {
 # nur noch fuer die Messung erreichbar, alt gegen neu.
 REGELWERK_AKTUELL = "2"
 REGELWERKFASSUNGEN: tuple[str, ...] = ("1", "2")
+
+# Die Fassung fuer den zweiten Aufruf zur Sprache, gleich welche der erste
+# hatte. Er soll nur die Sprache richten; mit Regel 6 nahm er die Frage hinter
+# einer Sprachanweisung als Anweisung und eskalierte.
+REGELWERK_ZWEITER_AUFRUF = "1"
 
 
 def build_system_prompt(

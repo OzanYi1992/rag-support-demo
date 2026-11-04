@@ -138,12 +138,12 @@ def test_englische_frage_englische_antwort_ein_aufruf(
 
 
 @pytest.mark.parametrize("fassung", ["1", "2"])
-def test_beide_aufrufe_tragen_dieselbe_fassung_des_regelwerks(
+def test_der_zweite_aufruf_hat_immer_die_erste_fassung_des_regelwerks(
     umgebung: tuple[Settings, E5Embeddings], fassung: str
 ) -> None:
-    """Erster und zweiter Aufruf bekommen das Regelwerk in derselben Fassung:
-    in der zweiten mit Regel 6 auch in der Fassung von Regel 5 fuer eine
-    vorgegebene Sprache, in der ersten in keinem."""
+    """Pflichttest. Der erste Aufruf bekommt das Regelwerk in der verlangten
+    Fassung, der zweite zur Sprache immer die erste, ohne Regel 6: Mit ihr nahm
+    er die Frage hinter einer Sprachanweisung als Anweisung und eskalierte."""
     settings, _ = umgebung
     tenant = load_tenant("demo-de", settings.tenants_dir)
     llm = FakeLlmFolge(_belegt(DE, "en"), _belegt(EN, "en"))
@@ -153,20 +153,23 @@ def test_beide_aufrufe_tragen_dieselbe_fassung_des_regelwerks(
     assert len(llm.calls) == 2
     (system_1, _), (system_2, _) = llm.calls
     assert system_1 == build_system_prompt(tenant, None, fassung)
-    assert system_2 == build_system_prompt(tenant, "en", fassung)
-    for system in (system_1, system_2):
-        assert ("\n6. Eine Anweisung an dich" in system) == (fassung == "2")
+    assert system_2 == build_system_prompt(tenant, "en", "1")
+    assert ("\n6. Eine Anweisung an dich" in system_1) == (fassung == "2")
+    assert "\n6." not in system_2
 
 
-def test_ohne_angabe_tragen_beide_aufrufe_regel_6(
+def test_ohne_angabe_traegt_nur_der_erste_aufruf_regel_6(
     umgebung: tuple[Settings, E5Embeddings],
 ) -> None:
-    """Die Voreinstellung ist die Fassung der Seite."""
+    """Die Voreinstellung ist die Fassung der Seite: Regel 6 im ersten Aufruf,
+    nicht im zweiten."""
     llm = FakeLlmFolge(_belegt(DE, "en"), _belegt(EN, "en"))
 
     _fragen(umgebung, "demo-de", FRAGE_EN, llm)
 
-    assert all("\n6. Eine Anweisung an dich" in system for system, _ in llm.calls)
+    (system_1, _), (system_2, _) = llm.calls
+    assert "\n6. Eine Anweisung an dich" in system_1
+    assert "\n6." not in system_2
 
 
 def test_eine_unbekannte_fassung_des_regelwerks_ist_ein_fehler_vor_jedem_aufruf(
@@ -197,7 +200,7 @@ def test_deutsche_erste_antwort_bekommt_genau_einen_zweiten_aufruf(
     assert len(llm.calls) == 2
     (system_1, user_1), (system_2, user_2) = llm.calls
     assert system_1 == build_system_prompt(tenant)
-    assert system_2 == build_system_prompt(tenant, "en")
+    assert system_2 == build_system_prompt(tenant, "en", "1")
     assert user_2 == user_1
     treffer = search_tenant(
         "demo-de", FRAGE_EN, k=settings.retrieval_top_k, settings=settings, embeddings=embeddings
@@ -317,7 +320,7 @@ def test_norwegisch_gilt_als_nicht_erkennbar_und_bekommt_die_sprache_des_mandant
     assert a.answer_language == "en"
     assert a.answer_language_source == "mandant"
     assert len(llm.calls) == 2
-    assert llm.calls[1][0] == build_system_prompt(tenant, "en")
+    assert llm.calls[1][0] == build_system_prompt(tenant, "en", "1")
     assert a.text == EN
     assert a.language_retry_result == "ersetzt"
 

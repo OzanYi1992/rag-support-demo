@@ -1736,8 +1736,8 @@ BEDEUTUNG_REGELWERK = (
     "steht unter fragen und aggregiert_je_kategorie, die zweite unter "
     "fragen_r<fassung> und aggregiert_je_kategorie_r<fassung>. Je Lauf: "
     "regelwerk_fassung. Fassung 1 ist das Regelwerk mit Regel 1 bis 5, Fassung 2 "
-    "traegt dazu Regel 6, in beiden Fassungen von Regel 5, also auch im zweiten "
-    "Aufruf zur Sprache."
+    "traegt dazu Regel 6. Die Fassung gilt fuer den ersten Antwortaufruf; der zweite "
+    "Aufruf zur Sprache hat seit dem 2026-11-04 in beiden Armen Fassung 1."
 )
 BEDEUTUNG_GEGENPROBE = (
     "Goldfragen verschraenkt in zwei Fassungen: A ohne Verlauf, B als zweite "
